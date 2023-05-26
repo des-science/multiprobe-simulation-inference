@@ -1,0 +1,3 @@
+abc:
+  # for float32 this is close to the minimum logable value
+  kernel_min_val: 1.0e-42
