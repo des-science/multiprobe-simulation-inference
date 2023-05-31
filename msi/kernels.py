@@ -21,8 +21,8 @@ LOGGER = logger.get_logger(__file__)
 
 # load the config
 file_dir = os.path.dirname(__file__)
-repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-conf = os.path.join(repo_dir, "configs/dlss_config.yaml")
+repo_dir = os.path.abspath(os.path.join(file_dir, "../"))
+conf = os.path.join(repo_dir, "configs/config.yaml")
 conf = input_output.read_yaml(conf)
 
 kernel_min_val = conf["abc"]["kernel_min_val"]
