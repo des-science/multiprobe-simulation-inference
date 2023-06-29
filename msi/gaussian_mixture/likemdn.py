@@ -4,17 +4,19 @@ Adapted from https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/netwo
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
-import os, h5py, itertools, warnings, random, pickle, keras_tuner
+import os, h5py, itertools, warnings, random, pickle
+
+#  keras_tuner
 
 from scipy.stats import norm
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 
-from msfm.utils import logging
+from msfm.utils import logger
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("once", category=UserWarning)
-LOGGER = logging.get_logger(__file__)
+LOGGER = logger.get_logger(__file__)
 
 
 class LikeMDN:
@@ -49,8 +51,12 @@ class LikeMDN:
         self.scaler_x = None
         self.scaler_y = None
 
+        LOGGER.warning(f"Before self.build_model()")
+
         # create network
         self.build_model()
+
+        LOGGER.warning(f"After self.build_model()")
         # self.build_tuner()
 
     def fit(self, x, y, epochs=10000, verb=1, batch_size=100):
@@ -73,26 +79,39 @@ class LikeMDN:
 
         # learning rate scheduler
         callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="loss", factor=0.75, patience=10, verbose=1, min_delta=0.0001, cooldown=5, min_lr=1e-6
+            # monitor="loss", factor=0.75, patience=10, verbose=1, min_delta=0.0001, cooldown=5, min_lr=1e-6
+            monitor="loss",
+            factor=0.9,
+            patience=20,
+            verbose=1,
+            min_delta=0.0001,
+            cooldown=10,
+            min_lr=1e-6,
         )
-        callbacks.append(callback_reduce_lr)
+        # callbacks.append(callback_reduce_lr)
 
         # early stopping
         callback_early_stop = tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss", min_delta=1e-5, patience=50, verbose=1, restore_best_weights=True
+            monitor="val_loss",
+            min_delta=1e-5,
+            patience=100,
+            verbose=1,
+            restore_best_weights=True,
+            start_from_epoch=500,
         )
         callbacks.append(callback_early_stop)
 
         # checkpointing
         if self.filename_checkpoint is not None:
-
-            callback_checkpoint = tf.keras.callbacks.ModelCheckpoint(self.filename_checkpoint,
-                                                                     monitor='val_loss',
-                                                                     verbose=1,
-                                                                     save_best_only=True,
-                                                                     save_weights_only=True,
-                                                                     mode='auto',
-                                                                     save_freq='epoch')
+            callback_checkpoint = tf.keras.callbacks.ModelCheckpoint(
+                self.filename_checkpoint,
+                monitor="val_loss",
+                verbose=1,
+                save_best_only=True,
+                save_weights_only=True,
+                mode="auto",
+                save_freq="epoch",
+            )
             callbacks.append(callback_checkpoint)
 
         validation_frac = 0.2
@@ -111,7 +130,7 @@ class LikeMDN:
         # models = self.tuner.get_best_models(num_models=1)
         # self.model = models[0]
 
-        self.model.fit(
+        history = self.model.fit(
             x,
             y,
             validation_split=validation_frac,
@@ -124,6 +143,8 @@ class LikeMDN:
         )
 
         LOGGER.info(f"finished fitting with {epochs} epochs")
+
+        return history
 
     def set_scalers(self, x, y):
         eps = 1e-5
@@ -165,27 +186,27 @@ class LikeMDN:
         LOGGER.info(f"created MDN model with n_params={self.model.count_params()}")
         self.model.summary()
 
-    def build_tuner(self):
-        hmodel = hyper_model(
-            nx=self.nx,
-            ny=self.ny,
-            u_units=self.mdn_config["u_units"],
-            n_layers=self.mdn_config["n_layers"],
-            n_gaussians=self.mdn_config["n_gaussians"],
-            activation=self.mdn_config["activation"],
-        )
+    # def build_tuner(self):
+    #     hmodel = hyper_model(
+    #         nx=self.nx,
+    #         ny=self.ny,
+    #         u_units=self.mdn_config["u_units"],
+    #         n_layers=self.mdn_config["n_layers"],
+    #         n_gaussians=self.mdn_config["n_gaussians"],
+    #         activation=self.mdn_config["activation"],
+    #     )
 
-        self.tuner = keras_tuner.RandomSearch(
-            hypermodel=hmodel,
-            objective="val_loss",
-            max_trials=20,
-            executions_per_trial=1,
-            overwrite=True,
-            directory=os.path.dirname(self.filename_checkpoint),
-            project_name="tuner_{:x}".format(random.getrandbits(32)),
-        )
-        LOGGER.info("created MDN tuner: \n")
-        self.tuner.search_space_summary()
+    #     self.tuner = keras_tuner.RandomSearch(
+    #         hypermodel=hmodel,
+    #         objective="val_loss",
+    #         max_trials=20,
+    #         executions_per_trial=1,
+    #         overwrite=True,
+    #         directory=os.path.dirname(self.filename_checkpoint),
+    #         project_name="tuner_{:x}".format(random.getrandbits(32)),
+    #     )
+    #     LOGGER.info("created MDN tuner: \n")
+    #     self.tuner.search_space_summary()
 
     def save(self, file_out):
         self.model.save_weights(file_out)
@@ -244,82 +265,87 @@ def build_mdn_network(nx, ny, u_units, n_layers, activation, n_gaussians, dropou
 
     model.add(tfp.layers.MixtureSameFamily(n_gaussians, tfp.layers.MultivariateNormalTriL(ny)))
 
-    model.compile(optimizer=tf.keras.optimizers.Adam(), loss=lambda y, model: -model.log_prob(y))
+    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4, global_clipnorm=10)
+    model.compile(optimizer=optimizer, loss=lambda y, model: -model.log_prob(y))
 
     return model
 
 
-def build_mdn_network_tune(hp, nx, ny, activation, u_units, n_layers, n_gaussians):
-    dropout_rate = hp.Float(name="dropout_rate", min_value=0, max_value=0.25, step=0.01)
+# def build_mdn_network_tune(hp, nx, ny, activation, u_units, n_layers, n_gaussians):
+#     dropout_rate = hp.Float(name="dropout_rate", min_value=0, max_value=0.25, step=0.01)
 
-    model = build_mdn_network(nx, ny, u_units, n_layers, activation, n_gaussians, dropout_rate=dropout_rate)
+#     model = build_mdn_network(nx, ny, u_units, n_layers, activation, n_gaussians, dropout_rate=dropout_rate)
 
-    return model
+#     return model
 
 
-class hyper_model(keras_tuner.HyperModel):
-    def __init__(self, **model_args):
-        self.model_args = model_args
+# class hyper_model(keras_tuner.HyperModel):
+#     def __init__(self, **model_args):
+#         self.model_args = model_args
 
-    def build(self, hp):
-        dropout_rate = hp.Float(name="dropout_rate", min_value=0, max_value=0.25, step=0.01)
+#     def build(self, hp):
+#         dropout_rate = hp.Float(name="dropout_rate", min_value=0, max_value=0.25, step=0.01)
 
-        return build_mdn_network(dropout_rate=dropout_rate, **self.model_args)
+#         return build_mdn_network(dropout_rate=dropout_rate, **self.model_args)
 
-    def fit(self, hp, model, *args, **kwargs):
-        batch_size = hp.Int(name="batch_size", min_value=10, max_value=10000, step=1, sampling="log")
+#     def fit(self, hp, model, *args, **kwargs):
+#         batch_size = hp.Int(name="batch_size", min_value=10, max_value=10000, step=1, sampling="log")
 
-        return model.fit(*args, batch_size=batch_size, **kwargs)
-    
+#         return model.fit(*args, batch_size=batch_size, **kwargs)
+
+
 # utils from DeepLSS
-def write_to_pickle(filepath, obj, compression='none', compression_kwargs={}):
+def write_to_pickle(filepath, obj, compression="none", compression_kwargs={}):
+    compression_kwargs.setdefault("compresslevel", 4)
+    compression_types = ["none", "lzf", "bz2", "gzip"]
 
-    compression_kwargs.setdefault('compresslevel', 4)
-    compression_types =  ['none', 'lzf', 'bz2', 'gzip']
-
-    if compression.lower()=='none':
-        with open(filepath, 'wb') as f:
+    if compression.lower() == "none":
+        with open(filepath, "wb") as f:
             pickle.dump(obj, f)
-    elif compression.lower()=='lzf':
+    elif compression.lower() == "lzf":
         import lzf
-        with lzf.open(filepath, 'wb') as f:
+
+        with lzf.open(filepath, "wb") as f:
             pickle.dump(obj, f)
-    elif compression.lower()=='bz2':
+    elif compression.lower() == "bz2":
         import bz2
-        with bz2.open(filepath, 'wb') as f:
+
+        with bz2.open(filepath, "wb") as f:
             pickle.dump(obj, f)
-    elif compression.lower()=='gzip':
+    elif compression.lower() == "gzip":
         import gzip
-        with gzip.open(filepath, 'wb', **compression_kwargs) as f:
+
+        with gzip.open(filepath, "wb", **compression_kwargs) as f:
             pickle.dump(obj, f)
 
-    else: 
-        raise Exception('uknown compression {}, use {}'.format(compression, str(formats)))
-    LOGGER.info(f'wrote {filepath}')
+    else:
+        raise Exception("uknown compression {}, use {}".format(compression, str(formats)))
+    LOGGER.info(f"wrote {filepath}")
 
 
-def read_from_pickle(filepath, compression='none'):
+def read_from_pickle(filepath, compression="none"):
+    compression_types = ["none", "lzf", "bz2", "gzip"]
 
-    compression_types =  ['none', 'lzf', 'bz2', 'gzip']
-
-    if compression.lower()=='none':
-        with open(filepath, 'rb') as f:
+    if compression.lower() == "none":
+        with open(filepath, "rb") as f:
             obj = pickle.load(f)
-    elif compression.lower()=='lzf':
+    elif compression.lower() == "lzf":
         import lzf
-        with lzf.open(filepath, 'rb') as f:
-            obj = pickle.load(f)
-    elif compression.lower()=='bz2':
-        import bz2
-        with bz2.open(filepath, 'rb') as f:
-            obj = pickle.load(f)
-    elif compression.lower()=='gzip':
-        import gzip
-        with gzip.open(filepath, 'rb') as f:
-            obj = pickle.load(f)
-    else: 
-        raise Exception('uknown compression {}, use {}'.format(compression, str(formats)))
 
-    LOGGER.debug(f'read {filepath}')
+        with lzf.open(filepath, "rb") as f:
+            obj = pickle.load(f)
+    elif compression.lower() == "bz2":
+        import bz2
+
+        with bz2.open(filepath, "rb") as f:
+            obj = pickle.load(f)
+    elif compression.lower() == "gzip":
+        import gzip
+
+        with gzip.open(filepath, "rb") as f:
+            obj = pickle.load(f)
+    else:
+        raise Exception("uknown compression {}, use {}".format(compression, str(formats)))
+
+    LOGGER.debug(f"read {filepath}")
     return obj
-
