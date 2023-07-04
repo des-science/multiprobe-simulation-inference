@@ -30,7 +30,7 @@ class ConditionalGMM:
     Code adapted from https://www.tensorflow.org/probability/api_docs/python/tfp/layers/MixtureNormal#methods_2
     """
 
-    def __init__(self, nx, ny, out_dir=None, tune_hyperparams=False, restore_weights=False, **kwargs):
+    def __init__(self, x_dim, y_dim, out_dir=None, tune_hyperparams=False, restore_weights=False, **kwargs):
         """Constructor
 
         Args:
@@ -41,8 +41,8 @@ class ConditionalGMM:
             tune_hyperparams (bool, optional): Whether to run a random hyperparameter search or only train a single
                 model.
         """
-        self.nx = nx
-        self.ny = ny
+        self.nx = x_dim
+        self.ny = y_dim
         self.out_dir = out_dir
         self.tune_hyperparams = tune_hyperparams
 
@@ -50,7 +50,7 @@ class ConditionalGMM:
         # probability
         self.gmm_config.setdefault("n_gaussians", 4)
         # network architecture
-        self.gmm_config.setdefault("u_units", 256)
+        self.gmm_config.setdefault("n_units", 256)
         self.gmm_config.setdefault("n_layers", 3)
         self.gmm_config.setdefault("activation", "relu")
         # optimization
@@ -58,7 +58,6 @@ class ConditionalGMM:
         self.gmm_config.setdefault("global_clipnorm", 1.0)
         self.gmm_config.setdefault("dropout_rate", 0.0)
         self.gmm_config.setdefault("x_noise_sigma", 0.0)
-        self.gmm_config.setdefault("validation_frac", 0.2)
         # hyperparameter tuning
         self.gmm_config.setdefault("max_trials", 10)
 
@@ -90,7 +89,19 @@ class ConditionalGMM:
         if restore_weights:
             self.load()
 
-    def fit(self, x, y, epochs=1000, batch_size=1000):
+    def fit(
+        self,
+        x,
+        y,
+        epochs=1000,
+        batch_size=1000,
+        # validation
+        validation_split=0.2,
+        # callbacks
+        early_stopping_callback=False,
+        learning_rate_callback=False,
+        **kwargs,
+    ):
         """Wrapper for model.fit from the Keras API. The GMM implements p(y|x).
 
         Args:
@@ -98,6 +109,11 @@ class ConditionalGMM:
             y (np.ndarray): Features to be modelled by the Gaussians of shape (n_samples, n_features).
             epochs (int, optional): Number of epochs to train for. Defaults to 10000.
             batch_size (int, optional): Batch size used during training. Defaults to 1024.
+            early_stopping_callback (bool, optional): Whether to use the early stopping callback. Defaults to False,
+                then it is excluded.
+            learning_rate_callback (bool, optional): Whether to use the learning rate reduction on plateau callback.
+                Defaults to False, then it is excluded.
+            **kwargs: additional keyword arguments to be passed to the fit method.
 
         Returns:
             history: A keras history object containing information on the training.
@@ -123,17 +139,19 @@ class ConditionalGMM:
             callback_tensorboard = tf.keras.callbacks.TensorBoard(log_dir=self.summary_dir)
             callbacks.append(callback_tensorboard)
 
-        # learning rate scheduler
-        callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="loss", factor=0.75, patience=20, verbose=0, min_delta=1e-4, cooldown=10, min_lr=1e-6
-        )
-        callbacks.append(callback_reduce_lr)
-
         # early stopping
         callback_early_stop = tf.keras.callbacks.EarlyStopping(
             monitor="val_loss", min_delta=1e-5, patience=100, verbose=1, restore_best_weights=True
         )
-        callbacks.append(callback_early_stop)
+        if early_stopping_callback:
+            callbacks.append(callback_early_stop)
+
+        # learning rate scheduler
+        callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="loss", factor=0.75, patience=20, verbose=0, min_delta=1e-4, cooldown=10, min_lr=1e-6
+        )
+        if learning_rate_callback:
+            callbacks.append(callback_reduce_lr)
 
         # verbosity
         callback_verbose = EpochProgressCallback(epochs)
@@ -144,7 +162,7 @@ class ConditionalGMM:
             self.tuner.search(
                 x,
                 y,
-                validation_split=self.gmm_config["validation_frac"],
+                validation_split=validation_split,
                 batch_size=batch_size,
                 epochs=epochs,
                 shuffle=True,
@@ -166,14 +184,15 @@ class ConditionalGMM:
         # training of a single model
         else:
             history = self.model.fit(
-                x,
-                y,
-                validation_split=self.gmm_config["validation_frac"],
+                x=x,
+                y=y,
                 batch_size=batch_size,
                 epochs=epochs,
-                verbose=0,
+                validation_split=validation_split,
                 shuffle=True,
                 callbacks=callbacks,
+                verbose=0,
+                **kwargs,
             )
 
             LOGGER.info(f"Finished training")
@@ -228,7 +247,7 @@ class ConditionalGMM:
             # probability
             n_gaussians=self.gmm_config["n_gaussians"],
             # architecture
-            u_units=self.gmm_config["u_units"],
+            n_units=self.gmm_config["n_units"],
             n_layers=self.gmm_config["n_layers"],
             activation=self.gmm_config["activation"],
             # optimization
@@ -251,7 +270,7 @@ class ConditionalGMM:
             # probability
             n_gaussians=self.gmm_config["n_gaussians"],
             # architecture
-            u_units=self.gmm_config["u_units"],
+            n_units=self.gmm_config["n_units"],
             n_layers=self.gmm_config["n_layers"],
             activation=self.gmm_config["activation"],
             # optimization
@@ -351,7 +370,7 @@ def build_gmm_network(
     # probability
     n_gaussians,
     # network architecture
-    u_units,
+    n_units,
     n_layers,
     activation,
     # optimization
@@ -365,7 +384,7 @@ def build_gmm_network(
     Args:
         nx (int): Dimensionality of x.
         ny (int): Dimensionality of y.
-        u_units (int): Number of neurons in the hidden layers.
+        n_units (int): Number of neurons in the hidden layers.
         n_layers (int): Number of hidden layers (there's two more dense layers in the model than this).
         activation (int): Activation function to use.
         n_gaussians (int): Number of Gaussians in the mixture.
@@ -379,11 +398,11 @@ def build_gmm_network(
     model = tf.keras.Sequential(name="gaussian_mixture_model")
     model.add(tf.keras.layers.Input(shape=(nx,)))
     model.add(tf.keras.layers.GaussianNoise(x_noise_sigma))
-    model.add(tf.keras.layers.Dense(u_units, input_dim=nx, activation=activation))
+    model.add(tf.keras.layers.Dense(n_units, input_dim=nx, activation=activation))
     model.add(tf.keras.layers.Dropout(dropout_rate))
 
     for _ in range(n_layers):
-        model.add(tf.keras.layers.Dense(u_units, activation=activation))
+        model.add(tf.keras.layers.Dense(n_units, activation=activation))
         model.add(tf.keras.layers.Dropout(dropout_rate))
 
     # number of parameters needed to build the final distribution layer

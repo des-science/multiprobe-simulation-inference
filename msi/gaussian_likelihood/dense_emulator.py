@@ -109,8 +109,8 @@ class DenseEmulator(tf.keras.Model):
         x,
         y,
         epochs=1000,
-        # validation
         batch_size=256,
+        # validation
         validation_split=0.0,
         validation_data=None,
         # callbacks
@@ -131,6 +131,7 @@ class DenseEmulator(tf.keras.Model):
                 then it is excluded.
             learning_rate_callback (bool, optional): Whether to use the learning rate reduction on plateau callback.
                 Defaults to False, then it is excluded.
+            **kwargs: additional keyword arguments to be passed to the fit method.
 
         Returns:
             history: A keras history object containing information on the training procedure.
