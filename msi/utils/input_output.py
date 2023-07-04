@@ -27,6 +27,7 @@ def load_preds(base_dir, model_dir, n_steps=None, file_label=None):
         fidu_train_preds = f["fiducial/train/pred"][:]
         fidu_vali_preds = f["fiducial/vali/pred"][:]
 
+        LOGGER.info(f"Array shapes:\n")
         LOGGER.info(f"fidu_train_preds =   {fidu_train_preds.shape}")
         LOGGER.info(f"fidu_vali_preds =    {fidu_vali_preds.shape}")
 
@@ -35,8 +36,8 @@ def load_preds(base_dir, model_dir, n_steps=None, file_label=None):
         grid_cosmos = f["grid/cosmo"][:]
         grid_sobol = f["grid/i_sobol"][:]
 
-        LOGGER.info(f"grid_preds.shape =   {grid_preds.shape}")
-        LOGGER.info(f"grid_cosmos.shape =  {grid_cosmos.shape}")
-        LOGGER.info(f"grid_sobol.shape =   {grid_cosmos.shape}")
+        LOGGER.info(f"grid_preds =         {grid_preds.shape}")
+        LOGGER.info(f"grid_cosmos =        {grid_cosmos.shape}")
+        LOGGER.info(f"grid_sobol =         {grid_cosmos.shape}")
 
     return fidu_train_preds, fidu_vali_preds, grid_preds, grid_cosmos, grid_sobol

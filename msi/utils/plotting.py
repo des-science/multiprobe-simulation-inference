@@ -33,6 +33,55 @@ param_label_dict = {
 }
 
 
+def plot_chain(chain, params, out_dir=None, method_label="MCMC", scale_to_prior=True):
+    """Plot a given MCMC chain as a triangle plot.
+
+    Args:
+        chain (np.ndarray): Array of MCMC samples of shape (n_samples, n_summaries)
+        params (list): List of strings of the constrained cosmological parameters.
+        out_dir (str, optional): Output directory to store the plot at. Defaults to None, then the plot is not saved.
+        method_label (str, optional): Marks which inference method has been used. Defaults to "".
+        scale_to_prior (bool, optional): Scale the cosmological parameter ranges to their respective priors. Defaults
+            to True.
+    """
+
+    if scale_to_prior:
+        ranges = dict(zip(params, parameters.get_prior_intervals(params)))
+    else:
+        ranges = None
+
+    # initialize plot
+    tri = TriangleChain(
+        labels=[param_label_dict[param] for param in params],
+        scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
+        grid=True,
+        fill=True,
+        show_values=False,
+        bestfit_method="median",
+        ranges=ranges,
+    )
+
+    # plot contours
+    tri.contour_cl(chain, names=params, label=method_label)
+
+    # plot fiducial
+    tri.scatter(
+        dict(zip(params, parameters.get_fiducials(params))),
+        label="fiducial",
+        plot_histograms_1D=False,
+        color="k",
+        show_legend=True,
+        scatter_vline_1D=True,
+    )
+
+    # save figure
+    if out_dir is not None:
+        os.makedirs(out_dir, exist_ok=True)
+        tri.fig.savefig(os.path.join(out_dir, f"contours_{method_label}.png"), bbox_inches="tight", dpi=300)
+    else:
+        LOGGER.warning(f"Not saving the plot")
+
+
 def make_contour_plot(
     model_dir,
     n_steps,
