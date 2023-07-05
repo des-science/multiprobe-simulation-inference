@@ -16,7 +16,7 @@ LOGGER = logger.get_logger(__file__)
 np.random.seed(12)
 
 
-def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024):
+def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_steps=1000):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
     Args:
@@ -43,7 +43,7 @@ def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024):
     sampler.reset()
 
     # run the actual chain
-    sampler.run_mcmc(state, 1000, progress=True)
+    sampler.run_mcmc(state, n_steps, progress=True)
 
     # save the result
     chain = sampler.get_chain(flat=True)
