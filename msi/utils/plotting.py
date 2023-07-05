@@ -82,7 +82,7 @@ def plot_chain(chain, params, out_dir=None, label="temp", scale_to_prior=True):
         LOGGER.warning(f"Not saving the plot")
 
 
-def make_contour_plot(
+def plot_method_comparison(
     model_dir,
     n_steps,
     params,
@@ -132,6 +132,8 @@ def make_contour_plot(
     # save figure
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
-        tri.fig.savefig(os.path.join(out_dir, out_file), bbox_inches="tight", dpi=300)
+        out_file = os.path.join(out_dir, out_file)
     else:
-        LOGGER.warning(f"Not saving the plot")
+        out_file = os.path.join(model_dir, out_file)
+
+    tri.fig.savefig(out_file, bbox_inches="tight", dpi=300)
