@@ -8,6 +8,9 @@ Author: Arne Thomsen
 import tensorflow as tf
 from sklearn.preprocessing import RobustScaler
 
+from kerastuner.tuners import RandomSearch
+from kerastuner.engine.hyperparameters import HyperParameters
+
 from msfm.utils import logger
 from msi.utils.keras import EpochProgressCallback
 
@@ -21,8 +24,8 @@ class DenseEmulator(tf.keras.Model):
 
     def __init__(
         self,
-        x_dim,
-        y_dim,
+        x,
+        y,
         # architecture
         n_units=256,
         n_layers=5,
@@ -31,53 +34,55 @@ class DenseEmulator(tf.keras.Model):
         learning_rate=1e-3,
         global_clipnorm=None,
         dropout_rate=0.2,
-        **kwargs,
     ):
         """Initialize the model.
 
         Args:
-            x_dim (int): Size of the input dimension.
-            y_dim (int): Size of the output dimension.
+            x (Union[np.ndarray, tf.tensor]): Input features of shape (n_samples, x_dim).
+            y (Union[np.ndarray, tf.tensor]): Output labels of shape (n_samples, y_dim).
             n_units (int, optional): Number of nodes in the hidden layers. Defaults to 256.
             n_layers (int, optional): Number of hidden layers. Defaults to 5.
             activation (str, optional): Activation function. Defaults to "relu".
             learning_rate (float, optional): Learning rate to be used in the Adam optimizer. Defaults to 1e-3.
             global_clipnorm (float, optional): Global gradient norm to clip in Adam. Defaults to None.
             dropout_rate (float, optional): Dropout rate. Defaults to 0.2.
-            **kwargs: additional keyword arguments to be passed to the optimizer.
         """
-
         super().__init__()
-        self.x_dim = x_dim
-        self.y_dim = y_dim
+
+        # preprocessing
+        assert (x.shape[0] == y.shape[0]) and (x.ndim == 2) and (y.ndim == 2)
+        self.fit_scalers(x, y)
+
+        self.x_dim = x.shape[-1]
+        self.y_dim = y.shape[-1]
+
         self.n_units = n_units
         self.n_layers = n_layers
         self.activation = activation
+
+        self.learning_rate = learning_rate
+        self.global_clipnorm = global_clipnorm
         self.dropout_rate = dropout_rate
 
-        # preprocessing
-        self.x_mean = 0.0
-        self.x_std = 1.0
-        self.y_mean = 0.0
-        self.y_std = 1.0
-
-        # layers
-        self.build_layers()
+        # set up the model
+        self.setup_layers()
         self.summary()
+        self.compile()
 
-        # compilation
-        self.optimizer = tf.keras.optimizers.Adam(
-            learning_rate=learning_rate, global_clipnorm=global_clipnorm, **kwargs
-        )
-        self.compile(optimizer=self.optimizer, loss="mse")
-
-    def build_layers(self):
+    def setup_layers(self):
         """Set up the layers according to the specified hyperparameters."""
         self.dense_layers = [
             tf.keras.layers.Dense(self.n_units, activation=self.activation) for _ in range(self.n_layers)
         ]
         self.dropout_layers = [tf.keras.layers.Dropout(self.dropout_rate) for _ in range(self.n_layers)]
         self.output_layer = tf.keras.layers.Dense(self.y_dim)
+
+    def compile(self):
+        """Fix the optimizer and compile the model."""
+        super().compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate, global_clipnorm=self.global_clipnorm),
+            loss="mse",
+        )
 
     def summary(self):
         """Network summary has to be called in this way since model.build() doesn't get along with the functional API."""
@@ -121,8 +126,8 @@ class DenseEmulator(tf.keras.Model):
         """Fit the network to the training set.
 
         Args:
-            x (tf.tensor): Input features of shape (n_samples, x_dim).
-            y (tf.tensor): Output labels of shape (n_samples, y_dim).
+            x (Union[np.ndarray, tf.tensor]): Input features of shape (n_samples, x_dim).
+            y (Union[np.ndarray, tf.tensor]): Output labels of shape (n_samples, y_dim).
             epochs (int, optional): Number of epochs to train. Defaults to 1000.
             batch_size (int, optional): Batch size. Defaults to 256.
             validation_split (float, optional): Fraction of x and y to use as the validation set. Defaults to 0.0.
@@ -137,13 +142,10 @@ class DenseEmulator(tf.keras.Model):
             history: A keras history object containing information on the training procedure.
         """
 
-        # preprocessing
-        self.fit_scalers(x, y)
-
         callbacks = []
 
         # early stopping
-        if early_stopping_callback:
+        if early_stopping_callback and (validation_split > 0.0 or validation_data != 0):
             callbacks.append(
                 tf.keras.callbacks.EarlyStopping(
                     monitor="val_loss", min_delta=1e-5, patience=100, verbose=1, restore_best_weights=True
@@ -202,6 +204,99 @@ class DenseEmulator(tf.keras.Model):
 
     def scale_inverse_y(self, y_scaled):
         return (y_scaled * self.y_std) + self.y_mean
+
+    def tune_hyperparameters(
+        self,
+        x,
+        y,
+        max_trials=10,
+        out_dir="hyperparameters",
+        # training
+        epochs=1000,
+        batch_size=256,
+        # validation
+        validation_split=0.0,
+        validation_data=None,
+        # callbacks
+        early_stopping_callback=False,
+        learning_rate_callback=False,
+    ):
+        """Perform hyperparameter tuning using KerasTuner, see https://keras.io/guides/keras_tuner/getting_started/ 
+        for more information.
+
+        Args:
+            x (Union[np.ndarray, tf.tensor]): Input features of shape (n_samples, x_dim).
+            y (Union[np.ndarray, tf.tensor]): Output labels of shape (n_samples, y_dim).
+            max_trials (int, optional): _description_. Defaults to 10.
+            out_dir (str, optional): _description_. Defaults to "hyperparameters".
+            epochs (int, optional): Number of epochs to train. Defaults to 1000.
+            batch_size (int, optional): Batch size. Defaults to 256.
+            validation_split (float, optional): Fraction of x and y to use as the validation set. Defaults to 0.0.
+            validation_data (tuple, optional): Explicit validation set like (x_vali, y_vali). Defaults to None.
+            early_stopping_callback (bool, optional): Whether to use the early stopping callback. Defaults to False,
+                then it is excluded.
+            learning_rate_callback (bool, optional): Whether to use the learning rate reduction on plateau callback.
+                Defaults to False, then it is excluded.
+
+        Returns:
+            dict: A dictionary containing the best (according to the validation loss) hyperparameters found during 
+                training.
+        """
+
+        # define the hyperparameter search space
+        hp = HyperParameters()
+        hp.Int("n_units", 128, 2048, step=2, sampling="log", default=self.n_units)
+        hp.Int("n_layers", 2, 8, step=1, default=self.n_layers)
+        hp.Choice("activation", ["relu", "swish"])
+        hp.Float("dropout_rate", 0.0, 0.3, step=0.1, default=self.dropout_rate)
+        hp.Float("learning_rate", 1e-6, 1e-1, step=10, sampling="log", default=self.learning_rate)
+
+        def get_hypermodel(hp):
+            self.n_units = hp.get("n_units")
+            self.n_layers = hp.get("n_layers")
+            self.activation = hp.get("activation")
+            self.dropout_rate = hp.get("dropout_rate")
+            self.learning_rate = hp.get("learning_rate")
+
+            # rebuild the model with the new hyperparameters
+            self.setup_layers()
+            self.compile()
+
+            return self
+
+        # Perform random search for hyperparameters
+        tuner = RandomSearch(
+            get_hypermodel,
+            objective="val_loss",
+            hyperparameters=hp,
+            max_trials=max_trials,
+            executions_per_trial=1,
+            directory=out_dir,
+            project_name="dense_emulator",
+            overwrite=True,
+        )
+
+        tuner.search_space_summary()
+
+        tuner.search(
+            x,
+            y,
+            epochs=epochs,
+            batch_size=batch_size,
+            # validation
+            validation_split=validation_split,
+            validation_data=validation_data,
+            # callbacks,
+            early_stopping_callback=early_stopping_callback,
+            learning_rate_callback=learning_rate_callback,
+        )
+
+        tuner.results_summary()
+
+        # Get the best hyperparameters
+        best_hyperparams = tuner.get_best_hyperparameters(num_trials=1)[0].values
+
+        return best_hyperparams
 
 
 class DenseEmulatorDeprecated:

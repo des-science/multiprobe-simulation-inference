@@ -2,6 +2,7 @@
 *.png
 *.pdf
 *.DS_store
+*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
