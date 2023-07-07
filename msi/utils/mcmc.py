@@ -49,5 +49,7 @@ def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_st
     chain = sampler.get_chain(flat=True)
     if out_dir is not None:
         np.save(os.path.join(out_dir, f"chain_{label}.npy"), chain)
+    else:
+        LOGGER.warning(f"Not saving the chain")
 
     return chain
