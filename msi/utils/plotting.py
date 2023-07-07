@@ -33,26 +33,34 @@ param_label_dict = {
 }
 
 
-def plot_chain(chain, params, out_dir=None, label="temp", scale_to_prior=True):
+def plot_chains(chains, params, out_dir=None, labels="temp", scale_to_prior=True, plot_fiducial=True):
     """Plot a given MCMC chain as a triangle plot.
 
     Args:
-        chain (np.ndarray): Array of MCMC samples of shape (n_samples, n_summaries)
-        params (list): List of strings of the constrained cosmological parameters.
+        chains (np.ndarray): Array of MCMC samples of shape (n_samples, n_summaries) or list of such arrays.
+        params (list): List of strings of the constrained cosmological parameters or list of such lists.
         out_dir (str, optional): Output directory to store the plot at. Defaults to None, then the plot is not saved.
-        label (str, optional): Marks which inference method has been used. Defaults to "temp".
+        label (str, optional): String label or list of labels to use in the plot. Defaults to "temp".
         scale_to_prior (bool, optional): Scale the cosmological parameter ranges to their respective priors. Defaults
             to True.
     """
 
+    is_params_list_of_lists = any(isinstance(el, list) for el in params)
+
+    if is_params_list_of_lists:
+        all_params = set.union(*map(set, params))
+    else:
+        all_params = params
+
     if scale_to_prior:
-        ranges = dict(zip(params, parameters.get_prior_intervals(params)))
+        ranges = dict(zip(all_params, parameters.get_prior_intervals(all_params)))
     else:
         ranges = None
 
     # initialize plot
     tri = TriangleChain(
-        labels=[param_label_dict[param] for param in params],
+        params=all_params,
+        labels=[param_label_dict[param] for param in all_params],
         scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
         grid=True,
         fill=True,
@@ -61,23 +69,42 @@ def plot_chain(chain, params, out_dir=None, label="temp", scale_to_prior=True):
         ranges=ranges,
     )
 
-    # plot contours
-    tri.contour_cl(chain, names=params, label=label)
+    # multiple chains
+    if isinstance(chains, list):
+        if isinstance(labels, list):
+            # different parameters like https://cosmo-docs.phys.ethz.ch/trianglechain/multichains/multichains.html#plot-2-chains-with-different-parameters
+            if is_params_list_of_lists:
+                for chain, param, label in zip(chains, params, labels):
+                    tri.contour_cl(chain, names=param, label=label)
+            # shared parameters
+            else:
+                for chain, label in zip(chains, labels):
+                    tri.contour_cl(chain, names=params, label=label)
+        else:
+            raise NotImplementedError
 
-    # plot fiducial
-    tri.scatter(
-        dict(zip(params, parameters.get_fiducials(params))),
-        label="fiducial",
-        plot_histograms_1D=False,
-        color="k",
-        show_legend=True,
-        scatter_vline_1D=True,
-    )
+    # single chain
+    elif isinstance(labels, str) and isinstance(params[0], str):
+        tri.contour_cl(chains, names=params, label=chains)
+
+    else:
+        raise NotImplementedError
+
+    # fiducial
+    if plot_fiducial:
+        tri.scatter(
+            dict(zip(all_params, parameters.get_fiducials(all_params))),
+            label="fiducial",
+            plot_histograms_1D=False,
+            color="k",
+            show_legend=True,
+            scatter_vline_1D=True,
+        )
 
     # save figure
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
-        tri.fig.savefig(os.path.join(out_dir, f"contours_{label}.png"), bbox_inches="tight", dpi=300)
+        tri.fig.savefig(os.path.join(out_dir, f"contours_{labels}.png"), bbox_inches="tight", dpi=300)
     else:
         LOGGER.warning(f"Not saving the plot")
 
