@@ -1,3 +1,21 @@
+files:
+  # relative to the root of this repository
+  chains:
+    LambdaCDM:
+      nla:
+        3x2pt: "data/DESy3_chains/wCDM/nla/chain_2pt_NG_final_2ptunblind_02_26_21_wnz_maglim_covupdate.fits.scales-ml_3x2pt_8_6_0.5_v0.40.ini.d3_l_nla_realy3dat.txt"
+      tatt:
+        1x2pt: "data/DESy3_chains/LambdaCDM/tatt/chain_1x2pt_lcdm_SR_maglim.txt"
+        2x2pt: "data/DESy3_chains/LambdaCDM/tatt/chain_2x2pt_lcdm_SR_maglim.txt"
+        3x2pt: "data/DESy3_chains/LambdaCDM/tatt/chain_3x2pt_lcdm_SR_maglim.txt"
+    wCDM:
+      nla:
+        3x2pt: "data/DESy3_chains/wCDM/nla/chain_2pt_NG_final_2ptunblind_02_26_21_wnz_maglim_covupdate.fits.scales-ml_3x2pt_8_6_0.5_v0.40.ini.d3_w_nla_realy3dat.txt"
+      tatt:
+        1x2pt: "data/DESy3_chains/wCDM/tatt/chain_1x2pt_wcdm_SR_maglim.txt"
+        2x2pt: "data/DESy3_chains/wCDM/tatt/chain_2x2pt_wcdm_SR_maglim.txt"
+        3x2pt: "data/DESy3_chains/wCDM/tatt/chain_3x2pt_wcdm_SR_maglim.txt"
+
 abc:
   # for float32 this is close to the minimum logable value
   kernel_min_val: 1.0e-42

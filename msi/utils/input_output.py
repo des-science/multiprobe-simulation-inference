@@ -5,11 +5,28 @@ Author: Arne Thomsen
 Utils to load MCMC chains to be plotted.
 """
 
-import os, h5py
+import os, h5py, yaml
 
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
+
+
+def get_abs_dir_repo():
+    file_dir = os.path.dirname(__file__)
+    repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
+
+    return repo_dir
+
+
+def load_msi_config():
+    repo_dir = get_abs_dir_repo()
+    conf_file = os.path.join(repo_dir, "configs/config.yaml")
+
+    with open(conf_file, "r") as f:
+        conf = yaml.load(f, Loader=yaml.FullLoader)
+
+    return conf
 
 
 def load_preds(base_dir, model_dir, n_steps=None, file_label=None):
