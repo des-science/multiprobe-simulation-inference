@@ -9,6 +9,7 @@ import os
 import numpy as np
 
 from trianglechain import TriangleChain
+from trianglechain.utils_plots import get_lines_and_labels
 from seaborn import color_palette
 
 from msi.utils.chains import load_des_y3_key_project_chain
@@ -41,6 +42,7 @@ def plot_chains(
     labels="temp",
     scale_to_prior=True,
     plot_fiducial=True,
+    group_params=False,
     with_des_chain=False,
     des_tri="upper",
 ):
@@ -53,20 +55,24 @@ def plot_chains(
         label (str, optional): String label or list of labels to use in the plot. Defaults to "temp".
         scale_to_prior (bool, optional): Scale the cosmological parameter ranges to their respective priors. Defaults
             to True.
+        plot_fiducial (bool, optional): Whether to include the fiducial synthetic observation or not. Defaults to True.
+        group_params (bool, optional): Whether to group the parameters by cosmological, intrinsic alignment and galaxy
+            bias or not in the plot. Defaults to False.
         with_des_chain (bool, optional): Whether to include a DES Y3 key project chain to compare to or not. Defaults
             to False.
         des_tri (str, optional): Determines whether the DES chain is included in the upper or lower triangle of the
             plot. Defaults to "upper".
     """
+    conf = files.load_config()
 
     is_params_list_of_lists = any(isinstance(el, list) for el in params)
 
+    # different parameters
     if is_params_list_of_lists:
         # only keep unique params
         all_params = set.union(*map(set, params))
 
         # check that all of the params are supported
-        conf = files.load_config()
         config_params = (
             conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"]["ia"] + conf["analysis"]["params"]["bg"]
         )
@@ -75,8 +81,15 @@ def plot_chains(
         # reorder the params for the plot
         all_params = [param for param in config_params if param in all_params]
 
+    # shared parameters
     else:
         all_params = params
+
+    n_cosmo_params = sum([param in conf["analysis"]["params"]["cosmo"] for param in all_params])
+    n_bg_params = sum([param in conf["analysis"]["params"]["bg"] for param in all_params])
+    n_ia_params = sum([param in conf["analysis"]["params"]["ia"] for param in all_params])
+    includes_clustering_params = n_bg_params > 0
+    includes_lensing_params = n_ia_params > 0
 
     if scale_to_prior:
         ranges = dict(zip(all_params, parameters.get_prior_intervals(all_params)))
@@ -88,19 +101,25 @@ def plot_chains(
         "smoothing_parameter1D": 0.5,
         "smoothing_parameter2D": 0.5,
     }
+    if group_params:
+        n_per_group = [n_cosmo_params, n_bg_params, n_ia_params]
+        n_per_group = list(filter(lambda x: x != 0, n_per_group))
+        grouping_kwargs = {"empty_ratio": 0.1, "n_per_group": n_per_group}
+    else:
+        grouping_kwargs = {}
 
     # initialize plot
     tri = TriangleChain(
         params=all_params,
         ranges=ranges,
         show_values=False,
-        bestfit_method="median",
         # cosmetics
         labels=[param_label_dict[param] for param in all_params],
         n_ticks=3,
         grid=True,
         fill=True,
         de_kwargs=de_kwargs,
+        grouping_kwargs=grouping_kwargs,
         scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
     )
 
@@ -120,15 +139,22 @@ def plot_chains(
 
     # single chain
     elif isinstance(labels, str) and isinstance(params[0], str):
-        tri.contour_cl(chains, names=params, label=chains)
+        tri.contour_cl(chains, names=params, label=labels)
 
     else:
         raise NotImplementedError
 
-    # DES key project chains
-    includes_clustering_params = any([param in ["bg", "n_bg"] for param in all_params])
-    includes_lensing_params = any([param in ["Aia", "n_Aia"] for param in all_params])
+    # fiducial
+    if plot_fiducial:
+        tri.scatter(
+            dict(zip(all_params, parameters.get_fiducials(all_params))),
+            label="synthetic obs",
+            plot_histograms_1D=False,
+            color="k",
+            scatter_vline_1D=True,
+        )
 
+    # DES key project chains
     if with_des_chain:
         # clustering params (2x2pt)
         if includes_clustering_params and not includes_lensing_params:
@@ -163,20 +189,15 @@ def plot_chains(
             tri=des_tri,
         )
 
-    # fiducial
-    if plot_fiducial:
-        tri.scatter(
-            dict(zip(all_params, parameters.get_fiducials(all_params))),
-            label="synthetic obs",
-            plot_histograms_1D=False,
-            color="k",
-            show_legend=True,
-            scatter_vline_1D=True,
-        )
-    else:
-        pass
-        # TODO fix
-        # tri.fig.legend()
+    legend_lines, legend_labels = get_lines_and_labels(tri.ax)
+
+    tri.fig.legend(
+        legend_lines,
+        legend_labels,
+        bbox_to_anchor=(1, 1),
+        bbox_transform=tri.ax[0, tri.ax.shape[1] - 1].transAxes,
+        fontsize=24,
+    )
 
     # save figure
     if out_dir is not None:
