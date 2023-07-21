@@ -41,8 +41,8 @@ class ConditionalGMM:
             tune_hyperparams (bool, optional): Whether to run a random hyperparameter search or only train a single
                 model.
         """
-        self.nx = x_dim
-        self.ny = y_dim
+        self.x_dim = x_dim
+        self.y_dim = y_dim
         self.out_dir = out_dir
         self.tune_hyperparams = tune_hyperparams
 
@@ -123,8 +123,8 @@ class ConditionalGMM:
         assert (
             x.ndim == 2 and y.ndim == 2
         ), "Something is wrong with the x and y array dimensions, they should be =2 for training"
-        assert x.shape[1] == self.nx, f"x should have {self.nx} dimensions"
-        assert y.shape[1] == self.ny, f"y should have {self.ny} dimensions"
+        assert x.shape[1] == self.x_dim, f"x should have {self.x_dim} dimensions"
+        assert y.shape[1] == self.y_dim, f"y should have {self.y_dim} dimensions"
         assert x.shape[0] == y.shape[0], "x and y should have the same number of points"
 
         # preprocessing
@@ -212,17 +212,51 @@ class ConditionalGMM:
 
         LOGGER.info(f"Fitted the x and y scalers")
 
+    def _scale(self, inputs, transform):
+        # arrays
+        if isinstance(inputs, np.ndarray):
+            if inputs.ndim == 2:
+                outputs = transform(inputs)
+            elif inputs.ndim > 2:
+                n_features = inputs.shape[-1]
+                inputs_shape = inputs.shape
+
+                inputs = inputs.reshape(-1, n_features)
+                outputs = transform(inputs)
+                outputs = outputs.reshape(inputs_shape)
+            else:
+                raise ValueError
+
+        # tensors
+        elif isinstance(inputs, tf.Tensor):
+            if len(inputs.shape) == 2:
+                outputs = transform(inputs)
+            elif len(inputs.shape) > 2:
+                n_features = inputs.shape[-1]
+                inputs_shape = inputs.shape
+
+                inputs = tf.reshape(inputs, shape=(-1, n_features))
+                outputs = transform(inputs)
+                outputs = tf.reshape(outputs, shape=inputs_shape)
+            else:
+                raise ValueError
+
+        else:
+            raise ValueError(f"Input must either be a numpy array or a TensorFlow tensor")
+
+        return outputs
+
     def scale_forward_x(self, x):
-        return self.scaler_x.transform(x)
+        return self._scale(x, self.scaler_x.transform)
 
     def scale_inverse_x(self, x):
-        return self.scaler_x.inverse_transform(x)
+        return self._scale(x, self.scaler_x.inverse_transform)
 
     def scale_forward_y(self, y):
-        return norm.ppf(self.scaler_y.transform(y))
+        return self._scale(y, self.scaler_y.transform)
 
     def scale_inverse_y(self, y):
-        return self.scaler_y.inverse_transform(norm.cdf(y))
+        return self._scale(y, self.scaler_y.inverse_transform)
 
     def log_likelihood(self, x, y):
         """log likelihood p(y|x) in numpy, meant to be used together with an MCMC.
@@ -234,16 +268,56 @@ class ConditionalGMM:
         Returns:
             np.ndarray: Array of shape (n_samples,) containing the log likelihoods.
         """
+
         x = self.scale_forward_x(x)
         y = self.scale_forward_y(y)
 
-        return self.model(x).log_prob(y).numpy()
+        # arrays
+        if isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
+            if x.ndim > 2 or y.ndim > 2:
+                assert x.shape[:-1] == y.shape[:-1]
+                out_shape = x.shape[:-1]
+
+                n_x_features = x.shape[-1]
+                n_y_features = y.shape[-1]
+
+                x = x.reshape(-1, n_x_features)
+                y = y.reshape(-1, n_y_features)
+
+                log_like = self.model(x).log_prob(y).numpy()
+                log_like = log_like.reshape(out_shape)
+
+            else:
+                log_like = self.model(x).log_prob(y).numpy()
+
+        # tensors
+        elif isinstance(x, tf.Tensor) and isinstance(y, tf.Tensor):
+            if len(x.shape) > 2 and len(y.shape) > 2:
+                assert x.shape[:-1] == y.shape[:-1]
+                out_shape = x.shape[:-1]
+
+                n_x_features = x.shape[-1]
+                n_y_features = y.shape[-1]
+
+                x = tf.reshape(x, shape=(-1, n_x_features))
+                y = tf.reshape(y, shape=(-1, n_y_features))
+
+                log_like = self.model(x).log_prob(y)
+                log_like = tf.reshape(log_like, shape=out_shape)
+
+            else:
+                raise ValueError
+
+        else:
+            raise ValueError(f"Input must either be a numpy array or a TensorFlow tensor")
+
+        return log_like
 
     def build_model(self):
         """Wrapper function to build the GMM model."""
         self.model = build_gmm_network(
-            nx=self.nx,
-            ny=self.ny,
+            nx=self.x_dim,
+            ny=self.y_dim,
             # probability
             n_gaussians=self.gmm_config["n_gaussians"],
             # architecture
@@ -265,8 +339,8 @@ class ConditionalGMM:
 
         # specify the fixed hyperparameters excluded from the search here
         hyper_model = HyperGMM(
-            nx=self.nx,
-            ny=self.ny,
+            nx=self.x_dim,
+            ny=self.y_dim,
             # probability
             n_gaussians=self.gmm_config["n_gaussians"],
             # architecture
@@ -309,35 +383,41 @@ class ConditionalGMM:
         # self.scaler_x, self.scaler_y = read_from_pickle()
         LOGGER.info(f"Loaded the network from {self.out_dir}")
 
-    def sample(self, x, n_samples, batch_size=10000):
+    def sample(self, x, n_samples_per_cond=1, batch_size=10000):
         """Generate samples y ~ p(y|x) given x.
 
         Args:
-            x (np.ndarray): Values to condition on of shape (n_samples, n_conditions).
-            n_samples (int): Number of samples to draw.
-            batch_size (int, optional): Draw the samples batch wise. Defaults to 10000.
+            x (np.ndarray): Values to condition on of shape (n_samples, y_dim).
+            n_samples_per_cond (int): Shape of the samples to draw per conditioning.
+            batch_size (int, optional): Draw the samples batch wise, where the batch is taken over the conditioning
+                rows in x. Defaults to 10000.
 
         Returns:
-            np.ndarray: Samples of shape (n_samples, n_features)
+            np.ndarray: Samples of shape (n_samples_per_cond, n_samples, x_dim)
         """
         assert self.scaler_x is not None, "the MDN has not been fit yet"
         assert self.scaler_y is not None, "the MDN has not been fit yet"
 
         n_batches = np.ceil(len(x) / batch_size)
-        ys = []
-        m = self.model(np.expand_dims(x[0, :], 0)).sample(sample_shape=1).shape[-1]
-        n = x.shape[0]
-        LOGGER.info(f"drawing {n} samples with {m} dims")
-        for x_ in LOGGER.progressbar(
+
+        y_samples = []
+
+        for x_batch in LOGGER.progressbar(
             np.array_split(x, n_batches), desc=f"drawing samples with batch_size={batch_size}", at_level="info"
         ):
-            x_ = self.scale_forward_x(x_)
-            ys_ = tf.squeeze(self.model(x_).sample(sample_shape=n_samples))
-            ys_ = self.scale_inverse_y(ys_)
-            ys.append(ys_)
+            x_batch = self.scale_forward_x(x_batch)
+            y_batch = tf.squeeze(self.model(x_batch).sample(sample_shape=n_samples_per_cond)).numpy()
 
-        ys = np.concatenate(ys)
-        return ys
+            # rescale y
+            # y_batch_shape = y_batch.shape
+            # y_batch = tf.reshape(y_batch, (-1, self.y_dim))
+            y_batch = self.scale_inverse_y(y_batch)
+            # y_batch = tf.reshape(y_batch, y_batch_shape)
+
+            y_samples.append(y_batch)
+
+        y_samples = np.concatenate(y_samples, axis=1)
+        return y_samples
 
 
 class HyperGMM(keras_tuner.HyperModel):
