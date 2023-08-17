@@ -39,6 +39,7 @@ def plot_chains(
     chains,
     params,
     out_dir=None,
+    out_file=None,
     labels="temp",
     scale_to_prior=True,
     plot_fiducial=True,
@@ -200,11 +201,17 @@ def plot_chains(
     )
 
     # save figure
-    if out_dir is not None:
-        os.makedirs(out_dir, exist_ok=True)
-        tri.fig.savefig(os.path.join(out_dir, f"contours_{labels}.png"), bbox_inches="tight", dpi=300)
-    else:
+    if out_dir is None:
         LOGGER.warning(f"Not saving the plot")
+    else:
+        os.makedirs(out_dir, exist_ok=True)
+
+        if out_file is None:
+            out_file = os.path.join(out_dir, f"contours_{labels}.png")
+        else:
+            out_file = os.path.join(out_dir, out_file)
+
+        tri.fig.savefig(out_file, bbox_inches="tight", dpi=300)
 
 
 def plot_method_comparison(
