@@ -28,6 +28,10 @@ method_label_dict = {
 param_label_dict = {
     "Om": r"$\Omega_m$",
     "s8": r"$\sigma_8$",
+    "H0": r"$H_0$",
+    "Ob": r"$\Omega_b$",
+    "ns": r"$n_s$",
+    "w0": r"$w_0$",
     "Aia": r"$A_{IA}$",
     "n_Aia": r"$\eta_{A_{IA}}$",
     "bg": r"$b_g$",
