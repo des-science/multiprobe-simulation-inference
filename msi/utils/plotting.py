@@ -42,12 +42,17 @@ param_label_dict = {
 def plot_chains(
     chains,
     params,
+    # file
     out_dir=None,
     out_file=None,
     labels="temp",
+    # cosmetics
+    title=None,
     scale_to_prior=True,
-    plot_fiducial=True,
     group_params=False,
+    # cosmo
+    plot_fiducial=True,
+    fiducial_point=None,
     with_des_chain=False,
     des_tri="upper",
 ):
@@ -57,12 +62,18 @@ def plot_chains(
         chains (np.ndarray): Array of MCMC samples of shape (n_samples, n_summaries) or list of such arrays.
         params (list): List of strings of the constrained cosmological parameters or list of such lists.
         out_dir (str, optional): Output directory to store the plot at. Defaults to None, then the plot is not saved.
-        label (str, optional): String label or list of labels to use in the plot. Defaults to "temp".
+        out_file (str, optional): Name of the output file. Defaults to None, then the labels are used.
+        labels (str, optional): String label or list of labels to use in the plot. Defaults to "temp".
+        title (str, optional): String to use as the super title within the figure. Defaults to None, then it is
+            discarded.
         scale_to_prior (bool, optional): Scale the cosmological parameter ranges to their respective priors. Defaults
             to True.
-        plot_fiducial (bool, optional): Whether to include the fiducial synthetic observation or not. Defaults to True.
         group_params (bool, optional): Whether to group the parameters by cosmological, intrinsic alignment and galaxy
             bias or not in the plot. Defaults to False.
+        plot_fiducial (bool, optional): Whether to include the fiducial synthetic observation or not. Defaults to True.
+        fiducial_point (dict, optional): Dictionary of parameter values for the given fiducial observation. This is
+            meant for test purposes when a grid cosmology is used as the observation. Defaults to None, then the config
+            values are used.
         with_des_chain (bool, optional): Whether to include a DES Y3 key project chain to compare to or not. Defaults
             to False.
         des_tri (str, optional): Determines whether the DES chain is included in the upper or lower triangle of the
@@ -149,16 +160,6 @@ def plot_chains(
     else:
         raise NotImplementedError
 
-    # fiducial
-    if plot_fiducial:
-        tri.scatter(
-            dict(zip(all_params, parameters.get_fiducials(all_params))),
-            label="synthetic obs",
-            plot_histograms_1D=False,
-            color="k",
-            scatter_vline_1D=True,
-        )
-
     # DES key project chains
     if with_des_chain:
         # clustering params (2x2pt)
@@ -175,7 +176,8 @@ def plot_chains(
         # combined probes (3x2pt)
         else:
             # TODO treat the (per bin) galaxy bias somehow?
-            des_params = ["Om", "s8", "Aia", "n_Aia"]
+            # des_params = ["Om", "s8", "Aia", "n_Aia"]
+            des_params = ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia"]
             des_probes = "3x2pt"
             des_ia = "nla"
 
@@ -194,28 +196,36 @@ def plot_chains(
             tri=des_tri,
         )
 
-    legend_lines, legend_labels = get_lines_and_labels(tri.ax)
+    # fiducial
+    if plot_fiducial:
+        if fiducial_point is None:
+            fiducial_point = dict(zip(all_params, parameters.get_fiducials(all_params)))
 
-    tri.fig.legend(
-        legend_lines,
-        legend_labels,
-        bbox_to_anchor=(1, 1),
-        bbox_transform=tri.ax[0, tri.ax.shape[1] - 1].transAxes,
-        fontsize=24,
-    )
+        tri.scatter(
+            fiducial_point,
+            label="synthetic obs",
+            plot_histograms_1D=False,
+            color="k",
+            scatter_vline_1D=True,
+            show_legend=True,
+        )
+
+    # title
+    if title is not None:
+        tri.fig.suptitle(title, fontsize=24)
 
     # save figure
-    if out_dir is None:
-        LOGGER.warning(f"Not saving the plot")
-    else:
+    if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
 
         if out_file is None:
-            out_file = os.path.join(out_dir, f"contours_{labels}.png")
-        else:
-            out_file = os.path.join(out_dir, out_file)
+            tri.fig.savefig(os.path.join(out_dir, f"contours_{labels}.png"), bbox_inches="tight", dpi=300)
 
-        tri.fig.savefig(out_file, bbox_inches="tight", dpi=300)
+        else:
+            tri.fig.savefig(os.path.join(out_dir, out_file), bbox_inches="tight", dpi=300)
+
+    else:
+        LOGGER.warning(f"Not saving the plot")
 
 
 def plot_method_comparison(
