@@ -30,7 +30,7 @@ def load_msi_config():
     return conf
 
 
-def load_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=None):
+def load_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=None, return_training=False):
     out_dir = os.path.join(base_dir, model_dir)
 
     if preds_file is None:
@@ -44,13 +44,14 @@ def load_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=No
         preds_file = os.path.join(out_dir, preds_file)
 
     with h5py.File(preds_file, "r") as f:
-        # fiducial
-        fidu_train_preds = f["fiducial/train/pred"][:]
-        fidu_vali_preds = f["fiducial/vali/pred"][:]
-
         LOGGER.info(f"Array shapes:\n")
-        LOGGER.info(f"fidu_train_preds =   {fidu_train_preds.shape}")
+
+        # fiducial
+        fidu_vali_preds = f["fiducial/vali/pred"][:]
         LOGGER.info(f"fidu_vali_preds =    {fidu_vali_preds.shape}")
+        if return_training:
+            fidu_train_preds = f["fiducial/train/pred"][:]
+            LOGGER.info(f"fidu_train_preds =   {fidu_train_preds.shape}")
 
         # grid
         grid_preds = f["grid/pred"][:]
@@ -61,7 +62,10 @@ def load_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=No
         LOGGER.info(f"grid_cosmos =        {grid_cosmos.shape}")
         LOGGER.info(f"grid_sobol =         {grid_cosmos.shape}")
 
-    return fidu_train_preds, fidu_vali_preds, grid_preds, grid_cosmos, grid_sobol
+    if return_training:
+        return fidu_train_preds, fidu_vali_preds, grid_preds, grid_cosmos, grid_sobol
+    else:
+        return fidu_vali_preds, grid_preds, grid_cosmos, grid_sobol
 
 def load_cls(fidu_dir, grid_dir):
     fidu_index = []

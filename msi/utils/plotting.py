@@ -36,12 +36,15 @@ param_label_dict = {
     "n_Aia": r"$\eta_{A_{IA}}$",
     "bg": r"$b_g$",
     "n_bg": r"$\eta_{b_g}$",
+    "bg2": r"$b_{g,2}$",
+    "n_bg2": r"$\eta_{b_{g,2}}$",
 }
 
 
 def plot_chains(
     chains,
     params,
+    conf=None,
     # file
     out_dir=None,
     out_file=None,
@@ -79,7 +82,7 @@ def plot_chains(
         des_tri (str, optional): Determines whether the DES chain is included in the upper or lower triangle of the
             plot. Defaults to "upper".
     """
-    conf = files.load_config()
+    conf = files.load_config(conf)
 
     is_params_list_of_lists = any(isinstance(el, list) for el in params)
 
@@ -102,13 +105,18 @@ def plot_chains(
         all_params = params
 
     n_cosmo_params = sum([param in conf["analysis"]["params"]["cosmo"] for param in all_params])
-    n_bg_params = sum([param in conf["analysis"]["params"]["bg"] for param in all_params])
+    n_bg_params = sum(
+        [
+            param in conf["analysis"]["params"]["bg"]["linear"] + conf["analysis"]["params"]["bg"]["quadratic"]
+            for param in all_params
+        ]
+    )
     n_ia_params = sum([param in conf["analysis"]["params"]["ia"] for param in all_params])
     includes_clustering_params = n_bg_params > 0
     includes_lensing_params = n_ia_params > 0
 
     if scale_to_prior:
-        ranges = dict(zip(all_params, parameters.get_prior_intervals(all_params)))
+        ranges = dict(zip(all_params, parameters.get_prior_intervals(all_params, conf=conf)))
     else:
         ranges = None
 
