@@ -8,9 +8,7 @@ conda create --prefix /global/common/software/des/athomsen/torch_env --clone /gl
 
 python -m ipykernel install --user --name torch_env
 
-pip install --force-reinstall --no-cache-dir healpy
-pip install --force-reinstall --no-cache-dir sbi
-pip install --force-reinstall --no-cache-dir icecream
+pip install --force-reinstall --no-cache-dir healpy sbi icecream trianglechain seaborn emcee
 
 # msfm, deep_lss, msi
 pip install -e .
