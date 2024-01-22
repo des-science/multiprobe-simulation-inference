@@ -227,11 +227,10 @@ def plot_chains(
         os.makedirs(out_dir, exist_ok=True)
 
         if out_file is None:
-            tri.fig.savefig(os.path.join(out_dir, f"contours_{labels}.png"), bbox_inches="tight", dpi=300)
+            out_file = os.path.join(out_dir, f"contours_{labels}.png")
 
-        else:
-            tri.fig.savefig(os.path.join(out_dir, out_file), bbox_inches="tight", dpi=300)
-
+        tri.fig.savefig(os.path.join(out_dir, out_file), bbox_inches="tight", dpi=300)
+        LOGGER.info(f"Saved the plot to {out_file}")
     else:
         LOGGER.warning(f"Not saving the plot")
 

@@ -16,7 +16,7 @@ LOGGER = logger.get_logger(__file__)
 np.random.seed(12)
 
 
-def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_steps=1000):
+def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_steps=1000, n_burnin_steps=100):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
     Args:
@@ -27,6 +27,8 @@ def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_st
         label (str, optional): Marks which inference method has been used. Defaults to "temp".
         n_walkers (int, optional): Number of walkes to use in emcee, this determines the level of parallelization via
             vectorization. Defaults to 1024.
+        n_steps (int, optional): Number of steps to run the chain for. Defaults to 1000.
+        n_burnin_steps (int, optional): Number of steps to run the burn in chain for. Defaults to 100.
 
     Returns:
         chain (np.ndarray): An array of shape (n_samples, n_params)
@@ -39,17 +41,22 @@ def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_st
 
     # sample burn in
     sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True)
-    state = sampler.run_mcmc(theta_0, 100)
+
+    LOGGER.info(f"Starting the burn in MCMC chain ({n_burnin_steps} steps)")
+    state = sampler.run_mcmc(theta_0, n_burnin_steps)
     sampler.reset()
 
     # run the actual chain
+    LOGGER.info(f"Starting the main MCMC chain ({n_steps} steps)")
     sampler.run_mcmc(state, n_steps, progress=True)
 
     # save the result
     chain = sampler.get_chain(flat=True)
     if out_dir is not None:
-        np.save(os.path.join(out_dir, f"chain_{label}.npy"), chain)
+        out_file = os.path.join(out_dir, f"chain_{label}.npy")
+        np.save(out_file, chain)
+        LOGGER.info(f"Saved the MCMC chain to {out_file}")
     else:
-        LOGGER.warning(f"Not saving the chain")
+        LOGGER.warning(f"Not saving the MCMC chain")
 
     return chain

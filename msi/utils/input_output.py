@@ -33,6 +33,7 @@ def load_msi_config():
 def load_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=None, return_training=False):
     out_dir = os.path.join(base_dir, model_dir)
 
+    # build file name
     if preds_file is None:
         if n_steps is None:
             preds_file = os.path.join(out_dir, f"preds.h5")
@@ -43,29 +44,28 @@ def load_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=No
     else:
         preds_file = os.path.join(out_dir, preds_file)
 
+    h5_keys = [
+        "fiducial/vali/pred",
+        "grid/pred",
+        "grid/cosmo",
+        "grid/i_sobol",
+        "grid/i_example",
+        "grid/i_noise",
+    ]
+
+    if return_training:
+        h5_keys.append("fiducial/train/pred")
+
     with h5py.File(preds_file, "r") as f:
         LOGGER.info(f"Array shapes:\n")
 
-        # fiducial
-        fidu_vali_preds = f["fiducial/vali/pred"][:]
-        LOGGER.info(f"fidu_vali_preds =    {fidu_vali_preds.shape}")
-        if return_training:
-            fidu_train_preds = f["fiducial/train/pred"][:]
-            LOGGER.info(f"fidu_train_preds =   {fidu_train_preds.shape}")
+        out_dict = {}
+        for h5_key in h5_keys:
+            out_dict[h5_key] = f[h5_key][:]
+            LOGGER.info(f"{h5_key:<18} = {out_dict[h5_key].shape}")
 
-        # grid
-        grid_preds = f["grid/pred"][:]
-        grid_cosmos = f["grid/cosmo"][:]
-        grid_sobol = f["grid/i_sobol"][:]
+    return out_dict
 
-        LOGGER.info(f"grid_preds =         {grid_preds.shape}")
-        LOGGER.info(f"grid_cosmos =        {grid_cosmos.shape}")
-        LOGGER.info(f"grid_sobol =         {grid_cosmos.shape}")
-
-    if return_training:
-        return fidu_train_preds, fidu_vali_preds, grid_preds, grid_cosmos, grid_sobol
-    else:
-        return fidu_vali_preds, grid_preds, grid_cosmos, grid_sobol
 
 def load_cls(fidu_dir, grid_dir):
     fidu_index = []
@@ -89,12 +89,12 @@ def load_cls(fidu_dir, grid_dir):
 
                 for fidu_file in fidu_file_list:
                     with h5py.File(fidu_file, "r") as f:
-                        current_index.append(f["power_spectrum"].attrs["index"][0,0])
+                        current_index.append(f["power_spectrum"].attrs["index"][0, 0])
                         current_cls.append(f["power_spectrum"][:])
-                        
+
                 current_index = np.asarray(current_index)
                 current_cls = np.asarray(current_cls)
-                
+
                 # every example index must be unique
                 assert len(np.unique(current_index)) == len(fidu_file_list)
 
@@ -102,10 +102,10 @@ def load_cls(fidu_dir, grid_dir):
                 i_sorted = np.argsort(current_index)
                 current_index = current_index[i_sorted]
                 current_cls = current_cls[i_sorted]
-                
+
                 # apply scale cut
-                current_cls = current_cls[:,l_cut]
-                
+                current_cls = current_cls[:, l_cut]
+
                 # collect in lists
                 fidu_index.append(current_index)
                 fidu_cls.append(current_cls)

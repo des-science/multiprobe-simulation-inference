@@ -16,7 +16,7 @@ from scipy.stats import norm
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 
 from msfm.utils import logger
-from msi.utils.keras import EpochProgressCallback
+from msi.gaussian_mixture.keras import EpochProgressCallback
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)

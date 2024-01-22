@@ -12,7 +12,7 @@ from kerastuner.tuners import RandomSearch
 from kerastuner.engine.hyperparameters import HyperParameters
 
 from msfm.utils import logger
-from msi.utils.keras import EpochProgressCallback
+from msi.gaussian_mixture.keras import EpochProgressCallback
 
 LOGGER = logger.get_logger(__file__)
 
