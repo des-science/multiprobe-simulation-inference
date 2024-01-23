@@ -7,6 +7,7 @@ Utils to plot the 1D and 2D marginals of samples from a posterior distribution.
 
 import os
 import numpy as np
+import matplotlib.pyplot as plt
 
 from trianglechain import TriangleChain
 from trianglechain.utils_plots import get_lines_and_labels
@@ -290,3 +291,53 @@ def plot_method_comparison(
         out_file = os.path.join(model_dir, out_file)
 
     tri.fig.savefig(out_file, bbox_inches="tight", dpi=300)
+
+
+def plot_human_summary(
+    fidu_summs, grid_summs, out_dir=None, label=None, n_random_indices=20, bin_size=None, bin_names=None
+):
+    fig, ax = plt.subplots(figsize=(20, 10), nrows=2, sharex=True, sharey=True)
+
+    # fiducial
+    random_indices = np.random.choice(np.arange(fidu_summs.shape[0]), n_random_indices)
+
+    for i in random_indices:
+        ax[0].plot(fidu_summs[i])
+
+    ax[0].set(xscale="linear", yscale="log", title="fiducial", xlabel="data vec dim", ylabel=r"$C_\ell$")
+    ax[0].grid(True)
+
+    # grid
+    random_indices = np.random.choice(np.arange(grid_summs.shape[0]), n_random_indices)
+
+    for i in random_indices:
+        ax[1].plot(grid_summs[i])
+
+    ax[1].set(title="grid", xlabel="data vec index", ylabel=r"$C_\ell$")
+    ax[1].grid(True)
+
+    # cosmetics
+    if bin_size is not None and bin_names is not None:
+        x = 0
+        ticks = []
+        for i, x in enumerate(np.arange(0, len(bin_names) * bin_size, bin_size)):
+            ax[0].axvline(x, color="k", linestyle="--")
+            ax[1].axvline(x, color="k", linestyle="--")
+
+            ax[0].text(x + 3, ax[0].get_ylim()[1] - 0.5 * ax[0].get_ylim()[1], bin_names[i])
+            ax[1].text(x + 3, ax[0].get_ylim()[1] - 0.5 * ax[0].get_ylim()[1], bin_names[i])
+
+            ticks.append(x)
+
+        ax[0].set_xticks(ticks)
+        ax[1].set_xticks(ticks)
+
+    # saving
+    if out_dir is not None:
+        if label is not None:
+            out_file = os.path.join(out_dir, f"plot_{label}.png")
+        else:
+            out_file = os.path.join(out_dir, f"plot.png")
+
+        fig.savefig(out_file, bbox_inches="tight", dpi=100)
+        LOGGER.info(f"Saved the summary plot to {out_file}")

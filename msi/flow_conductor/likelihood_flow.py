@@ -27,8 +27,12 @@ LOGGER = logger.get_logger(__file__)
 
 
 class LikelihoodFlow(Flow):
-    """Normalizing flow implementing a likelihood function. The main purpose of the class is to wrap the FlowConductor
-    library and provide a convenient interface for training and MCMC sampling.
+    """Normalizing flow implementing a likelihood function p(x|theta), where x is some summary statistic vector and
+    theta a vector of cosmological/astrophysical parameters to be constrained.
+
+    The main purpose of the class is to wrap the FlowConductor library and provide a convenient interface for training
+    and MCMC sampling from the posterior p(theta|x_obs), where x_obs is a summary corresponding to a (mock)
+    observation.
     """
 
     def __init__(
@@ -380,7 +384,7 @@ class LikelihoodFlow(Flow):
     def save(self):
         """Serialize the complete model (not just the weights) and save it to disk."""
 
-        out_file = os.path.join(self.out_dir, self.label + ".pt")
+        out_file = os.path.join(self.out_dir, "model" + self.label + ".pt")
         torch.save(self, out_file)
         LOGGER.info(f"Saved the model to {out_file}")
 
