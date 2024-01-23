@@ -17,7 +17,7 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 
 from enflows.flows import Flow
 
-from msi.utils import plotting, mcmc
+from msi.utils import plotting, mcmc, diagnostics
 from msi.flow_conductor import architecture
 from msfm.utils import prior, files, logger
 
@@ -246,15 +246,53 @@ class LikelihoodFlow(Flow):
         if out_dir is not None:
             fig.savefig(os.path.join(out_dir, "losses.png"))
 
-    def sample_likelihood(self, theta_obs, n_samples=512000, out_dir=None, label=None, device=None):
-        raise NotImplementedError("This method is not implemented yet")
+    def sample_likelihood(
+        self, theta_obs, n_samples=1000, batch_size=None, return_numpy=True, out_dir=None, label=None
+    ):
+        """
+        Sample from the likelihood distribution p(x|theta). This can be done directly from the flow and doesn't need
+        an MCMC sampler.
+
+        Args:
+            theta_obs (Union[torch.Tensor, np.ndarray]): The observed theta values. This array/tensor can have more
+                than one dimension.
+            n_samples (int, optional): The number of samples to generate for each condition. Defaults to 1000.
+            batch_size (int, optional): The batch size for generating samples. Defaults to None.
+            return_numpy (bool, optional): Whether to return the samples as a numpy array instead of a pytorch tensor.
+                Defaults to True.
+            out_dir (str, optional): The directory to save the samples. Defaults to None.
+            label (str, optional): The label for the saved samples. Defaults to None.
+
+        Returns:
+            torch.Tensor or numpy.ndarray: The generated samples of the same shape as theta_obs, except for an
+                additional axis of length n_samples.
+        """
+
+        theta_obs = torch.tensor(theta_obs, dtype=self.floatx, device=self.device)
+
+        self.eval()
+        with torch.no_grad():
+            samples = self.sample(n_samples, context=theta_obs, batch_size=batch_size)
+
+        # TODO save result?
+        # if out_dir is not None:
+        #     out_file = os.path.join(out_dir, f"chain_{label}.npy")
+        #     np.save(out_file, chain)
+        #     LOGGER.info(f"Saved the MCMC chain to {out_file}")
+        # else:
+        #     LOGGER.warning(f"Not saving the MCMC chain")
+
+        if return_numpy:
+            samples = samples.cpu().numpy()
+
+        return samples
 
     def sample_posterior(
         self, x_obs, n_samples=512000, n_walkers=1024, n_burnin_steps=100, out_dir=None, label=None, device=None
     ):
         """
-        Sample from the posterior distribution using likelihood learned by the flow model and the flat analysis prior.
-        The sampling is done using the emcee library, which runs on the CPU and in numpy.
+        Sample from the posterior distribution p(theta|x) using likelihood learned by the flow model and the flat
+        analysis prior. The sampling is done using the emcee library, which runs on the CPU and in numpy.
 
         Args:
             x_obs (np.ndarray): The observation to condition the posterior on. It must have shape (n_features,) or
@@ -293,6 +331,9 @@ class LikelihoodFlow(Flow):
         # there can be more samples than requested due the walkers
         chain = chain[:n_samples]
 
+        # restore the flow to the original device
+        self.to(self.device)
+
         return chain
 
     def _log_likelihood(self, theta_walkers, x_obs, device="cuda"):
@@ -315,7 +356,7 @@ class LikelihoodFlow(Flow):
 
     def plot_contours(
         self,
-        samples,
+        posterior_samples,
         # override initialized values
         out_dir=None,
         label=None,
@@ -345,7 +386,7 @@ class LikelihoodFlow(Flow):
         out_dir, label = self._potentially_override_inits(["out_dir", "label"], [out_dir, label])
 
         plotting.plot_chains(
-            samples,
+            posterior_samples,
             self.params,
             self.conf,
             out_dir=out_dir,
@@ -393,6 +434,39 @@ class LikelihoodFlow(Flow):
         """Load a serialized model from disk."""
 
         return torch.load(in_dir)
+
+    def plot_diagnostics(self, grid_preds_true, grid_cosmos, n_samples_per_cosmo=100, batch_size=4096):
+        """
+        Plot diagnostics of how well the likelihood p(x|theta) has been learned from the (samples of the) true
+        distribution.
+
+        Args:
+            grid_preds_true (ndarray): Array of shape (n_cosmos, n_examples, n_summary) true predictions for each
+                cosmology in the grid. These are used as the true baseline to compare to.
+            grid_cosmos (ndarray): Array of shape (n_cosmos, n_params) of the cosmologies in the grid. This is used
+                to condition the flow and sample from it.
+            n_samples_per_cosmo (int, optional): Number of samples per cosmology. Defaults to 100.
+            batch_size (int, optional): Batch size for sampling. Defaults to 4096.
+
+        Returns:
+            ndarray: Array of shape (n_cosmos, n_samples_per_cosmo, n_summary) containing samples from the likelihood
+            for the whole grid.
+        """
+
+        assert grid_preds_true.shape[0] == grid_cosmos.shape[0], "n_cosmos must be the same for both arrays"
+        assert (
+            grid_preds_true.ndim == 3
+        ), "grid_preds_true must have 3 dims containing (n_cosmos, n_samples, n_summaries)"
+        assert grid_cosmos.ndim == 2, "grid_cosmos must have 2 dims containing (n_cosmos, n_params)"
+
+        grid_preds_sample = self.sample_likelihood(
+            grid_cosmos, n_samples=n_samples_per_cosmo, batch_size=batch_size, return_numpy=True
+        )
+
+        diagnostics.plot_sample_comparison(grid_preds_true, grid_preds_sample, n_random_indices=10)
+        diagnostics.plot_deeplss_checks(grid_preds_true, grid_preds_sample)
+
+        return grid_preds_sample
 
 
 class LikelihoodFlowEnsemble(LikelihoodFlow):
