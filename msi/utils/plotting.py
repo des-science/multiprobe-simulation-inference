@@ -48,10 +48,10 @@ def plot_chains(
     conf=None,
     # file
     out_dir=None,
-    out_file=None,
-    labels="temp",
+    file_label=None,
     # cosmetics
     title=None,
+    plot_labels="chain",
     scale_to_prior=True,
     group_params=False,
     # cosmo
@@ -66,7 +66,6 @@ def plot_chains(
         chains (np.ndarray): Array of MCMC samples of shape (n_samples, n_summaries) or list of such arrays.
         params (list): List of strings of the constrained cosmological parameters or list of such lists.
         out_dir (str, optional): Output directory to store the plot at. Defaults to None, then the plot is not saved.
-        out_file (str, optional): Name of the output file. Defaults to None, then the labels are used.
         labels (str, optional): String label or list of labels to use in the plot. Defaults to "temp".
         title (str, optional): String to use as the super title within the figure. Defaults to None, then it is
             discarded.
@@ -150,21 +149,21 @@ def plot_chains(
 
     # multiple chains
     if isinstance(chains, list):
-        if isinstance(labels, list):
+        if isinstance(plot_labels, list):
             # different parameters like https://cosmo-docs.phys.ethz.ch/trianglechain/multichains/multichains.html#plot-2-chains-with-different-parameters
             if is_params_list_of_lists:
-                for chain, param, label in zip(chains, params, labels):
+                for chain, param, label in zip(chains, params, plot_labels):
                     tri.contour_cl(chain, names=param, label=label)
             # shared parameters
             else:
-                for chain, label in zip(chains, labels):
+                for chain, label in zip(chains, plot_labels):
                     tri.contour_cl(chain, names=params, label=label)
         else:
             raise NotImplementedError
 
     # single chain
-    elif isinstance(labels, str) and isinstance(params[0], str):
-        tri.contour_cl(chains, names=params, label=labels)
+    elif isinstance(plot_labels, str) and isinstance(params[0], str):
+        tri.contour_cl(chains, names=params, label=plot_labels)
 
     else:
         raise NotImplementedError
@@ -227,8 +226,10 @@ def plot_chains(
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
 
-        if out_file is None:
-            out_file = os.path.join(out_dir, f"contours_{labels}.png")
+        if file_label is not None:
+            out_file = os.path.join(out_dir, f"contours_{file_label}.png")
+        else:
+            out_file = os.path.join(out_dir, f"contours.png")
 
         tri.fig.savefig(os.path.join(out_dir, out_file), bbox_inches="tight", dpi=300)
         LOGGER.info(f"Saved the plot to {out_file}")

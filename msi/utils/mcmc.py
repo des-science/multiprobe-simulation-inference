@@ -16,7 +16,7 @@ LOGGER = logger.get_logger(__file__)
 np.random.seed(12)
 
 
-def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_steps=1000, n_burnin_steps=100):
+def run_emcee(log_prob, params, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
     Args:
@@ -24,7 +24,8 @@ def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_st
             returns an array of corresponding log probabilities of shape (n_samples,)
         params (list): List of strings of the constrained cosmological parameters.
         out_dir (str, optional): Output directory to store the plot at. Defaults to None, then the plot is not saved.
-        label (str, optional): Marks which inference method has been used. Defaults to "temp".
+        label (str, optional): Additional label for the file name, for example to designate different observations.
+            Defaults to None.
         n_walkers (int, optional): Number of walkes to use in emcee, this determines the level of parallelization via
             vectorization. Defaults to 1024.
         n_steps (int, optional): Number of steps to run the chain for. Defaults to 1000.
@@ -53,7 +54,10 @@ def run_emcee(log_prob, params, out_dir=None, label="temp", n_walkers=1024, n_st
     # save the result
     chain = sampler.get_chain(flat=True)
     if out_dir is not None:
-        out_file = os.path.join(out_dir, f"chain_{label}.npy")
+        if label is not None:
+            out_file = os.path.join(out_dir, f"chain_{label}.npy")
+        else:
+            out_file = os.path.join(out_dir, f"chain.npy")
         np.save(out_file, chain)
         LOGGER.info(f"Saved the MCMC chain to {out_file}")
     else:

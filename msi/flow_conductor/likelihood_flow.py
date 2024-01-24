@@ -39,11 +39,14 @@ class LikelihoodFlow(Flow):
         self,
         params,
         conf=None,
+        # architecture
         embedding_net=None,
         base_dist=None,
         transform=None,
+        # output
         out_dir=None,
         label=None,
+        # computational
         device=None,
         floatx=torch.float32,
     ):
@@ -94,8 +97,12 @@ class LikelihoodFlow(Flow):
         LOGGER.info(f"Initialized the normalizing flow")
 
         self.conf = files.load_config(conf)
+
         self.out_dir = out_dir
         self.label = label
+        self.model_dir = os.path.join(self.out_dir, self.label)
+        os.makedirs(self.model_dir, exist_ok=True)
+        LOGGER.info(f"Set up the model directory {self.model_dir}")
 
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -104,6 +111,8 @@ class LikelihoodFlow(Flow):
         LOGGER.info(f"Running on device {self.device} with default float {self.floatx}")
 
         self.to(self.device)
+
+    # training ########################################################################################################
 
     def fit(
         self,
@@ -232,7 +241,7 @@ class LikelihoodFlow(Flow):
 
         return epoch_loss
 
-    def _plot_epochs(self, train_losses, vali_losses, out_dir=None):
+    def _plot_epochs(self, train_losses, vali_losses):
         """Produce a diagnostics plot of the loss curves after training has finished"""
 
         fig, ax = plt.subplots(figsize=(12, 6))
@@ -243,12 +252,11 @@ class LikelihoodFlow(Flow):
         ax.grid(True)
         ax.legend()
 
-        if out_dir is not None:
-            fig.savefig(os.path.join(out_dir, "losses.png"))
+        fig.savefig(os.path.join(self.model_dir, "loss_curves.png"))
 
-    def sample_likelihood(
-        self, theta_obs, n_samples=1000, batch_size=None, return_numpy=True, out_dir=None, label=None
-    ):
+    # likelihood ######################################################################################################
+
+    def sample_likelihood(self, theta_obs, n_samples=1000, batch_size=None, return_numpy=True):
         """
         Sample from the likelihood distribution p(x|theta). This can be done directly from the flow and doesn't need
         an MCMC sampler.
@@ -274,22 +282,54 @@ class LikelihoodFlow(Flow):
         with torch.no_grad():
             samples = self.sample(n_samples, context=theta_obs, batch_size=batch_size)
 
-        # TODO save result?
-        # if out_dir is not None:
-        #     out_file = os.path.join(out_dir, f"chain_{label}.npy")
-        #     np.save(out_file, chain)
-        #     LOGGER.info(f"Saved the MCMC chain to {out_file}")
-        # else:
-        #     LOGGER.warning(f"Not saving the MCMC chain")
-
         if return_numpy:
             samples = samples.cpu().numpy()
 
         return samples
 
-    def sample_posterior(
-        self, x_obs, n_samples=512000, n_walkers=1024, n_burnin_steps=100, out_dir=None, label=None, device=None
-    ):
+    def log_likelihood(self, x, theta, return_numpy=False):
+        """Wrapper for the log_prob method of the base Flow. In most cases (e.g. for training and MCMC), the raw
+        log_prob method is preferred.
+
+        Args:
+            x (Union[np.ndarray,torch.tensor]): Array/tensor containing the summary statistic. Possibly not 2
+                dimensional, like shape (n_cosmos, n_examples, n_summary).
+            theta (Union[np.ndarray,torch.tensor]): Array/tensor of the cosmological parameters. Same behavior as for x.
+            return_numpy (bool, optional): Return numpy arrays instead of torch.tensors. Defaults to False.
+
+        Returns:
+            np.ndarray or torch.tensor: Non-normalized log probabilities.
+        """
+        x = torch.tensor(x, dtype=self.floatx, device=self.device)
+        theta = torch.tensor(theta, dtype=self.floatx, device=self.device)
+
+        # ravel all but the last dimension
+        do_reshape = x.ndim > 2 or theta.ndim > 2
+        if do_reshape:
+            assert x.shape[:-1] == theta.shape[:-1], f"The feature dimension needs to be the same for x and theta"
+            out_shape = x.shape[:-1]
+
+            x_features = x.shape[-1]
+            theta_features = theta.shape[-1]
+
+            x = x.reshape(-1, x_features)
+            theta = theta.reshape(-1, theta_features)
+
+        with torch.no_grad():
+            log_like = super().log_prob(x, context=theta)
+
+        # bring into the original shape
+        if do_reshape:
+            log_like = log_like.reshape(out_shape)
+
+        if return_numpy:
+            log_like = log_like.cpu().numpy()
+
+        return log_like
+
+    # posterior #######################################################################################################
+
+    def sample_posterior(self, x_obs, n_samples=512000, n_walkers=1024, n_burnin_steps=100, label=None, device=None):
         """
         Sample from the posterior distribution p(theta|x) using likelihood learned by the flow model and the flat
         analysis prior. The sampling is done using the emcee library, which runs on the CPU and in numpy.
@@ -300,17 +340,18 @@ class LikelihoodFlow(Flow):
             n_samples (int, optional): The number of samples to generate. Defaults to 512000.
             n_walkers (int, optional): The number of walkers in the MCMC chain. Defaults to 1024.
             n_burnin_steps (int, optional): The number of burn-in steps in the MCMC chain. Defaults to 100.
-            out_dir (str, optional): Override the initialized value. Defaults to None.
-            label (str, optional): Override the initialized value. Defaults to None.
-            device (str, optional): The device to use for computation. Defaults to None.
+            label (str, optional): Additional label for the saved chain, for example to designate different
+                observations. Defaults to None.
+            device (str, optional): The device to use for computation, potentially override the initialized value since
+                it can be advantageous to first train on GPU, but then run the whole MCMC chain on the CPU. Defaults to
+                None.
 
         Returns:
             array-like: The generated samples from the likelihood flow model.
         """
 
-        out_dir, label, device = self._potentially_override_inits(
-            ["out_dir", "label", "device"], [out_dir, label, device]
-        )
+        if device is None:
+            device = self.device
 
         x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
         x_obs = torch.atleast_2d(x_obs)
@@ -319,9 +360,9 @@ class LikelihoodFlow(Flow):
         self.eval()
 
         chain = mcmc.run_emcee(
-            lambda theta_walkers: self._log_likelihood(theta_walkers, x_obs, device=device),
+            lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs, device=device),
             self.params,
-            out_dir=out_dir,
+            out_dir=self.model_dir,
             label=label,
             n_walkers=n_walkers,
             n_steps=int(np.ceil(n_samples / n_walkers)),
@@ -336,7 +377,7 @@ class LikelihoodFlow(Flow):
 
         return chain
 
-    def _log_likelihood(self, theta_walkers, x_obs, device="cuda"):
+    def _mcmc_log_posterior(self, theta_walkers, x_obs, device="cuda"):
         """theta_walkers.shape = (n_walkers, theta_dim)"""
 
         # FlowConductor doesn't broadcast the context, so we have to do it manually
@@ -354,88 +395,66 @@ class LikelihoodFlow(Flow):
 
         return log_prob
 
+    # plotting ########################################################################################################
+
     def plot_contours(
         self,
         posterior_samples,
-        # override initialized values
-        out_dir=None,
-        label=None,
         # cosmetics
         scale_to_prior=True,
         group_params=True,
-        plot_fiducial=True,
         # cosmo
+        plot_fiducial=True,
         fiducial_point=None,
         with_des_chain=False,
+        # output
+        label=None,
     ):
         """
         Plot contours of the posterior samples.
 
         Args:
             samples (array-like): Samples from the posterior distribution.
-            out_dir (str, optional): Override the initialized value. Defaults to None.
-            label (str, optional): Override the initialized value. Defaults to None.
             scale_to_prior (bool, optional): Whether to scale the plot to the prior distribution. Defaults to True.
             group_params (bool, optional): Whether to group cosmological and astrophysical parameters in the plot.
                 Defaults to True.
             plot_fiducial (bool, optional): Whether to include the fiducial point in the plot. Defaults to True.
             fiducial_point (array-like, optional): Fiducial point to plot. Defaults to None.
             with_des_chain (bool, optional): Whether to include the DES chain in the plot. Defaults to False.
+            label (str, optional): Additional label for the saved chain, for example to designate different
+                observations. Defaults to None.
         """
-
-        out_dir, label = self._potentially_override_inits(["out_dir", "label"], [out_dir, label])
 
         plotting.plot_chains(
             posterior_samples,
             self.params,
             self.conf,
-            out_dir=out_dir,
-            labels=label,
+            # file
+            out_dir=self.model_dir,
+            file_label=label,
+            # cosmetics
+            plot_labels=self.label,
             scale_to_prior=scale_to_prior,
             group_params=group_params,
+            # cosmology
             plot_fiducial=plot_fiducial,
             fiducial_point=fiducial_point,
             with_des_chain=with_des_chain,
         )
 
-    def _potentially_override_inits(self, attr_names, attr_values):
-        """Potentially override the instance's initialized values.
-
-        This method takes a list of attribute names and a list of attribute values. It checks if each attribute value
-        is None, and if so, it retrieves the corresponding attribute value from the instance itself. This is useful
-        when a single flow is used for different observations and some attributes need to be overridden.
-
-        Args:
-            attr_names (list): A list of attribute names.
-            attr_values (list): A list of attribute values.
-
-        Returns:
-            list: A list of potentially overridden attribute values.
-        """
-        assert isinstance(attr_names, list) and isinstance(attr_values, list), "Expected lists"
-
-        new_attr_values = []
-        for attr_name, attr_value in zip(attr_names, attr_values):
-            if attr_value is None:
-                attr_value = getattr(self, attr_name, attr_value)
-            new_attr_values.append(attr_value)
-
-        return new_attr_values
-
-    def save(self):
-        """Serialize the complete model (not just the weights) and save it to disk."""
-
-        out_file = os.path.join(self.out_dir, "model" + self.label + ".pt")
-        torch.save(self, out_file)
-        LOGGER.info(f"Saved the model to {out_file}")
-
-    @classmethod
-    def load(cls, in_dir):
-        """Load a serialized model from disk."""
-
-        return torch.load(in_dir)
-
-    def plot_diagnostics(self, grid_preds_true, grid_cosmos, n_samples_per_cosmo=100, batch_size=4096):
+    def plot_diagnostics(
+        self,
+        grid_preds_true,
+        grid_cosmos,
+        # sampling
+        n_samples=100,
+        batch_size=4096,
+        # flags
+        do_hist=True,
+        do_dlss=True,
+        do_eecp=True,
+        do_tarp=True,
+    ):
         """
         Plot diagnostics of how well the likelihood p(x|theta) has been learned from the (samples of the) true
         distribution.
@@ -445,11 +464,11 @@ class LikelihoodFlow(Flow):
                 cosmology in the grid. These are used as the true baseline to compare to.
             grid_cosmos (ndarray): Array of shape (n_cosmos, n_params) of the cosmologies in the grid. This is used
                 to condition the flow and sample from it.
-            n_samples_per_cosmo (int, optional): Number of samples per cosmology. Defaults to 100.
+            n_samples (int, optional): Number of samples per cosmology. Defaults to 100.
             batch_size (int, optional): Batch size for sampling. Defaults to 4096.
 
         Returns:
-            ndarray: Array of shape (n_cosmos, n_samples_per_cosmo, n_summary) containing samples from the likelihood
+            ndarray: Array of shape (n_cosmos, n_samples, n_summary) containing samples from the likelihood
             for the whole grid.
         """
 
@@ -459,14 +478,41 @@ class LikelihoodFlow(Flow):
         ), "grid_preds_true must have 3 dims containing (n_cosmos, n_samples, n_summaries)"
         assert grid_cosmos.ndim == 2, "grid_cosmos must have 2 dims containing (n_cosmos, n_params)"
 
+        LOGGER.info(f"Drawing samples from the likelihood")
+        LOGGER.timer.start("sampling")
         grid_preds_sample = self.sample_likelihood(
-            grid_cosmos, n_samples=n_samples_per_cosmo, batch_size=batch_size, return_numpy=True
+            grid_cosmos, n_samples=n_samples, batch_size=batch_size, return_numpy=True
         )
+        LOGGER.info(f"Done drawing samples after {LOGGER.timer.elapsed('sampling')}")
 
-        diagnostics.plot_sample_comparison(grid_preds_true, grid_preds_sample, n_random_indices=10)
-        diagnostics.plot_deeplss_checks(grid_preds_true, grid_preds_sample)
+        if do_hist:
+            diagnostics.plot_histogram_check(
+                grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=self.model_dir
+            )
+        if do_dlss:
+            diagnostics.plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=self.model_dir)
+        if do_eecp:
+            diagnostics.plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=self.model_dir)
+        if do_tarp:
+            diagnostics.plot_tarp_check(grid_preds_true, grid_preds_sample, out_dir=self.model_dir)
 
+        # n_cosmos, n_samples, n_summary
         return grid_preds_sample
+
+    # utils ###########################################################################################################
+
+    def save(self):
+        """Serialize the complete model (not just the weights) and save it to disk."""
+
+        out_file = os.path.join(self.model_dir, "likelihood_flow.pt")
+        torch.save(self, out_file)
+        LOGGER.info(f"Saved the model to {out_file}")
+
+    @classmethod
+    def load(cls, in_file):
+        """Load a serialized model from disk."""
+
+        return torch.load(in_file)
 
 
 class LikelihoodFlowEnsemble(LikelihoodFlow):
