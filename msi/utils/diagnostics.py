@@ -248,7 +248,7 @@ def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_co
         ylabel="empirical coverage",
         aspect="equal",
     )
-    ax.text(0.2, 0.5, "conservative", fontsize="large", alpha=0.5, rotation=45)
+    ax.text(0.2, 0.5, "underconfident", fontsize="large", alpha=0.5, rotation=45)
     ax.text(0.5, 0.2, "overconfident", fontsize="large", alpha=0.5, rotation=45)
     ax.legend(loc="upper left")
     ax.grid(True)
@@ -267,7 +267,8 @@ def plot_tarp_check(
     n_sigma=2,
     out_dir=None,
 ):
-    """Plot the Tests of Accuracy with Random Points (TARP) diagnostic introduced in https://arxiv.org/pdf/2302.03026.
+    """Plot the Tests of Accuracy with Random Points (TARP) diagnostic introduced in https://arxiv.org/pdf/2302.03026
+    from https://github.com/Ciela-Institute/tarp.
 
     This function plots the TARP diagnostic, which measures the accuracy of a model's predictions
     using random reference points. It calculates the expected coverage and uncertainty at different
@@ -319,21 +320,29 @@ def plot_tarp_check(
     elif reference_dist == "normal":
         if reference_dependence:
             LOGGER.info(f"TARP random reference points: Using a dependent normal distribution")
-            get_references = lambda theta: rng.normal(loc=theta, scale=reference_scale)
+            LOGGER.warning(f"TODO using the theta dependent random points produces unexpected bahavior!")
+            get_references = lambda theta: np.clip(rng.normal(loc=theta, scale=reference_scale), 0.0, 1.0)
         else:
             LOGGER.info(f"TARP random reference points: Using an independent normal distribution")
-            get_references = lambda theta: rng.normal(loc=0.5, scale=reference_scale, size=(theta.shape))
+            get_references = lambda theta: np.clip(
+                rng.normal(loc=0.5, scale=reference_scale, size=(theta.shape)), 0.0, 1.0
+            )
 
     elif reference_dist == "uniform":
         if reference_dependence:
             LOGGER.info(f"TARP random reference points: Using a dependent uniform distribution")
-            get_references = lambda theta: theta + rng.uniform(
-                low=-0.5 * reference_scale, high=0.5 * reference_scale, size=(theta.shape)
+            LOGGER.warning(f"TODO using the theta dependent random points produces unexpected bahavior!")
+            get_references = lambda theta: np.clip(
+                theta + rng.uniform(low=(1 - reference_scale) / 2, high=(1 + reference_scale) / 2, size=(theta.shape)),
+                0.0,
+                1.0,
             )
         else:
             LOGGER.info(f"TARP random reference points: Using an independent uniform distribution")
-            get_references = lambda theta: rng.uniform(
-                low=-0.5 * reference_scale, high=0.5 * reference_scale, size=(theta.shape)
+            get_references = lambda theta: np.clip(
+                rng.uniform(low=(1 - reference_scale) / 2, high=(1 + reference_scale) / 2, size=(theta.shape)),
+                0.0,
+                1.0,
             )
 
     else:
@@ -343,16 +352,16 @@ def plot_tarp_check(
     for i in LOGGER.progressbar(range(n_examples), at_level="info", desc="TARP: looping through examples"):
         # shape (n_sims, n_dim)
         theta = grid_preds_true[:, i, :]
-
-        reference_dist = get_references(theta)
+        reference_points = get_references(theta)
 
         ecp, alpha = get_tarp_coverage(
             # shape (n_samples, n_sims, n_dim)
             samples=grid_preds_sample,
             # shape (n_sims, n_dim)
-            theta=grid_preds_true[:, i, :],
-            references=reference_dist,
+            theta=theta,
+            references=reference_points,
             metric="euclidean",
+            # this could be used in addition to the sample loop
             bootstrap=False,
             norm=False,
         )
@@ -387,3 +396,7 @@ def plot_tarp_check(
 
     if out_dir is not None:
         fig.savefig(os.path.join(out_dir, "diagnostic_tarp.png"), bbox_inches="tight", dpi=100)
+
+
+def plot_sbc_checks():
+    raise NotImplementedError

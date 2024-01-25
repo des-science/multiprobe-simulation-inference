@@ -19,6 +19,8 @@ np.random.seed(12)
 def run_emcee(log_prob, params, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
+    TODO add support for Nautilus https://nautilus-sampler.readthedocs.io/en/stable/ in addition to emcee?
+
     Args:
         log_prob (function): Vectorized function that takes in samples of shape (n_samples,) in parameter space and
             returns an array of corresponding log probabilities of shape (n_samples,)

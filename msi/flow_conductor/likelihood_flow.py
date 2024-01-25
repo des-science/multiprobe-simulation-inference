@@ -35,6 +35,8 @@ class LikelihoodFlow(Flow):
     observation.
     """
 
+    model_name = "likelihood_flow"
+
     def __init__(
         self,
         params,
@@ -103,6 +105,7 @@ class LikelihoodFlow(Flow):
         self.model_dir = os.path.join(self.out_dir, self.label)
         os.makedirs(self.model_dir, exist_ok=True)
         LOGGER.info(f"Set up the model directory {self.model_dir}")
+        self.model_file = os.path.join(self.model_dir, f"{self.model_name}.pt")
 
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -123,10 +126,10 @@ class LikelihoodFlow(Flow):
         vali_split=0.1,
         learning_rate=1e-3,
         weight_decay=0.0,
-        clip_by_global_norm=100.0,
+        clip_by_global_norm=1.0,
         learning_rate_min=1e-6,
         n_patience_epochs=10,
-        min_delta=0.05,
+        min_delta=0.001,
         save_model=True,
     ):
         """
@@ -156,10 +159,13 @@ class LikelihoodFlow(Flow):
         optimizer = optim.Adam(self.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
         if learning_rate_min is not None:
+            LOGGER.info(f"Using a cosine annealing scheduler with minimum learning rate {learning_rate_min}")
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, eta_min=learning_rate_min, T_max=n_epochs
             )
-        early_stopper = EarlyStopper(patience=n_patience_epochs, min_delta=min_delta, model=self)
+        if n_patience_epochs is not None:
+            LOGGER.info(f"Using early stopping with patience {n_patience_epochs} and min delta {min_delta}")
+            early_stopper = EarlyStopper(patience=n_patience_epochs, min_delta=min_delta, model=self)
 
         train_losses = []
         vali_losses = []
@@ -170,7 +176,7 @@ class LikelihoodFlow(Flow):
 
             if learning_rate_min is not None:
                 scheduler.step()
-            if early_stopper.early_stop(vali_loss):
+            if n_patience_epochs is not None and early_stopper.early_stop(vali_loss):
                 LOGGER.info(f"Stopping early after {i_epoch} epochs")
                 break
 
@@ -454,6 +460,7 @@ class LikelihoodFlow(Flow):
         do_dlss=True,
         do_eecp=True,
         do_tarp=True,
+        tarp_kwargs={},
     ):
         """
         Plot diagnostics of how well the likelihood p(x|theta) has been learned from the (samples of the) true
@@ -494,7 +501,7 @@ class LikelihoodFlow(Flow):
         if do_eecp:
             diagnostics.plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=self.model_dir)
         if do_tarp:
-            diagnostics.plot_tarp_check(grid_preds_true, grid_preds_sample, out_dir=self.model_dir)
+            diagnostics.plot_tarp_check(grid_preds_true, grid_preds_sample, out_dir=self.model_dir, **tarp_kwargs)
 
         # n_cosmos, n_samples, n_summary
         return grid_preds_sample
@@ -504,12 +511,11 @@ class LikelihoodFlow(Flow):
     def save(self):
         """Serialize the complete model (not just the weights) and save it to disk."""
 
-        out_file = os.path.join(self.model_dir, "likelihood_flow.pt")
-        torch.save(self, out_file)
-        LOGGER.info(f"Saved the model to {out_file}")
+        torch.save(self, self.model_file)
+        LOGGER.info(f"Saved the model to {self.model_file}")
 
     @classmethod
-    def load(cls, in_file):
+    def load(in_file):
         """Load a serialized model from disk."""
 
         return torch.load(in_file)
