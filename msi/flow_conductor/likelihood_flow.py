@@ -7,9 +7,7 @@ Author: Arne Thomsen
 Wrapper around enflows to build a likelihood normalizing flow with training and sampling utilities.
 """
 
-import os
 import numpy as np
-import matplotlib.pyplot as plt
 
 import torch
 from torch import optim

@@ -108,8 +108,9 @@ def get_lipschitz_transform(
     if feature_dim < 4:
         densenet_factory.set_logabsdet_estimator(brute_force=True)
     else:
-        densenet_factory.set_logabsdet_estimator(brute_force=False)
+        densenet_factory.set_logabsdet_estimator(brute_force=False, unbiased_estimator=True, trace_estimator="neumann")
 
+    # hardcoded values from https://github.com/FabricioArendTorres/FlowConductor/blob/b276174a2ecdd8c1c85e4fac2e47396a3f8997ea/examples/conditional_toy_2d.py#L70
     densenet_factory.set_densenet(
         condition_input=True,
         condition_lastlayer=False,

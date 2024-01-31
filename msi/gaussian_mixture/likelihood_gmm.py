@@ -8,9 +8,8 @@ Adapted from https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/netwo
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 import tensorflow as tf
-import os, warnings, random, pickle
+import os, warnings, pickle
 
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 
@@ -143,8 +142,8 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
 
         # learning rate scheduler
         if learning_rate_min is not None:
-            scheduler_kwargs.setdefault("factor", 0.75)
-            scheduler_kwargs.setdefault("patience", 20)
+            scheduler_kwargs.setdefault("factor", 0.9)
+            scheduler_kwargs.setdefault("patience", 10)
             scheduler_kwargs.setdefault("min_delta", 1e-4)
             scheduler_kwargs.setdefault("cooldown", 10)
 
