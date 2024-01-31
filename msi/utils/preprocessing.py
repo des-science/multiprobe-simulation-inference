@@ -1,3 +1,5 @@
+# Copyright (C) 2024 ETH Zurich, Institute for Particle Physics and Astrophysics
+
 """
 Created June 2023
 Author: Arne Thomsen
@@ -11,6 +13,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
+from msi.utils.sklearn import GeneralizedSklearnModel
 from msi.utils import plotting, input_output
 from msfm.utils import logger, cross_statistics, parameters, files
 
@@ -51,6 +54,7 @@ def get_reshaped_human_summaries(
     # configuration
     conf=None,
     params=None,
+    concat_example_dim=True,
     # selection
     with_lensing=True,
     with_clustering=True,
@@ -121,22 +125,26 @@ def get_reshaped_human_summaries(
     fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
     grid_summs = np.concatenate([grid_summs[..., i] for i in range(grid_summs.shape[-1])], axis=-1)
 
+    # TODO implement scale selection
     if summary_type == "peaks":
         # concatenate the scales along the last axis
         fidu_summs = np.concatenate([fidu_summs[..., i, :] for i in range(fidu_summs.shape[-2])], axis=-1)
         grid_summs = np.concatenate([grid_summs[..., i, :] for i in range(grid_summs.shape[-2])], axis=-1)
 
     # concatenate the examples along the first axis
-    grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
-    grid_summs = np.concatenate([grid_summs[i, ...] for i in range(grid_summs.shape[0])], axis=0)
+    if concat_example_dim:
+        grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
+        grid_summs = np.concatenate([grid_summs[i, ...] for i in range(grid_summs.shape[0])], axis=0)
 
-    print("\n")
-    LOGGER.info("Shapes after concatenation")
-    LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
-    LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
-    LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+        print("\n")
+        LOGGER.info("Shapes after concatenation")
+        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+        LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
+        LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
 
     if do_plot:
+        assert concat_example_dim, f"Plotting only works if the examples are concatenated"
+
         LOGGER.info(f"Plotting the selected raw {summary_type}")
         label = f"lensing={with_lensing},clustering={with_clustering},cross_z={with_cross_z},cross_probe={with_cross_probe}"
 
@@ -167,17 +175,17 @@ def get_reshaped_human_summaries(
     if pca_components is not None:
         print("\n")
         LOGGER.info(f"Scaling the {summary_type} to zero mean and unit variance")
-        scaler = StandardScaler()
+        scaler = GeneralizedSklearnModel(StandardScaler())
         grid_summs = scaler.fit_transform(grid_summs)
         fidu_summs = scaler.transform(fidu_summs)
 
         LOGGER.info(f"Applying PCA to compress to {pca_components} components")
         # PCA, is whitening a good idea?
-        pca = PCA(n_components=pca_components, whiten=True)
+        pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=True))
 
         grid_summs = pca.fit_transform(grid_summs)
         fidu_summs = pca.transform(fidu_summs)
-        LOGGER.info(f"Total explained variance = {np.sum(pca.explained_variance_ratio_)}")
+        LOGGER.info(f"Total explained variance = {np.sum(pca.model.explained_variance_ratio_)}")
 
         print("\n")
         LOGGER.info("Shapes after pre-processing")

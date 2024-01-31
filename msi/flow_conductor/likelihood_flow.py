@@ -128,14 +128,18 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         x,
         theta,
         n_epochs=100,
-        batch_size=1024,
+        batch_size=1000,
         vali_split=0.1,
+        # optimizer
         learning_rate=1e-3,
         weight_decay=0.0,
         clip_by_global_norm=1.0,
-        learning_rate_min=1e-6,
+        # learning rate scheduler
+        scheduler_type=None,
+        scheduler_kwargs={},
+        # early stopping
         n_patience_epochs=10,
-        min_delta=0.001,
+        min_delta=1e-4,
         save_model=True,
     ):
         """
@@ -152,8 +156,10 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             weight_decay (float, optional): The weight decay for the optimizer. Defaults to 0.0.
             clip_by_global_norm (float, optional): The maximum gradient norm for gradient clipping. Defaults to
                 100.0. When None, no clipping is applied.
-            learning_rate_min (float, optional): The minimum learning rate for the scheduler. Defaults to 1e-6.
-                When None, no scheduler is used.
+            scheduler_type (str, optional): The type of learning rate scheduler to use. One of "plateau", "cosine" or
+                None Defaults to None.
+            scheduler_kwargs (dict, optional): Additional keyword arguments for the learning rate scheduler, which
+                overwrite the defaults hardcoded in the function.
             n_patience_epochs (int, optional): The number of epochs to wait before early stopping. Defaults to 10.
             min_delta (float, optional): The minimum change in validation loss to consider as improvement for
                 early stopping. Defaults to 0.05.
@@ -162,14 +168,32 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         self._prepare_data(x, theta, batch_size, vali_split)
 
+        # optimizer
         self.clip_by_global_norm = clip_by_global_norm
         self.optimizer = optim.Adam(self.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-        if learning_rate_min is not None:
-            LOGGER.info(f"Using a cosine annealing scheduler with minimum learning rate {learning_rate_min}")
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer, eta_min=learning_rate_min, T_max=n_epochs
-            )
+        # learning rate scheduler
+        if scheduler_type is None:
+            LOGGER.info(f"Not using a learning rate scheduler")
+        elif scheduler_type == "cosine":
+            LOGGER.info(f"Using a cosine annealing scheduler")
+            scheduler_kwargs.setdefault("eta_min", 1e-5)
+            scheduler_kwargs.setdefault("T_max", n_epochs)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **scheduler_kwargs)
+        elif scheduler_type == "plateau":
+            LOGGER.info(f"Using a ReduceLROnPlateau scheduler")
+            scheduler_kwargs.setdefault("min_lr", 1e-5)
+            scheduler_kwargs.setdefault("mode", "min")
+            scheduler_kwargs.setdefault("factor", 0.5)
+            scheduler_kwargs.setdefault("patience", 4)
+            scheduler_kwargs.setdefault("threshold", 1e-4)
+            scheduler_kwargs.setdefault("threshold_mode", "rel")
+            scheduler_kwargs.setdefault("cooldown", 1)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, **scheduler_kwargs)
+        else:
+            raise ValueError(f"Unknown scheduler type {scheduler_type}")
+
+        # early stopping
         if n_patience_epochs is not None:
             LOGGER.info(f"Using early stopping with patience {n_patience_epochs} and min delta {min_delta}")
             early_stopper = EarlyStopper(patience=n_patience_epochs, min_delta=min_delta, model=self)
@@ -181,8 +205,11 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             train_loss = self._train_epoch()
             vali_loss = self._vali_epoch()
 
-            if learning_rate_min is not None:
+            if scheduler_type == "plateau":
+                scheduler.step(vali_loss)
+            elif scheduler_type == "cosine":
                 scheduler.step()
+
             if n_patience_epochs is not None and early_stopper.early_stop(vali_loss):
                 LOGGER.info(f"Stopping early after {i_epoch} epochs")
                 break

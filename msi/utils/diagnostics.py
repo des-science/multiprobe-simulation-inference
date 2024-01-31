@@ -205,12 +205,16 @@ def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_co
 
     # shape (n_cosmos, n_examples)
     log_probs_true = model.log_likelihood(
-        grid_preds_true, np.broadcast_to(grid_cosmos[:, np.newaxis, :], grid_preds_true.shape), return_numpy=True
+        grid_preds_true,
+        np.repeat(grid_cosmos[:, np.newaxis, :], grid_preds_true.shape[1], axis=1),
+        return_numpy=True,
     )
 
     # shape (n_cosmos, n_samples)
     log_probs_sample = model.log_likelihood(
-        grid_preds_sample, np.broadcast_to(grid_cosmos[:, np.newaxis, :], grid_preds_sample.shape), return_numpy=True
+        grid_preds_sample,
+        np.repeat(grid_cosmos[:, np.newaxis, :], grid_preds_sample.shape[1], axis=1),
+        return_numpy=True,
     )
 
     # empirical expected coverage probability
