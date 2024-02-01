@@ -264,10 +264,13 @@ def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_co
 def plot_tarp_check(
     grid_preds_true,
     grid_preds_sample,
-    reference_dist=None,
-    reference_scale=1.0,
-    reference_dependence=False,
+    # random reference points
+    grid_cosmos=None,
+    randoms_dist=None,
+    randoms_scale=1.0,
+    randoms_dependence=False,
     np_seed=17,
+    # plotting
     n_sigma=2,
     out_dir=None,
 ):
@@ -282,11 +285,12 @@ def plot_tarp_check(
         grid_preds_true (ndarray): The true predicted summaries (directly from the CosmoGrid evaluations) of shape
             (n_cosmos, n_examples, n_summaries).
         grid_preds_sample (ndarray): Samples from the model of shape (n_cosmos, n_samples, n_summaries).
-        reference_dist (str, optional): The distribution used to generate random reference points.
-            Can be "normal" or "uniform". Defaults to None, then the TARP default is used.
-        reference_scale (float, optional): The scale parameter for the reference distribution. Defaults to 1.0.
-            TODO this apparently has a big impact on the results.
-        reference_dependence (bool, optional): Whether the reference points should be dependent on the true
+        grid_cosmos (ndarray): Array of shape (n_cosmos, n_params) of cosmological parameters underlying the
+            simulations. These might be used to generate data dependent randoms. Defaults to None.
+        randoms_dist (str, optional): The distribution used to generate random reference points.
+            Can be "normal", "uniform" or "constant". Defaults to None, then the TARP default is used.
+        randoms_scale (float, optional): The scale parameter for the reference distribution. Defaults to 1.0.
+        randoms_dependence (bool, optional): Whether the reference points should be dependent on the true
             predictions or not, see section 4.3 of the paper. Defaults to False.
         np_seed (int, optional): The seed for the NumPy random number generator. Defaults to 17.
         n_sigma (int, optional): The number of standard deviations to include in the uncertainty band in the plot.
@@ -317,53 +321,52 @@ def plot_tarp_check(
     # define how the random reference points are generated
     rng = np.random.default_rng(seed=np_seed)
 
-    if reference_dist is None:
+    if randoms_dist is None:
+        assert not randoms_dependence, "randoms_dependence can only be used if randoms_dist is not None"
         LOGGER.info(f"TARP random reference points: Using the default")
-        get_references = lambda theta: "random"
+        get_randoms = lambda shape: "random"
 
-    elif reference_dist == "normal":
-        if reference_dependence:
-            LOGGER.info(f"TARP random reference points: Using a dependent normal distribution")
-            LOGGER.warning(f"TODO using the theta dependent random points produces unexpected bahavior!")
-            get_references = lambda theta: np.clip(rng.normal(loc=theta, scale=reference_scale), 0.0, 1.0)
-        else:
-            LOGGER.info(f"TARP random reference points: Using an independent normal distribution")
-            get_references = lambda theta: np.clip(
-                rng.normal(loc=0.5, scale=reference_scale, size=(theta.shape)), 0.0, 1.0
-            )
+    elif randoms_dist == "constant":
+        assert not randoms_dependence, "randoms_dependence can only be used if randoms_dist is not None"
+        LOGGER.info(f"TARP random reference points: Using a constant value")
+        get_randoms = lambda shape: np.ones(shape) * 0.5
 
-    elif reference_dist == "uniform":
-        if reference_dependence:
-            LOGGER.info(f"TARP random reference points: Using a dependent uniform distribution")
-            LOGGER.warning(f"TODO using the theta dependent random points produces unexpected bahavior!")
-            get_references = lambda theta: np.clip(
-                theta + rng.uniform(low=(1 - reference_scale) / 2, high=(1 + reference_scale) / 2, size=(theta.shape)),
-                0.0,
-                1.0,
-            )
-        else:
-            LOGGER.info(f"TARP random reference points: Using an independent uniform distribution")
-            get_references = lambda theta: np.clip(
-                rng.uniform(low=(1 - reference_scale) / 2, high=(1 + reference_scale) / 2, size=(theta.shape)),
-                0.0,
-                1.0,
-            )
+    elif randoms_dist == "normal":
+        LOGGER.info(f"TARP random reference points: Using a normal distribution, dependence = {randoms_dependence}")
+
+        def get_randoms(shape):
+            randoms = rng.normal(loc=0.5, scale=randoms_scale, size=shape)
+            if randoms_dependence:
+                assert grid_cosmos is not None, "grid_cosmos must be provided for data dependent randoms"
+                randoms += np.mean(grid_cosmos)
+            return np.clip(randoms, 0.0, 1.0)
+
+    elif randoms_dist == "uniform":
+        LOGGER.info(f"TARP random reference points: Using a uniform distribution, dependence = {randoms_dependence}")
+
+        def get_randoms(shape):
+            randoms = rng.uniform(low=(1 - randoms_scale) / 2, high=(1 + randoms_scale) / 2, size=shape)
+            if randoms_dependence:
+                assert grid_cosmos is not None, "grid_cosmos must be provided for data dependent randoms"
+                randoms += np.mean(grid_cosmos)
+            return np.clip(randoms, 0.0, 1.0)
 
     else:
         raise ValueError
 
+    # there's multiple truth samples for each cosmology in this case
     ecps, alphas = [], []
     for i in LOGGER.progressbar(range(n_examples), at_level="info", desc="TARP: looping through examples"):
-        # shape (n_sims, n_dim)
-        theta = grid_preds_true[:, i, :]
-        reference_points = get_references(theta)
+        # shape (n_sims, n_dim), these are summaries x from the true distribution p(x|theta) in this case
+        truth = grid_preds_true[:, i, :]
+        randoms = get_randoms(truth.shape)
 
         ecp, alpha = get_tarp_coverage(
             # shape (n_samples, n_sims, n_dim)
             samples=grid_preds_sample,
             # shape (n_sims, n_dim)
-            theta=theta,
-            references=reference_points,
+            theta=truth,
+            references=randoms,
             metric="euclidean",
             # this could be used in addition to the sample loop
             bootstrap=False,

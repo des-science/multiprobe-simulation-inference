@@ -151,7 +151,9 @@ class LikelihoodBase(ABC):
         if do_eecp:
             diagnostics.plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=self.model_dir)
         if do_tarp:
-            diagnostics.plot_tarp_check(grid_preds_true, grid_preds_sample, out_dir=self.model_dir, **tarp_kwargs)
+            diagnostics.plot_tarp_check(
+                grid_preds_true, grid_preds_sample, grid_cosmos, out_dir=self.model_dir, **tarp_kwargs
+            )
 
         # n_cosmos, n_samples, n_summary
         return grid_preds_sample
