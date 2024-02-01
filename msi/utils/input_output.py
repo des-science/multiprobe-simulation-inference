@@ -69,19 +69,28 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
     return out_dict
 
 
-def load_human_summaries(base_dir, summary_type, file_label=None):
+def load_human_summaries(base_dir, summary_type, file_label=None, return_raw_cls=False):
     assert summary_type in ["peaks", "cls"]
 
     if file_label is None:
-        fidu_file = os.path.join(base_dir, f"fiducial_{summary_type}.h5")
-        grid_file = os.path.join(base_dir, f"grid_{summary_type}.h5")
+        fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{summary_type}.h5")
+        grid_file = os.path.join(base_dir, summary_type, f"grid_{summary_type}.h5")
     else:
-        fidu_file = os.path.join(base_dir, f"fiducial_{summary_type}_{file_label}.h5")
-        grid_file = os.path.join(base_dir, f"grid_{summary_type}_{file_label}.h5")
+        fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{summary_type}_{file_label}.h5")
+        grid_file = os.path.join(base_dir, summary_type, f"grid_{summary_type}_{file_label}.h5")
 
     out_dict = {}
 
-    fidu_keys = [summary_type, "i_example", "i_noise"]
+    # fiducial
+    fidu_keys = ["i_example", "i_noise"]
+    if summary_type == "cls":
+        fidu_keys += ["cls/binned", "cls/bin_edges"]
+        if return_raw_cls:
+            LOGGER.warning(f"Returning the raw Cls, this is potentially slow")
+            fidu_keys += ["cls/raw"]
+    elif summary_type == "peaks":
+        fidu_keys += ["peaks"]
+
     with h5py.File(fidu_file, "r") as f:
         LOGGER.info(f"Array shapes:")
 
@@ -90,7 +99,15 @@ def load_human_summaries(base_dir, summary_type, file_label=None):
             out_dict[dict_key] = f[h5_key][:]
             LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
 
-    grid_keys = [summary_type, "cosmo", "i_example", "i_noise", "i_sobol"]
+    # grid
+    grid_keys = ["cosmo", "i_example", "i_noise", "i_sobol"]
+    if summary_type == "cls":
+        grid_keys += ["cls/binned", "cls/bin_edges"]
+        if return_raw_cls:
+            grid_keys += ["cls/raw"]
+    elif summary_type == "peaks":
+        grid_keys += ["peaks"]
+
     with h5py.File(grid_file, "r") as f:
         for h5_key in grid_keys:
             dict_key = f"grid/{h5_key}"

@@ -8,6 +8,7 @@ Utils to preprocess the raw network predictions and human defined summary statis
 example entails concatenating the example and cosmology axes.
 """
 
+import os, re
 import numpy as np
 
 from sklearn.decomposition import PCA
@@ -15,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 
 from msi.utils.sklearn import GeneralizedSklearnModel
 from msi.utils import plotting, input_output
-from msfm.utils import logger, cross_statistics, parameters, files
+from msfm.utils import logger, cross_statistics, parameters, files, power_spectra
 
 LOGGER = logger.get_logger(__file__)
 
@@ -60,36 +61,71 @@ def get_reshaped_human_summaries(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=True,
-    # TODO scale cuts
-    # i_min_scales=[],
-    # i_max_scales=[],
+    # CLs scale cuts
+    l_mins=None,
+    l_maxs=None,
+    n_bins=None,
+    # TODO peaks scale cuts
     # plotting
     do_plot=True,
     # additional preprocessing
     apply_log=False,
     pca_components=None,
 ):
-    file_dict = input_output.load_human_summaries(base_dir, summary_type, file_label=file_label)
+    if summary_type == "cls":
+        # apply scale cuts to the raw Cls
+        if (l_mins is not None) and (l_maxs is not None) and (n_bins is not None):
+            LOGGER.info(f"Applying scale cuts to the raw Cls")
+            LOGGER.info(f"l_mins = {l_mins}")
+            LOGGER.info(f"l_maxs = {l_maxs}")
 
-    fidu_summs = file_dict[f"fiducial/{summary_type}"]
-    grid_summs = file_dict[f"grid/{summary_type}"]
+            with np.printoptions(precision=1, suppress=True, floatmode="fixed"):
+                bin_names = f"l_mins={np.array(l_mins)},l_maxs={np.array(l_maxs)},n_bins={n_bins}"
+                bin_names = re.sub(r"\s+", ",", bin_names)
+
+                fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{bin_names}.npy")
+                grid_file = os.path.join(base_dir, summary_type, f"grid_{bin_names}.npy")
+
+            try:
+                fidu_summs = np.load(fidu_file)
+                grid_summs = np.load(grid_file)
+                file_dict = input_output.load_human_summaries(
+                    base_dir, summary_type, file_label=file_label, return_raw_cls=False
+                )
+                LOGGER.info(f"Loaded the binned Cls from {bin_names}")
+            except FileNotFoundError:
+                file_dict = input_output.load_human_summaries(
+                    base_dir, summary_type, file_label=file_label, return_raw_cls=True
+                )
+                LOGGER.warning(f"Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
+                fidu_summs, _ = power_spectra.bin_cls(file_dict["fiducial/cls/raw"], l_mins, l_maxs, n_bins)
+                grid_summs, _ = power_spectra.bin_cls(file_dict["grid/cls/raw"], l_mins, l_maxs, n_bins)
+
+                np.save(fidu_file, fidu_summs)
+                np.save(grid_file, grid_summs)
+                LOGGER.info(f"Saved the binned Cls to {bin_names}")
+
+        # load the pre-binned Cls
+        else:
+            LOGGER.info(f"Loading the pre-binned Cls")
+            file_dict = input_output.load_human_summaries(
+                base_dir, summary_type, file_label=file_label, return_raw_cls=False
+            )
+            fidu_summs = file_dict[f"fiducial/cls/binned"]
+            grid_summs = file_dict[f"grid/cls/binned"]
+
+    elif summary_type == "peaks":
+        LOGGER.info(f"Loading the pre-binned peak statistics")
+        file_dict = input_output.load_human_summaries(
+            base_dir, summary_type, file_label=file_label, return_raw_cls=False
+        )
+        fidu_summs = file_dict[f"fiducial/{summary_type}"]
+        grid_summs = file_dict[f"grid/{summary_type}"]
+
+    else:
+        raise ValueError
+
     grid_cosmos = file_dict["grid/cosmo"]
-
-    # TODO
-    # # apply the scale cuts
-    # if summary_type == "cls":
-    #     LOGGER.info(f"Applying scale cuts to the binned Cls")
-    #     n_z = len(i_max_scales)
-    #     assert n_z == len(i_min_scales), f"l_maxs and l_mins have different lengths"
-    #     assert n_z * (n_z + 1) / 2 == fidu_summs.shape[-1], f"l_maxs and l_mins have wrong lengths"
-
-    #     for i in range(n_z):
-    #         for j in range(n_z):
-    #             if i <= j:
-    #                 i_min_scale = max(i_min_scales[i], i_min_scales[j])
-    #                 i_max_scale = min(i_max_scales[i], i_max_scales[j])
-
-    #                 fidu_summs[...,]
 
     bin_indices, bin_names = cross_statistics.get_cross_bin_indices(
         with_lensing=with_lensing,
@@ -133,7 +169,8 @@ def get_reshaped_human_summaries(
 
     # concatenate the examples along the first axis
     if concat_example_dim:
-        grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
+        # grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
+        grid_cosmos = np.concatenate([grid_cosmos[i, ...] for i in range(grid_cosmos.shape[0])], axis=0)
         grid_summs = np.concatenate([grid_summs[i, ...] for i in range(grid_summs.shape[0])], axis=0)
 
         print("\n")
