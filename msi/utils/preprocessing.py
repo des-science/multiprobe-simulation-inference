@@ -56,6 +56,7 @@ def get_reshaped_human_summaries(
     conf=None,
     params=None,
     concat_example_dim=True,
+    do_plot=True,
     # selection
     with_lensing=True,
     with_clustering=True,
@@ -66,8 +67,6 @@ def get_reshaped_human_summaries(
     l_maxs=None,
     n_bins=None,
     # TODO peaks scale cuts
-    # plotting
-    do_plot=True,
     # additional preprocessing
     apply_log=False,
     pca_components=None,
@@ -76,10 +75,11 @@ def get_reshaped_human_summaries(
         # apply scale cuts to the raw Cls
         if (l_mins is not None) and (l_maxs is not None) and (n_bins is not None):
             LOGGER.info(f"Applying scale cuts to the raw Cls")
-            LOGGER.info(f"l_mins = {l_mins}")
-            LOGGER.info(f"l_maxs = {l_maxs}")
 
             with np.printoptions(precision=1, suppress=True, floatmode="fixed"):
+                LOGGER.info(f"l_mins = {l_mins}")
+                LOGGER.info(f"l_maxs = {l_maxs}")
+
                 bin_names = f"l_mins={np.array(l_mins)},l_maxs={np.array(l_maxs)},n_bins={n_bins}"
                 bin_names = re.sub(r"\s+", ",", bin_names)
 
@@ -98,8 +98,10 @@ def get_reshaped_human_summaries(
                     base_dir, summary_type, file_label=file_label, return_raw_cls=True
                 )
                 LOGGER.warning(f"Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
+                LOGGER.timer.start("scale_cuts")
                 fidu_summs, _ = power_spectra.bin_cls(file_dict["fiducial/cls/raw"], l_mins, l_maxs, n_bins)
                 grid_summs, _ = power_spectra.bin_cls(file_dict["grid/cls/raw"], l_mins, l_maxs, n_bins)
+                LOGGER.info(f"Done after {LOGGER.timer.elapsed('scale_cuts')}")
 
                 np.save(fidu_file, fidu_summs)
                 np.save(grid_file, grid_summs)

@@ -70,6 +70,8 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
 
 
 def load_human_summaries(base_dir, summary_type, file_label=None, return_raw_cls=False):
+    LOGGER.timer.start("load_summaries")
+
     assert summary_type in ["peaks", "cls"]
 
     if file_label is None:
@@ -114,6 +116,7 @@ def load_human_summaries(base_dir, summary_type, file_label=None, return_raw_cls
             out_dict[dict_key] = f[h5_key][:]
             LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
 
+    LOGGER.info(f"Done loading the summaries after {LOGGER.timer.elapsed('load_summaries')}")
     return out_dict
 
 
