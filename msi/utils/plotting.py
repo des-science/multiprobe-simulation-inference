@@ -98,7 +98,7 @@ def plot_chains(
 
         if conf["analysis"]["modelling"]["quadratic_biasing"]:
             config_params += conf["analysis"]["params"]["bg"]["quadratic"]
-            
+
         assert all([param in config_params for param in all_params])
 
         # reorder the params for the plot
@@ -130,7 +130,7 @@ def plot_chains(
         "smoothing_parameter2D": 0.5,
     }
     if group_params:
-        n_per_group = [n_cosmo_params, n_bg_params, n_ia_params]
+        n_per_group = [n_cosmo_params, n_ia_params, n_bg_params]
         n_per_group = list(filter(lambda x: x != 0, n_per_group))
         grouping_kwargs = {"empty_ratio": 0.1, "n_per_group": n_per_group}
     else:
