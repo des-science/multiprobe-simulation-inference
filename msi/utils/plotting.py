@@ -93,8 +93,12 @@ def plot_chains(
 
         # check that all of the params are supported
         config_params = (
-            conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"]["ia"] + conf["analysis"]["params"]["bg"]
+            conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"]["ia"] + conf["analysis"]["params"]["bg"]["linear"]
         )
+
+        if conf["analysis"]["modelling"]["quadratic_biasing"]:
+            config_params += conf["analysis"]["params"]["bg"]["quadratic"]
+            
         assert all([param in config_params for param in all_params])
 
         # reorder the params for the plot
