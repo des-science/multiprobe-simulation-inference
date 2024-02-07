@@ -66,14 +66,19 @@ def get_reshaped_human_summaries(
     l_mins=None,
     l_maxs=None,
     n_bins=None,
-    # TODO peaks scale cuts
+    # peaks scale selection
+    scale_indices=None,
     # additional preprocessing
     apply_log=False,
+    standardize=False,
     pca_components=None,
 ):
+    assert summary_type in ["cls", "peaks"], "Only cls and peaks are supported"
+    apply_cl_scale_cut = (l_mins is not None) and (l_maxs is not None) and (n_bins is not None)
+
     if summary_type == "cls":
         # apply scale cuts to the raw Cls
-        if (l_mins is not None) and (l_maxs is not None) and (n_bins is not None):
+        if apply_cl_scale_cut:
             LOGGER.info(f"Applying scale cuts to the raw Cls")
 
             with np.printoptions(precision=1, suppress=True, floatmode="fixed"):
@@ -118,6 +123,10 @@ def get_reshaped_human_summaries(
 
     elif summary_type == "peaks":
         LOGGER.info(f"Loading the pre-binned peak statistics")
+        
+        if apply_cl_scale_cut:
+            LOGGER.warning(f"The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments")
+
         file_dict = input_output.load_human_summaries(
             base_dir, summary_type, file_label=file_label, return_raw_cls=False
         )
@@ -154,7 +163,7 @@ def get_reshaped_human_summaries(
     grid_cosmos = grid_cosmos[..., param_indices]
 
     print("\n")
-    LOGGER.info(f"Shapes after selection")
+    LOGGER.info(f"Shapes after probe selection")
     LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
@@ -165,14 +174,27 @@ def get_reshaped_human_summaries(
 
     # TODO implement scale selection
     if summary_type == "peaks":
+        if scale_indices is None:
+            assert fidu_summs.shape[-2] == grid_summs.shape[-2], "The number of scales must be the same for fiducial and grid"
+            scale_indices = range(fidu_summs.shape[-2])
+
         # concatenate the scales along the last axis
-        fidu_summs = np.concatenate([fidu_summs[..., i, :] for i in range(fidu_summs.shape[-2])], axis=-1)
-        grid_summs = np.concatenate([grid_summs[..., i, :] for i in range(grid_summs.shape[-2])], axis=-1)
+        fidu_summs = np.concatenate([fidu_summs[..., i, :] for i in scale_indices], axis=-1)
+        grid_summs = np.concatenate([grid_summs[..., i, :] for i in scale_indices], axis=-1)
+
+        print("\n")
+        LOGGER.info("Shapes after scale selection")
+        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+        LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
 
     # concatenate the examples along the first axis
-    if concat_example_dim:
-        # grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
-        grid_cosmos = np.concatenate([grid_cosmos[i, ...] for i in range(grid_cosmos.shape[0])], axis=0)
+    if concat_example_dim and summary_type:
+        # TODO this is due to how it's stored in the .h5 files and not super clean
+        if summary_type == "cls":
+            grid_cosmos = np.concatenate([grid_cosmos[i, ...] for i in range(grid_cosmos.shape[0])], axis=0)
+        elif summary_type == "peaks":
+            grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
+        
         grid_summs = np.concatenate([grid_summs[i, ...] for i in range(grid_summs.shape[0])], axis=0)
 
         print("\n")
@@ -211,17 +233,16 @@ def get_reshaped_human_summaries(
         fidu_summs = np.log(fidu_summs)
         grid_summs = np.log(grid_summs)
 
-    if pca_components is not None:
-        print("\n")
+    if standardize:
         LOGGER.info(f"Scaling the {summary_type} to zero mean and unit variance")
         scaler = GeneralizedSklearnModel(StandardScaler())
         grid_summs = scaler.fit_transform(grid_summs)
         fidu_summs = scaler.transform(fidu_summs)
 
+    if pca_components is not None:
         LOGGER.info(f"Applying PCA to compress to {pca_components} components")
-        # PCA, is whitening a good idea?
+        # whitening doesn't change the results much
         pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=True))
-
         grid_summs = pca.fit_transform(grid_summs)
         fidu_summs = pca.transform(fidu_summs)
         LOGGER.info(f"Total explained variance = {np.sum(pca.model.explained_variance_ratio_)}")
