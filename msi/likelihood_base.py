@@ -8,11 +8,12 @@ Wrapper around enflows to build a likelihood normalizing flow with training and 
 """
 
 import os
+import numpy as np
 import matplotlib.pyplot as plt
 
-from abc import ABC, abstractmethod, abstractclassmethod
+from abc import ABC, abstractmethod
 
-from msi.utils import plotting, mcmc, diagnostics
+from msi.utils import plotting, diagnostics
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
@@ -161,11 +162,13 @@ class LikelihoodBase(ABC):
     def _plot_epochs(self, train_losses, vali_losses):
         """Produce a diagnostics plot of the loss curves after training has finished"""
 
+        all_losses = np.concatenate([train_losses, vali_losses])
+
         fig, ax = plt.subplots(figsize=(12, 6))
 
         ax.plot(train_losses, label="training")
         ax.plot(vali_losses, label="validation")
-        ax.set(xlabel="epoch", ylabel="loss")
+        ax.set(xlabel="epoch", ylabel="loss", ylim=(np.nanquantile(all_losses, 0.01), np.nanquantile(all_losses, 0.99)))
         ax.grid(True)
         ax.legend()
 

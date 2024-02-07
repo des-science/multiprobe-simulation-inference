@@ -120,54 +120,54 @@ def load_human_summaries(base_dir, summary_type, file_label=None, return_raw_cls
     return out_dict
 
 
-def load_virginia_cls(fidu_dir, grid_dir):
-    LOGGER.warning(f"This function is deprecated!")
+# def load_virginia_cls(fidu_dir, grid_dir):
+#     LOGGER.warning(f"This function is deprecated!")
 
-    fidu_index = []
-    fidu_cls = []
-    grid_theta = []
-    grid_cls = []
+#     fidu_index = []
+#     fidu_cls = []
+#     grid_theta = []
+#     grid_cls = []
 
-    n_bins = 4
-    for i in range(n_bins):
-        for j in range(n_bins):
-            if i <= j:
-                bin_num = f"{i+1}x{j+1}"
-                LOGGER.info(f"Loading bin_num = {bin_num}")
+#     n_bins = 4
+#     for i in range(n_bins):
+#         for j in range(n_bins):
+#             if i <= j:
+#                 bin_num = f"{i+1}x{j+1}"
+#                 LOGGER.info(f"Loading bin_num = {bin_num}")
 
-                # load cls from .h5
-                fidu_file_list = glob.glob(fidu_dir + f"/bin{bin_num}/WL_index_*_DESy3_fiducial_???.tfrecord.h5")
-                LOGGER.info(f"found {len(fidu_file_list)} .h5 files")
+#                 # load cls from .h5
+#                 fidu_file_list = glob.glob(fidu_dir + f"/bin{bin_num}/WL_index_*_DESy3_fiducial_???.tfrecord.h5")
+#                 LOGGER.info(f"found {len(fidu_file_list)} .h5 files")
 
-                current_index = []
-                current_cls = []
+#                 current_index = []
+#                 current_cls = []
 
-                for fidu_file in fidu_file_list:
-                    with h5py.File(fidu_file, "r") as f:
-                        current_index.append(f["power_spectrum"].attrs["index"][0, 0])
-                        current_cls.append(f["power_spectrum"][:])
+#                 for fidu_file in fidu_file_list:
+#                     with h5py.File(fidu_file, "r") as f:
+#                         current_index.append(f["power_spectrum"].attrs["index"][0, 0])
+#                         current_cls.append(f["power_spectrum"][:])
 
-                current_index = np.asarray(current_index)
-                current_cls = np.asarray(current_cls)
+#                 current_index = np.asarray(current_index)
+#                 current_cls = np.asarray(current_cls)
 
-                # every example index must be unique
-                assert len(np.unique(current_index)) == len(fidu_file_list)
+#                 # every example index must be unique
+#                 assert len(np.unique(current_index)) == len(fidu_file_list)
 
-                # sort
-                i_sorted = np.argsort(current_index)
-                current_index = current_index[i_sorted]
-                current_cls = current_cls[i_sorted]
+#                 # sort
+#                 i_sorted = np.argsort(current_index)
+#                 current_index = current_index[i_sorted]
+#                 current_cls = current_cls[i_sorted]
 
-                # apply scale cut
-                current_cls = current_cls[:, l_cut]
+#                 # apply scale cut
+#                 current_cls = current_cls[:, l_cut]
 
-                # collect in lists
-                fidu_index.append(current_index)
-                fidu_cls.append(current_cls)
+#                 # collect in lists
+#                 fidu_index.append(current_index)
+#                 fidu_cls.append(current_cls)
 
-    # collect the different cosmologies
-    fidu_index = np.stack(fidu_index, axis=-1)
-    fidu_cls = np.concatenate(fidu_cls, axis=-1)
+#     # collect the different cosmologies
+#     fidu_index = np.stack(fidu_index, axis=-1)
+#     fidu_cls = np.concatenate(fidu_cls, axis=-1)
 
-    print(f"\nfidu_index.shape = {fidu_index.shape}")
-    print(f"fidu_cls.shape = {fidu_cls.shape}")
+#     print(f"\nfidu_index.shape = {fidu_index.shape}")
+#     print(f"fidu_cls.shape = {fidu_cls.shape}")

@@ -22,11 +22,11 @@ def get_gmm_layers(
     dropout_rate=0.0,
     x_noise_sigma=0.0,
 ):
-    """Build a Gaussian Mixture Model network that is able to learn p(y|x) from samples.
+    """Build a Gaussian Mixture Model network that is able to learn the likelihood p(x|theta) from samples.
 
     Args:
-        nx (int): Dimensionality of x.
-        ny (int): Dimensionality of y.
+        n_x (int): Dimensionality of the feature variable x.
+        n_theta (int): Dimensionality of the conditioning variable theta.
         n_units (int): Number of neurons in the hidden layers.
         n_layers (int): Number of hidden layers (there's two more dense layers in the model than this).
         activation (int): Activation function to use.
@@ -39,9 +39,9 @@ def get_gmm_layers(
     """
 
     layers = []
-    layers.append(tf.keras.layers.Input(shape=(n_x,)))
+    layers.append(tf.keras.layers.Input(shape=(n_theta,)))
     layers.append(tf.keras.layers.GaussianNoise(x_noise_sigma))
-    layers.append(tf.keras.layers.Dense(n_units, input_dim=n_x, activation=activation))
+    layers.append(tf.keras.layers.Dense(n_units, input_dim=n_theta, activation=activation))
     layers.append(tf.keras.layers.Dropout(dropout_rate))
 
     for _ in range(n_layers):
@@ -50,9 +50,9 @@ def get_gmm_layers(
 
     # number of parameters needed to build the final distribution layer
     gmm_param_size = tfp.layers.MixtureSameFamily.params_size(
-        n_gaussians, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(n_theta)
+        n_gaussians, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(n_x)
     )
     layers.append(tf.keras.layers.Dense(gmm_param_size, activation=None))
-    layers.append(tfp.layers.MixtureSameFamily(n_gaussians, tfp.layers.MultivariateNormalTriL(n_theta)))
+    layers.append(tfp.layers.MixtureSameFamily(n_gaussians, tfp.layers.MultivariateNormalTriL(n_x)))
 
     return layers

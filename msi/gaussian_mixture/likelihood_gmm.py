@@ -145,7 +145,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
             scheduler_kwargs.setdefault("factor", 0.9)
             scheduler_kwargs.setdefault("patience", 10)
             scheduler_kwargs.setdefault("min_delta", 1e-4)
-            scheduler_kwargs.setdefault("cooldown", 10)
+            scheduler_kwargs.setdefault("cooldown", 5)
 
             callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
                 monitor="loss", min_lr=learning_rate_min, verbose=0, **scheduler_kwargs

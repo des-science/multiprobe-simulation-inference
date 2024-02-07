@@ -101,7 +101,7 @@ def plot_histogram_check(grid_preds_true, grid_preds_sample, n_random_indices=10
         fig.savefig(os.path.join(out_dir, "diagnostic_histogram.png"), bbox_inches="tight", dpi=100)
 
 
-def plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=None):
+def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_hist=True, out_dir=None):
     """Plot the diagnostics presented in Appendix C and Fig. 9 of https://arxiv.org/pdf/2203.09616. These are
     relative statisticsfor mean and std, and per summary dimension histograms.
 
@@ -109,6 +109,8 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=None):
         grid_preds_true (ndarray): The true predicted summaries (directly from the CosmoGrid evaluations) of shape
             (n_cosmos, n_examples, n_summaries).
         grid_preds_sample (ndarray): Samples from the model of shape (n_cosmos, n_samples, n_summaries).
+        plot_per_summary_dim_hist (bool, optional): Whether to plot the per summary dimension histograms. Defaults to 
+            True.
         out_dir (str, optional): The output directory to save the plot to. Defaults to None, then it isn't saved.
     """
 
@@ -135,53 +137,56 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=None):
     fig, ax = plt.subplots(ncols=2, figsize=(15, 10), sharey=True)
 
     ax[0].hist(Delta_mu, bins=50, density=True)
+    ax[0].axvline(0, color="k", linestyle="--")
     ax[0].set(title="relative mean statistic", xlabel=r"$\Delta_\mu$", ylabel="probability density")
     ax[0].grid(True)
 
     ax[1].hist(Delta_sigma, bins=50, density=True)
+    ax[1].axvline(0, color="k", linestyle="--")
     ax[1].set(title="relative spread statistic", xlabel=r"$\Delta_\sigma$")
     ax[1].grid(True)
 
     if out_dir is not None:
         fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_relative_stat.png"), bbox_inches="tight", dpi=100)
 
-    fig, ax = plt.subplots(figsize=(15, 5), ncols=n_summaries, nrows=2)
+    if plot_per_summary_dim_hist and n_summaries < 20:
+        fig, ax = plt.subplots(figsize=(15, 5), ncols=n_summaries, nrows=2)
 
-    # per summary dimension mean
-    # shared binning per summary dimension
-    bin_mins = np.quantile(mean_sample, 0.01, axis=0)
-    bin_maxs = np.quantile(mean_sample, 0.99, axis=0)
-    bins = np.linspace(bin_mins, bin_maxs, 20)
+        # per summary dimension mean
+        # shared binning per summary dimension
+        bin_mins = np.quantile(mean_sample, 0.01, axis=0)
+        bin_maxs = np.quantile(mean_sample, 0.99, axis=0)
+        bins = np.linspace(bin_mins, bin_maxs, 20)
 
-    for i in range(n_summaries):
-        ax[0, i].hist(mean_sample[:, i], bins=bins[:, i], label="model samples", density=True, alpha=0.5)
-        ax[0, i].hist(mean_true[:, i], bins=bins[:, i], label="true distribution", density=True, alpha=0.5)
+        for i in range(n_summaries):
+            ax[0, i].hist(mean_sample[:, i], bins=bins[:, i], label="model samples", density=True, alpha=0.5)
+            ax[0, i].hist(mean_true[:, i], bins=bins[:, i], label="true distribution", density=True, alpha=0.5)
 
-        ax[0, i].set(title=f"summary {i}", xlabel="mean")
-        ax[0, i].grid(True)
+            ax[0, i].set(title=f"summary {i}", xlabel="mean")
+            ax[0, i].grid(True)
 
-    ax[0, 0].legend()
-    ax[0, 0].set(ylabel="probability density")
+        ax[0, 0].legend()
+        ax[0, 0].set(ylabel="probability density")
 
-    # per summary dimension std
-    # shared binning per summary dimension
-    bin_mins = np.quantile(std_sample, 0.01, axis=0)
-    bin_maxs = np.quantile(std_sample, 0.99, axis=0)
-    bins = np.linspace(bin_mins, bin_maxs, 20)
+        # per summary dimension std
+        # shared binning per summary dimension
+        bin_mins = np.quantile(std_sample, 0.01, axis=0)
+        bin_maxs = np.quantile(std_sample, 0.99, axis=0)
+        bins = np.linspace(bin_mins, bin_maxs, 20)
 
-    for i in range(n_summaries):
-        ax[1, i].hist(std_sample[:, i], bins=bins[:, i], label="model samples", density=True, alpha=0.5)
-        ax[1, i].hist(std_true[:, i], bins=bins[:, i], label="true distribution", density=True, alpha=0.5)
+        for i in range(n_summaries):
+            ax[1, i].hist(std_sample[:, i], bins=bins[:, i], label="model samples", density=True, alpha=0.5)
+            ax[1, i].hist(std_true[:, i], bins=bins[:, i], label="true distribution", density=True, alpha=0.5)
 
-        ax[1, i].set(xlabel="std")
-        ax[1, i].grid(True)
+            ax[1, i].set(xlabel="std")
+            ax[1, i].grid(True)
 
-    ax[1, 0].set(ylabel="probability density")
+        ax[1, 0].set(ylabel="probability density")
 
-    fig.tight_layout()
+        fig.tight_layout()
 
-    if out_dir is not None:
-        fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=100)
+        if out_dir is not None:
+            fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=100)
 
 
 def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_confidence_levels=100, out_dir=None):
