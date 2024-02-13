@@ -90,8 +90,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         weight_decay=0.0,
         clip_by_global_norm=1.0,
         # learning rate scheduler
-        learning_rate_min=1e-6,
-        scheduler_kwargs={},
+        scheduler_kwargs=None,
         # early stopping
         n_patience_epochs=10,
         min_delta=1e-3,
@@ -141,14 +140,16 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         callbacks = []
 
         # learning rate scheduler
-        if learning_rate_min is not None:
-            scheduler_kwargs.setdefault("factor", 0.9)
-            scheduler_kwargs.setdefault("patience", 10)
-            scheduler_kwargs.setdefault("min_delta", 1e-4)
+        if scheduler_kwargs is not None:
+            LOGGER.info(f"Using a ReduceLROnPlateau learning rate scheduler")
+            scheduler_kwargs.setdefault("min_lr", 1e-6)
+            scheduler_kwargs.setdefault("factor", 0.75)
+            scheduler_kwargs.setdefault("patience", 20)
             scheduler_kwargs.setdefault("cooldown", 5)
+            scheduler_kwargs.setdefault("min_delta", 1e-4)
 
             callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="loss", min_lr=learning_rate_min, verbose=0, **scheduler_kwargs
+                monitor="loss", verbose=0, **scheduler_kwargs
             )
             callbacks.append(callback_reduce_lr)
 

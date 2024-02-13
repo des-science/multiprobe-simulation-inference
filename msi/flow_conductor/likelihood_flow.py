@@ -176,10 +176,10 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         if scheduler_type is None:
             LOGGER.info(f"Not using a learning rate scheduler")
         elif scheduler_type == "cosine":
-            LOGGER.info(f"Using a cosine annealing scheduler")
             scheduler_kwargs.setdefault("eta_min", 1e-5)
-            scheduler_kwargs.setdefault("T_max", n_epochs)
+            scheduler_kwargs.setdefault("T_max", n_epochs//1.5)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, **scheduler_kwargs)
+            LOGGER.info(f"Using a cosine annealing scheduler with lr_min {scheduler_kwargs['eta_min']} and T_max {scheduler_kwargs['T_max']}")
         elif scheduler_type == "plateau":
             LOGGER.info(f"Using a ReduceLROnPlateau scheduler")
             scheduler_kwargs.setdefault("min_lr", 1e-5)

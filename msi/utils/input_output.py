@@ -63,8 +63,11 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
 
         out_dict = {}
         for h5_key in h5_keys:
-            out_dict[h5_key] = f[h5_key][:]
-            LOGGER.info(f"{h5_key:<18} = {out_dict[h5_key].shape}")
+            try:
+                out_dict[h5_key] = f[h5_key][:]
+                LOGGER.info(f"{h5_key:<18} = {out_dict[h5_key].shape}")
+            except KeyError:
+                LOGGER.warning(f"Could not find {h5_key} in {preds_file}")
 
     return out_dict
 
