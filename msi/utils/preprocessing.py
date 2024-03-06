@@ -66,6 +66,7 @@ def get_reshaped_human_summaries(
     l_mins=None,
     l_maxs=None,
     n_bins=None,
+    only_keep_bins=None,
     # peaks scale selection
     scale_indices=None,
     # additional preprocessing
@@ -104,8 +105,22 @@ def get_reshaped_human_summaries(
                 )
                 LOGGER.warning(f"Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
                 LOGGER.timer.start("scale_cuts")
-                fidu_summs, _ = power_spectra.bin_cls(file_dict["fiducial/cls/raw"], l_mins, l_maxs, n_bins)
-                grid_summs, _ = power_spectra.bin_cls(file_dict["grid/cls/raw"], l_mins, l_maxs, n_bins)
+                fidu_summs, _ = power_spectra.bin_cls(
+                    file_dict["fiducial/cls/raw"],
+                    l_mins,
+                    l_maxs,
+                    n_bins,
+                    n_side=conf["analysis"]["n_side"],
+                    per_cross_binning=True,
+                )
+                grid_summs, _ = power_spectra.bin_cls(
+                    file_dict["grid/cls/raw"],
+                    l_mins,
+                    l_maxs,
+                    n_bins,
+                    n_side=conf["analysis"]["n_side"],
+                    per_cross_binning=True,
+                )
                 LOGGER.info(f"Done after {LOGGER.timer.elapsed('scale_cuts')}")
 
                 np.save(fidu_file, fidu_summs)
@@ -123,9 +138,11 @@ def get_reshaped_human_summaries(
 
     elif summary_type == "peaks":
         LOGGER.info(f"Loading the pre-binned peak statistics")
-        
+
         if apply_cl_scale_cut:
-            LOGGER.warning(f"The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments")
+            LOGGER.warning(
+                f"The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments"
+            )
 
         file_dict = input_output.load_human_summaries(
             base_dir, summary_type, file_label=file_label, return_raw_cls=False
@@ -151,6 +168,11 @@ def get_reshaped_human_summaries(
     fidu_summs = fidu_summs[..., bin_indices]
     grid_summs = grid_summs[..., bin_indices]
 
+    if only_keep_bins is not None:
+        LOGGER.warning(f"Keeping only the first {only_keep_bins} bins")
+        fidu_summs = fidu_summs[..., :only_keep_bins, :]
+        grid_summs = grid_summs[..., :only_keep_bins, :]
+
     # select the right cosmological parameters
     conf = files.load_config(conf)
     all_params = parameters.get_parameters(None, conf)
@@ -175,7 +197,9 @@ def get_reshaped_human_summaries(
     # TODO implement scale selection
     if summary_type == "peaks":
         if scale_indices is None:
-            assert fidu_summs.shape[-2] == grid_summs.shape[-2], "The number of scales must be the same for fiducial and grid"
+            assert (
+                fidu_summs.shape[-2] == grid_summs.shape[-2]
+            ), "The number of scales must be the same for fiducial and grid"
             scale_indices = range(fidu_summs.shape[-2])
 
         # concatenate the scales along the last axis
@@ -194,7 +218,7 @@ def get_reshaped_human_summaries(
             grid_cosmos = np.concatenate([grid_cosmos[i, ...] for i in range(grid_cosmos.shape[0])], axis=0)
         elif summary_type == "peaks":
             grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
-        
+
         grid_summs = np.concatenate([grid_summs[i, ...] for i in range(grid_summs.shape[0])], axis=0)
 
         print("\n")
@@ -213,7 +237,7 @@ def get_reshaped_human_summaries(
             plotting.plot_human_summary(
                 fidu_summs,
                 grid_summs,
-                base_dir,
+                os.path.join(base_dir, summary_type),
                 label=label,
                 bin_size=conf["analysis"]["power_spectra"]["n_bins"] - 1,
                 bin_names=bin_names,
@@ -222,7 +246,7 @@ def get_reshaped_human_summaries(
             plotting.plot_human_summary(
                 fidu_summs,
                 grid_summs,
-                base_dir,
+                os.path.join(base_dir, summary_type),
                 label=label,
                 bin_size=conf["analysis"]["peak_statistics"]["n_bins"],
                 bin_names=bin_names,
@@ -243,6 +267,7 @@ def get_reshaped_human_summaries(
         LOGGER.info(f"Applying PCA to compress to {pca_components} components")
         # whitening doesn't change the results much
         pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=True))
+        # pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=False))
         grid_summs = pca.fit_transform(grid_summs)
         fidu_summs = pca.transform(fidu_summs)
         LOGGER.info(f"Total explained variance = {np.sum(pca.model.explained_variance_ratio_)}")
