@@ -54,6 +54,7 @@ def plot_chains(
     plot_labels="chain",
     scale_to_prior=True,
     group_params=False,
+    tri_kwargs={},
     # cosmo
     plot_fiducial=True,
     fiducial_point=None,
@@ -93,7 +94,9 @@ def plot_chains(
 
         # check that all of the params are supported
         config_params = (
-            conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"]["ia"] + conf["analysis"]["params"]["bg"]["linear"]
+            conf["analysis"]["params"]["cosmo"]
+            + conf["analysis"]["params"]["ia"]
+            + conf["analysis"]["params"]["bg"]["linear"]
         )
 
         if conf["analysis"]["modelling"]["quadratic_biasing"]:
@@ -149,6 +152,7 @@ def plot_chains(
         de_kwargs=de_kwargs,
         grouping_kwargs=grouping_kwargs,
         scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
+        **tri_kwargs,
     )
 
     # multiple chains
@@ -215,7 +219,7 @@ def plot_chains(
 
         tri.scatter(
             fiducial_point,
-            label="synthetic obs",
+            label="synthetic truth",
             plot_histograms_1D=False,
             color="k",
             scatter_vline_1D=True,
@@ -224,21 +228,23 @@ def plot_chains(
 
     # title
     if title is not None:
-        tri.fig.suptitle(title, fontsize=24)
+        tri.fig.suptitle(title, fontsize=24, y=0.9)
 
     # save figure
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
 
         if file_label is not None:
-            out_file = os.path.join(out_dir, f"contours_{file_label}.png")
+            out_file = os.path.join(out_dir, f"contours_{file_label}.pdf")
         else:
-            out_file = os.path.join(out_dir, f"contours.png")
+            out_file = os.path.join(out_dir, f"contours.pdf")
 
-        tri.fig.savefig(os.path.join(out_dir, out_file), bbox_inches="tight", dpi=300)
+        tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=300)
         LOGGER.info(f"Saved the plot to {out_file}")
     else:
         LOGGER.warning(f"Not saving the plot")
+
+    return tri
 
 
 def plot_method_comparison(
