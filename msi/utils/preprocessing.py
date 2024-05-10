@@ -21,7 +21,9 @@ from msfm.utils import logger, cross_statistics, parameters, files, power_spectr
 LOGGER = logger.get_logger(__file__)
 
 
-def get_reshaped_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds_file=None, n_params=None):
+def get_reshaped_network_preds(
+    base_dir, model_dir, n_steps=None, file_label=None, preds_file=None, n_params=None, n_perms_per_cosmo=None
+):
     file_dict = input_output.load_network_preds(
         base_dir, model_dir, n_steps=n_steps, file_label=file_label, preds_file=preds_file
     )
@@ -33,6 +35,14 @@ def get_reshaped_network_preds(base_dir, model_dir, n_steps=None, file_label=Non
     # only relevant for the likelihood loss
     fidu_preds = fidu_preds[..., :n_params]
     grid_preds = grid_preds[..., :n_params]
+
+    # only take a subset of the permutations
+    if n_perms_per_cosmo is not None:
+        LOGGER.warning(f"Only taking the first {n_perms_per_cosmo} permutations per cosmology")
+        LOGGER.warning(f"n_patches and n_noise are hard-coded here!")
+        n_patches = 4
+        n_noise = 3
+        grid_preds = grid_preds[:, : (n_perms_per_cosmo * n_patches * n_noise), :]
 
     # combine the example and cosmology axes
     grid_preds = np.concatenate(grid_preds, axis=0)
@@ -154,6 +164,7 @@ def get_reshaped_human_summaries(
         raise ValueError
 
     grid_cosmos = file_dict["grid/cosmo"]
+    grid_i_sobols = file_dict["grid/i_sobol"]
 
     bin_indices, bin_names = cross_statistics.get_cross_bin_indices(
         with_lensing=with_lensing,
@@ -189,6 +200,7 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+    LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
 
     # concatenate the bins along the last axis
     fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
@@ -216,6 +228,7 @@ def get_reshaped_human_summaries(
         # TODO this is due to how it's stored in the .h5 files and not super clean
         if summary_type == "cls":
             grid_cosmos = np.concatenate([grid_cosmos[i, ...] for i in range(grid_cosmos.shape[0])], axis=0)
+            grid_i_sobols = np.concatenate([grid_i_sobols[i, ...] for i in range(grid_i_sobols.shape[0])], axis=0)
         elif summary_type == "peaks":
             grid_cosmos = np.repeat(grid_cosmos, repeats=grid_summs.shape[1], axis=0)
 
@@ -226,6 +239,7 @@ def get_reshaped_human_summaries(
         LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
         LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
         LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+        LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
 
     if do_plot:
         assert concat_example_dim, f"Plotting only works if the examples are concatenated"
@@ -278,4 +292,4 @@ def get_reshaped_human_summaries(
         LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
         LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
 
-    return fidu_summs, grid_summs, grid_cosmos, file_dict
+    return fidu_summs, grid_summs, grid_cosmos, grid_i_sobols, file_dict
