@@ -182,6 +182,13 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             LOGGER.info(
                 f"Using a cosine annealing scheduler with lr_min {scheduler_kwargs['eta_min']} and T_max {scheduler_kwargs['T_max']}"
             )
+        elif scheduler_type == "exp":
+            scheduler_kwargs.setdefault("gamma", 0.95)
+            scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, **scheduler_kwargs)
+            LOGGER.info(
+                f"Using an exponential decay scheduler with gamma {scheduler_kwargs['gamma']} resulting in "
+                f"eta_min {(learning_rate*scheduler_kwargs['gamma']**n_epochs):.2E}"
+            )
         elif scheduler_type == "plateau":
             LOGGER.info(f"Using a ReduceLROnPlateau scheduler")
             scheduler_kwargs.setdefault("min_lr", 1e-5)
@@ -209,7 +216,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
             if scheduler_type == "plateau":
                 scheduler.step(vali_loss)
-            elif scheduler_type == "cosine":
+            elif scheduler_type in ["cosine", "exp"]:
                 scheduler.step()
 
             if n_patience_epochs is not None and early_stopper.early_stop(vali_loss):
