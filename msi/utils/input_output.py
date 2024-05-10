@@ -72,7 +72,9 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
     return out_dict
 
 
-def load_human_summaries(base_dir, summary_type, file_label=None, return_raw_cls=False):
+def load_human_summaries(
+    base_dir, summary_type, file_label=None, return_raw_cls=False, return_fiducial=True, return_grid=True
+):
     LOGGER.timer.start("load_summaries")
 
     assert summary_type in ["peaks", "cls"]
@@ -87,90 +89,39 @@ def load_human_summaries(base_dir, summary_type, file_label=None, return_raw_cls
     out_dict = {}
 
     # fiducial
-    fidu_keys = ["i_example", "i_noise"]
-    if summary_type == "cls":
-        fidu_keys += ["cls/binned", "cls/bin_edges"]
-        if return_raw_cls:
-            LOGGER.warning(f"Returning the raw Cls, this is potentially slow")
-            fidu_keys += ["cls/raw"]
-    elif summary_type == "peaks":
-        fidu_keys += ["peaks"]
+    if return_fiducial:
+        fidu_keys = ["i_example", "i_noise"]
+        if summary_type == "cls":
+            fidu_keys += ["cls/binned", "cls/bin_edges"]
+            if return_raw_cls:
+                LOGGER.warning(f"Returning the raw Cls, this is potentially slow")
+                fidu_keys += ["cls/raw"]
+        elif summary_type == "peaks":
+            fidu_keys += ["peaks"]
 
-    with h5py.File(fidu_file, "r") as f:
-        LOGGER.info(f"Array shapes:")
+        with h5py.File(fidu_file, "r") as f:
+            LOGGER.info(f"Array shapes:")
 
-        for h5_key in fidu_keys:
-            dict_key = f"fiducial/{h5_key}"
-            out_dict[dict_key] = f[h5_key][:]
-            LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
+            for h5_key in fidu_keys:
+                dict_key = f"fiducial/{h5_key}"
+                out_dict[dict_key] = f[h5_key][:]
+                LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
 
     # grid
-    grid_keys = ["cosmo", "i_example", "i_noise", "i_sobol"]
-    if summary_type == "cls":
-        grid_keys += ["cls/binned", "cls/bin_edges"]
-        if return_raw_cls:
-            grid_keys += ["cls/raw"]
-    elif summary_type == "peaks":
-        grid_keys += ["peaks"]
+    if return_grid:
+        grid_keys = ["cosmo", "i_example", "i_noise", "i_sobol"]
+        if summary_type == "cls":
+            grid_keys += ["cls/binned", "cls/bin_edges"]
+            if return_raw_cls:
+                grid_keys += ["cls/raw"]
+        elif summary_type == "peaks":
+            grid_keys += ["peaks"]
 
-    with h5py.File(grid_file, "r") as f:
-        for h5_key in grid_keys:
-            dict_key = f"grid/{h5_key}"
-            out_dict[dict_key] = f[h5_key][:]
-            LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
+        with h5py.File(grid_file, "r") as f:
+            for h5_key in grid_keys:
+                dict_key = f"grid/{h5_key}"
+                out_dict[dict_key] = f[h5_key][:]
+                LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
 
     LOGGER.info(f"Done loading the summaries after {LOGGER.timer.elapsed('load_summaries')}")
     return out_dict
-
-
-# def load_virginia_cls(fidu_dir, grid_dir):
-#     LOGGER.warning(f"This function is deprecated!")
-
-#     fidu_index = []
-#     fidu_cls = []
-#     grid_theta = []
-#     grid_cls = []
-
-#     n_bins = 4
-#     for i in range(n_bins):
-#         for j in range(n_bins):
-#             if i <= j:
-#                 bin_num = f"{i+1}x{j+1}"
-#                 LOGGER.info(f"Loading bin_num = {bin_num}")
-
-#                 # load cls from .h5
-#                 fidu_file_list = glob.glob(fidu_dir + f"/bin{bin_num}/WL_index_*_DESy3_fiducial_???.tfrecord.h5")
-#                 LOGGER.info(f"found {len(fidu_file_list)} .h5 files")
-
-#                 current_index = []
-#                 current_cls = []
-
-#                 for fidu_file in fidu_file_list:
-#                     with h5py.File(fidu_file, "r") as f:
-#                         current_index.append(f["power_spectrum"].attrs["index"][0, 0])
-#                         current_cls.append(f["power_spectrum"][:])
-
-#                 current_index = np.asarray(current_index)
-#                 current_cls = np.asarray(current_cls)
-
-#                 # every example index must be unique
-#                 assert len(np.unique(current_index)) == len(fidu_file_list)
-
-#                 # sort
-#                 i_sorted = np.argsort(current_index)
-#                 current_index = current_index[i_sorted]
-#                 current_cls = current_cls[i_sorted]
-
-#                 # apply scale cut
-#                 current_cls = current_cls[:, l_cut]
-
-#                 # collect in lists
-#                 fidu_index.append(current_index)
-#                 fidu_cls.append(current_cls)
-
-#     # collect the different cosmologies
-#     fidu_index = np.stack(fidu_index, axis=-1)
-#     fidu_cls = np.concatenate(fidu_cls, axis=-1)
-
-#     print(f"\nfidu_index.shape = {fidu_index.shape}")
-#     print(f"fidu_cls.shape = {fidu_cls.shape}")
