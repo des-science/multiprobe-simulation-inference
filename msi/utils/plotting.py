@@ -49,6 +49,7 @@ def plot_chains(
     # file
     out_dir=None,
     file_label=None,
+    file_type="png",
     # cosmetics
     title=None,
     plot_labels="chain",
@@ -235,9 +236,9 @@ def plot_chains(
         os.makedirs(out_dir, exist_ok=True)
 
         if file_label is not None:
-            out_file = os.path.join(out_dir, f"contours_{file_label}.pdf")
+            out_file = os.path.join(out_dir, f"contours_{file_label}.{file_type}")
         else:
-            out_file = os.path.join(out_dir, f"contours.pdf")
+            out_file = os.path.join(out_dir, f"contours.{file_type}")
 
         tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=300)
         LOGGER.info(f"Saved the plot to {out_file}")

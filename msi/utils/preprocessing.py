@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 
 from msi.utils.sklearn import GeneralizedSklearnModel
 from msi.utils import plotting, input_output
-from msfm.utils import logger, cross_statistics, parameters, files, power_spectra
+from msfm.utils import logger, cross_statistics, parameters, files, power_spectra, observation
 
 LOGGER = logger.get_logger(__file__)
 
@@ -266,30 +266,115 @@ def get_reshaped_human_summaries(
                 bin_names=bin_names,
             )
 
+    grid_summs, scaler, pca = preprocess_human_summaries(
+        grid_summs, apply_log, standardize=standardize, pca_components=pca_components
+    )
+    fidu_summs, _, _ = preprocess_human_summaries(
+        fidu_summs, apply_log, standardize=standardize, pca_components=pca_components, scaler=scaler, pca=pca
+    )
+
+    print("\n")
+    LOGGER.info("Shapes after pre-processing")
+    LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+    LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
+    LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+
+    return fidu_summs, grid_summs, grid_cosmos, grid_i_sobols, file_dict, scaler, pca
+
+
+def preprocess_human_summaries(
+    summaries, apply_log=False, standardize=False, pca_components=None, scaler=None, pca=None
+):
     if apply_log:
-        LOGGER.info(f"Taking the logarithm of the {summary_type}. Note that this only works for positive summaries")
-        fidu_summs = np.log(fidu_summs)
-        grid_summs = np.log(grid_summs)
+        LOGGER.info(f"Taking the logarithm. Note that this only works for positive summaries")
+        summaries = np.log(summaries)
 
-    if standardize:
-        LOGGER.info(f"Scaling the {summary_type} to zero mean and unit variance")
+    if standardize and scaler is None:
+        LOGGER.info(f"Fitting the scaler to transform to zero mean and unit variance")
         scaler = GeneralizedSklearnModel(StandardScaler())
-        grid_summs = scaler.fit_transform(grid_summs)
-        fidu_summs = scaler.transform(fidu_summs)
+        summaries = scaler.fit_transform(summaries)
+    elif isinstance(scaler, GeneralizedSklearnModel):
+        LOGGER.info(f"Applying the scaler to transform to zero mean and unit variance")
+        summaries = scaler.transform(summaries)
 
-    if pca_components is not None:
-        LOGGER.info(f"Applying PCA to compress to {pca_components} components")
-        # whitening doesn't change the results much
-        pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=True))
-        # pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=False))
-        grid_summs = pca.fit_transform(grid_summs)
-        fidu_summs = pca.transform(fidu_summs)
+    if pca_components is not None and pca is None:
+        LOGGER.info(f"Fitting PCA to compress to {pca_components} components")
+        pca = GeneralizedSklearnModel(PCA(n_components=pca_components, whiten=False))
+        summaries = np.nan_to_num(summaries)
+        summaries = pca.fit_transform(summaries)
         LOGGER.info(f"Total explained variance = {np.sum(pca.model.explained_variance_ratio_)}")
+    elif isinstance(pca, GeneralizedSklearnModel):
+        LOGGER.info(f"Applying PCA to compress to {pca_components} components")
+        summaries = np.nan_to_num(summaries)
+        summaries = pca.transform(summaries)
 
-        print("\n")
-        LOGGER.info("Shapes after pre-processing")
-        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
-        LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
-        LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+    return summaries, scaler, pca
 
-    return fidu_summs, grid_summs, grid_cosmos, grid_i_sobols, file_dict
+
+def get_preprocessed_cl_observation(
+    wl_gamma_map=None,
+    gc_count_map=None,
+    # configuration
+    conf=None,
+    # selection
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=True,
+    # CLs scale cuts
+    l_mins=None,
+    l_maxs=None,
+    n_bins=None,
+    only_keep_bins=None,
+    # additional preprocessing
+    apply_log=False,
+    scaler=None,
+    pca=None,
+):
+    conf = files.load_config(conf)
+
+    _, obs_cl = observation.forward_model_observation_map(
+        wl_gamma_map=wl_gamma_map,
+        gc_count_map=gc_count_map,
+        conf=conf,
+        apply_norm=True,
+        with_padding=True,
+        nest=False,
+    )
+
+    # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
+    # msfm.observation.forward_model_observation_map
+    obs_cl, _ = power_spectra.bin_cls(
+        obs_cl,
+        l_mins=l_mins,
+        l_maxs=l_maxs,
+        n_bins=n_bins,
+        n_side=conf["analysis"]["n_side"],
+        with_cross=True,
+        per_cross_binning=True,
+    )
+
+    bin_indices, _ = cross_statistics.get_cross_bin_indices(
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+    )
+    obs_cl = obs_cl[..., bin_indices]
+    if only_keep_bins is not None:
+        obs_cl = obs_cl[..., :only_keep_bins, :]
+
+    # concatenate the bins along the last axis
+    obs_cl = np.concatenate([obs_cl[..., i] for i in range(obs_cl.shape[-1])], axis=-1)
+
+    # TODO fix this in the buzzard and cardinal mocks. They have incorrect galaxy number densities atm
+    obs_cl *= 1.5625
+
+    obs_pca, _, _ = preprocess_human_summaries(
+        obs_cl[np.newaxis],
+        apply_log=apply_log,
+        scaler=scaler,
+        pca=pca,
+    )
+
+    return obs_pca
