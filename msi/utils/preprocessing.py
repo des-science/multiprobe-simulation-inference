@@ -286,8 +286,8 @@ def preprocess_human_summaries(
     summaries, apply_log=False, standardize=False, pca_components=None, scaler=None, pca=None
 ):
     if apply_log:
-        LOGGER.info(f"Taking the logarithm. Note that this only works for positive summaries")
-        summaries = np.log(summaries)
+        LOGGER.info(f"Taking the logarithm of the absolute values.")
+        summaries = np.log(np.abs(summaries))
 
     if standardize and scaler is None:
         LOGGER.info(f"Fitting the scaler to transform to zero mean and unit variance")
@@ -366,9 +366,6 @@ def get_preprocessed_cl_observation(
 
     # concatenate the bins along the last axis
     obs_cl = np.concatenate([obs_cl[..., i] for i in range(obs_cl.shape[-1])], axis=-1)
-
-    # TODO fix this in the buzzard and cardinal mocks. They have incorrect galaxy number densities atm
-    obs_cl *= 1.5625
 
     obs_pca, _, _ = preprocess_human_summaries(
         obs_cl[np.newaxis],

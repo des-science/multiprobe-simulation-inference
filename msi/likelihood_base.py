@@ -168,7 +168,9 @@ class LikelihoodBase(ABC):
 
         ax.plot(train_losses, label="training")
         ax.plot(vali_losses, label="validation")
-        ax.set(xlabel="epoch", ylabel="loss", ylim=(np.nanquantile(all_losses, 0.01), np.nanquantile(all_losses, 0.99)))
+        ax.set(
+            xlabel="epoch", ylabel="loss", ylim=(np.nanquantile(all_losses, 0.01), np.nanquantile(all_losses, 0.99))
+        )
         ax.grid(True)
         ax.legend()
 
@@ -180,8 +182,9 @@ class LikelihoodBase(ABC):
     def _setup_dirs(self, file_type):
         if self.out_dir is None:
             self.model_dir = None
+            self.model_file = None
         else:
             self.model_dir = os.path.join(self.out_dir, self.label, self.model_name)
             os.makedirs(self.model_dir, exist_ok=True)
             LOGGER.info(f"Set up the model directory {self.model_dir}")
-        self.model_file = os.path.join(self.model_dir, self.model_name + file_type)
+            self.model_file = os.path.join(self.model_dir, self.model_name + file_type)
