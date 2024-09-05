@@ -121,7 +121,7 @@ def get_reshaped_human_summaries(
                     l_maxs,
                     n_bins,
                     n_side=conf["analysis"]["n_side"],
-                    per_cross_binning=True,
+                    fixed_binning=False,
                 )
                 grid_summs, _ = power_spectra.bin_cls(
                     file_dict["grid/cls/raw"],
@@ -129,7 +129,7 @@ def get_reshaped_human_summaries(
                     l_maxs,
                     n_bins,
                     n_side=conf["analysis"]["n_side"],
-                    per_cross_binning=True,
+                    fixed_binning=False,
                 )
                 LOGGER.info(f"Done after {LOGGER.timer.elapsed('scale_cuts')}")
 
@@ -328,12 +328,14 @@ def get_preprocessed_cl_observation(
     only_keep_bins=None,
     # additional preprocessing
     apply_log=False,
+    standardize=False,
+    pca_components=None,
     scaler=None,
     pca=None,
 ):
     conf = files.load_config(conf)
 
-    _, obs_cl = observation.forward_model_observation_map(
+    _, obs_cl, _ = observation.forward_model_observation_map(
         wl_gamma_map=wl_gamma_map,
         gc_count_map=gc_count_map,
         conf=conf,
@@ -351,7 +353,7 @@ def get_preprocessed_cl_observation(
         n_bins=n_bins,
         n_side=conf["analysis"]["n_side"],
         with_cross=True,
-        per_cross_binning=True,
+        fixed_binning=False,
     )
 
     bin_indices, _ = cross_statistics.get_cross_bin_indices(
@@ -367,11 +369,13 @@ def get_preprocessed_cl_observation(
     # concatenate the bins along the last axis
     obs_cl = np.concatenate([obs_cl[..., i] for i in range(obs_cl.shape[-1])], axis=-1)
 
-    obs_pca, _, _ = preprocess_human_summaries(
+    obs_cl, _, _ = preprocess_human_summaries(
         obs_cl[np.newaxis],
         apply_log=apply_log,
+        standardize=standardize,
+        pca_components=pca_components,
         scaler=scaler,
         pca=pca,
     )
 
-    return obs_pca
+    return obs_cl

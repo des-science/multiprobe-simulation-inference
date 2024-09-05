@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+import matplotlib.pyplot as plt
 
 from msi.utils import preprocessing
 
@@ -12,6 +13,7 @@ def get_binned_power_spectra_dset(
     conf=None,
     params=None,
     train_test_split=0.8,
+    n_examples_to_plot=10,
     # tf.data
     batch_size=2**12,
     shuffle_buffer=2**14,
@@ -56,6 +58,13 @@ def get_binned_power_spectra_dset(
         )
     )
 
+    fig, ax = plt.subplots(figsize=(10, 5))
+    i_random = np.random.randint(low=0, high=fidu_cls.shape[0], size=(n_examples_to_plot,))
+    ax.plot(fidu_cls[i_random].T, alpha=0.1)
+    ax.plot(np.mean(fidu_cls, axis=0))
+    ax.set(xlabel="(concatenated) data vector dimension", ylabel=r"$C_\ell$", title=r"fiducial $C_\ell$")
+    ax.grid(True)
+
     fidu_cls = fidu_cls.astype(float_type)
     grid_cls = grid_cls.astype(float_type)
     grid_cosmos = grid_cosmos.astype(float_type)
@@ -89,4 +98,4 @@ def get_binned_power_spectra_dset(
         "grid/cosmos/test": grid_cosmos_test,
     }
 
-    return dset_train, dset_test, out_dict
+    return dset_train, dset_test, out_dict, scaler, pca
