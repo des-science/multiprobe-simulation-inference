@@ -57,8 +57,9 @@ def plot_chains(
     group_params=False,
     tri_kwargs={},
     # cosmo
-    plot_fiducial=True,
-    fiducial_point=None,
+    plot_obs=True,
+    obs_point=None,
+    obs_label="synthetic observation",
     with_des_chain=False,
     des_tri="upper",
 ):
@@ -214,13 +215,13 @@ def plot_chains(
         )
 
     # fiducial
-    if plot_fiducial:
-        if fiducial_point is None:
-            fiducial_point = dict(zip(all_params, parameters.get_fiducials(all_params)))
+    if plot_obs:
+        if obs_point is None:
+            obs_point = dict(zip(all_params, parameters.get_fiducials(all_params)))
 
         tri.scatter(
-            fiducial_point,
-            label="synthetic truth",
+            obs_point,
+            label=obs_label,
             plot_histograms_1D=False,
             color="k",
             scatter_vline_1D=True,
