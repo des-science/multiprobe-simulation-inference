@@ -10,6 +10,154 @@ def get_binned_power_spectra_dset(
     # file
     file_label=None,
     # configuration
+    msfm_conf=None,
+    dlss_conf=None,
+    params=None,
+    train_test_split=0.8,
+    n_examples_to_plot=10,
+    # tf.data
+    batch_size=2**12,
+    shuffle_buffer=2**14,
+    prefetch=3,
+    num_parallel_calls=tf.data.AUTOTUNE,
+    float_type=np.float32,
+    # selection
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    with_gaussian_noise=True,
+    # CLs scale cuts
+    l_mins=None,
+    l_maxs=None,
+    n_bins=None,
+    # additional preprocessing
+    apply_log=True,
+    standardize=False,
+):
+    fidu_cls, grid_cls, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = (
+        preprocessing.get_reshaped_human_summaries(
+            base_dir,
+            "cls",
+            file_label=file_label,
+            # configuration
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            params=params,
+            concat_example_dim=False,
+            do_plot=False,
+            # selection
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            # power spectra: scales
+            from_raw_cls=False,
+            l_mins=l_mins,
+            l_maxs=l_maxs,
+            n_bins=n_bins,
+            # unlike the standardization, the logarithm is not linear and has to be applied as log(signal + noise), not
+            # log(signal) + log(noise)
+            apply_log=False,
+            standardize=standardize,
+        )
+    )
+
+    fidu_cls = fidu_cls.astype(float_type)
+    grid_cls = grid_cls.astype(float_type)
+    grid_cosmos = grid_cosmos.astype(float_type)
+    noise_cls = noise_cls.astype(float_type)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    i_random = np.random.randint(low=0, high=fidu_cls.shape[0], size=(n_examples_to_plot,))
+    ax.plot(fidu_cls[i_random].T, alpha=0.1)
+    ax.plot(np.mean(fidu_cls, axis=0))
+    ax.set(xlabel="(concatenated) data vector dimension", ylabel=r"$C_\ell$", title=r"fiducial $C_\ell$")
+    ax.grid(True)
+
+    # split along the "examples per cosmo" axis
+    i_split = int(train_test_split * grid_cls.shape[1])
+
+    grid_cls_train = grid_cls[:, :i_split, :]
+    grid_cls_test = grid_cls[:, i_split:, :]
+    grid_cosmos_train = grid_cosmos[:, :i_split, :]
+    grid_cosmos_test = grid_cosmos[:, i_split:, :]
+
+    _concat_example_axis = lambda array: np.concatenate([array[i, ...] for i in range(array.shape[0])], axis=0)
+
+    grid_cls_train = _concat_example_axis(grid_cls_train)
+    grid_cls_test = _concat_example_axis(grid_cls_test)
+    grid_cosmos_train = _concat_example_axis(grid_cosmos_train)
+    grid_cosmos_test = _concat_example_axis(grid_cosmos_test)
+
+    def _augmentations(example, noise):
+        signal, label = example
+
+        if with_gaussian_noise:
+            signal += noise
+
+        if apply_log:
+            signal = tf.math.log(tf.math.abs(signal))
+
+        signal = tf.where(tf.math.is_finite(signal), signal, tf.zeros_like(signal))
+
+        return signal, label
+
+    # create the datasets
+    dset_noise = tf.data.Dataset.from_tensor_slices(noise_cls).cache().repeat().shuffle(shuffle_buffer)
+
+    dset_train = (
+        tf.data.Dataset.from_tensor_slices((grid_cls_train, grid_cosmos_train))
+        .cache()
+        .repeat()
+        .shuffle(shuffle_buffer)
+    )
+    dset_train = (
+        tf.data.Dataset.zip((dset_train, dset_noise))
+        .batch(batch_size)
+        .map(_augmentations, num_parallel_calls=num_parallel_calls, deterministic=False)
+        .prefetch(prefetch)
+    )
+
+    dset_test = tf.data.Dataset.from_tensor_slices((grid_cls_test, grid_cosmos_test)).cache()
+    dset_test = (
+        tf.data.Dataset.zip((dset_test, dset_noise))
+        .batch(batch_size)
+        .map(_augmentations, num_parallel_calls=num_parallel_calls, deterministic=True)
+        .prefetch(prefetch)
+    )
+
+    # add the white noise to the non-dataset cls too
+    rng = np.random.default_rng()
+
+    def _noise_and_log(cls):
+        if with_gaussian_noise:
+            cls += noise_cls[rng.integers(low=0, high=noise_cls.shape[0], size=cls.shape[0])]
+
+        cls = preprocessing.preprocess_human_summaries(cls, apply_log=apply_log)[0]
+
+        return cls
+
+    fidu_cls = _noise_and_log(fidu_cls)
+    grid_cls_train = _noise_and_log(grid_cls_train)
+    grid_cls_test = _noise_and_log(grid_cls_test)
+
+    out_dict = {
+        "fidu/cls": fidu_cls,
+        "grid/cls/train": grid_cls_train,
+        "grid/cls/test": grid_cls_test,
+        "grid/cosmos/train": grid_cosmos_train,
+        "grid/cosmos/test": grid_cosmos_test,
+    }
+
+    return dset_train, dset_test, out_dict
+
+
+def get_binned_power_spectra_dset_legacy(
+    base_dir,
+    # file
+    file_label=None,
+    # configuration
     conf=None,
     params=None,
     train_test_split=0.8,
@@ -31,14 +179,14 @@ def get_binned_power_spectra_dset(
     standardize=False,
     pca_components=None,
 ):
-    fidu_cls, grid_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = (
+    fidu_cls, grid_cls, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = (
         preprocessing.get_reshaped_human_summaries(
             base_dir,
             "cls",
             # file
             file_label=file_label,
             # configuration
-            conf=conf,
+            msfm_conf=conf,
             params=params,
             concat_example_dim=False,
             do_plot=False,
@@ -48,6 +196,7 @@ def get_binned_power_spectra_dset(
             with_cross_z=True,
             with_cross_probe=(with_lensing and with_clustering),
             # power spectra: scales
+            from_raw_cls=True,
             l_mins=l_mins,
             l_maxs=l_maxs,
             n_bins=n_bins,

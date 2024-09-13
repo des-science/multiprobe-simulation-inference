@@ -125,3 +125,11 @@ def load_human_summaries(
 
     LOGGER.info(f"Done loading the summaries after {LOGGER.timer.elapsed('load_summaries')}")
     return out_dict
+
+
+def load_cl_white_noise(base_dir):
+    noise_file = os.path.join(base_dir, "cls/white_noise.h5")
+    with h5py.File(noise_file, "r") as f:
+        noise_cls = f["cls/binned"][:]
+
+    return noise_cls

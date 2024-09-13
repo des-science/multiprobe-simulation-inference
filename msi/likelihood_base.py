@@ -61,8 +61,9 @@ class LikelihoodBase(ABC):
         scale_to_prior=True,
         group_params=True,
         # cosmo
-        plot_fiducial=True,
-        fiducial_point=None,
+        plot_obs=True,
+        obs_point=None,
+        obs_label="synthetic observation",
         with_des_chain=False,
         # output
         label=None,
@@ -94,8 +95,9 @@ class LikelihoodBase(ABC):
             scale_to_prior=scale_to_prior,
             group_params=group_params,
             # cosmology
-            plot_fiducial=plot_fiducial,
-            fiducial_point=fiducial_point,
+            plot_obs=plot_obs,
+            obs_point=obs_point,
+            obs_label=obs_label,
             with_des_chain=with_des_chain,
         )
 

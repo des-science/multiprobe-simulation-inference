@@ -11,12 +11,14 @@ example entails concatenating the example and cosmology axes.
 import os, re
 import numpy as np
 
+from scipy.stats import binned_statistic
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
+from msfm.utils import logger, cross_statistics, parameters, files, power_spectra, observation, scales
+from msfm.utils.input_output import read_yaml
 from msi.utils.sklearn import GeneralizedSklearnModel
 from msi.utils import plotting, input_output
-from msfm.utils import logger, cross_statistics, parameters, files, power_spectra, observation
 
 LOGGER = logger.get_logger(__file__)
 
@@ -63,7 +65,8 @@ def get_reshaped_human_summaries(
     # file
     file_label=None,
     # configuration
-    conf=None,
+    msfm_conf=None,
+    dlss_conf=None,
     params=None,
     concat_example_dim=True,
     do_plot=True,
@@ -71,13 +74,14 @@ def get_reshaped_human_summaries(
     with_lensing=True,
     with_clustering=True,
     with_cross_z=True,
-    with_cross_probe=True,
-    # CLs scale cuts
+    with_cross_probe=None,
+    # power spectra specific
+    from_raw_cls=False,
     l_mins=None,
     l_maxs=None,
     n_bins=None,
     only_keep_bins=None,
-    # peaks scale selection
+    # peaks specific
     scale_indices=None,
     # additional preprocessing
     apply_log=False,
@@ -85,11 +89,29 @@ def get_reshaped_human_summaries(
     pca_components=None,
 ):
     assert summary_type in ["cls", "peaks"], "Only cls and peaks are supported"
-    apply_cl_scale_cut = (l_mins is not None) and (l_maxs is not None) and (n_bins is not None)
+
+    msfm_conf = files.load_config(msfm_conf)
+    noise_cls = None
 
     if summary_type == "cls":
+        if dlss_conf is not None:
+            LOGGER.info(f"Reading the smoothing scale from the DLSS configuration file")
+
+            if isinstance(dlss_conf, str):
+                dlss_conf = read_yaml(dlss_conf)
+
+            theta_fwhm = (
+                dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
+            )
+
+            assert l_mins is None and l_maxs is None, f"l_mins and l_maxs are not supported for the DLSS configuration"
+
         # apply scale cuts to the raw Cls
-        if apply_cl_scale_cut:
+        if from_raw_cls:
+            assert (
+                (l_mins is not None) and (l_maxs is not None) and (n_bins is not None)
+            ), "The l_mins, l_maxs, and n_bins arguments must be provided"
+
             LOGGER.info(f"Applying scale cuts to the raw Cls")
 
             with np.printoptions(precision=1, suppress=True, floatmode="fixed"):
@@ -120,7 +142,7 @@ def get_reshaped_human_summaries(
                     l_mins,
                     l_maxs,
                     n_bins,
-                    n_side=conf["analysis"]["n_side"],
+                    n_side=msfm_conf["analysis"]["n_side"],
                     fixed_binning=False,
                 )
                 grid_summs, _ = power_spectra.bin_cls(
@@ -128,7 +150,7 @@ def get_reshaped_human_summaries(
                     l_mins,
                     l_maxs,
                     n_bins,
-                    n_side=conf["analysis"]["n_side"],
+                    n_side=msfm_conf["analysis"]["n_side"],
                     fixed_binning=False,
                 )
                 LOGGER.info(f"Done after {LOGGER.timer.elapsed('scale_cuts')}")
@@ -146,13 +168,46 @@ def get_reshaped_human_summaries(
             fidu_summs = file_dict[f"fiducial/cls/binned"]
             grid_summs = file_dict[f"grid/cls/binned"]
 
+            LOGGER.info(f"Applying scale cuts to the pre-binned Cls")
+
+            # binning
+            ells = np.arange(0, 3 * msfm_conf["analysis"]["n_side"])
+            bins = power_spectra.get_cl_bins(
+                msfm_conf["analysis"]["power_spectra"]["l_min"],
+                msfm_conf["analysis"]["power_spectra"]["l_max"],
+                msfm_conf["analysis"]["power_spectra"]["n_bins"],
+            )
+
+            # white noise
+            noise_cls = input_output.load_cl_white_noise(base_dir)
+            white_noise_sigma = (
+                dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
+                + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
+            )
+
+            n_z = len(theta_fwhm)
+            k = 0
+            for i in range(n_z):
+                for j in range(n_z):
+                    if (i == j) or (i < j):
+                        current_fwhm = max(theta_fwhm[i], theta_fwhm[j])
+                        smoothing_fac = scales.gaussian_low_pass_factor_alm(
+                            ells, theta_fwhm=current_fwhm, arcmin=dlss_conf["scale_cuts"]["arcmin"]
+                        )
+                        smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
+
+                        fidu_summs[..., k] *= smoothing_fac
+                        grid_summs[..., k] *= smoothing_fac
+                        noise_cls[..., k] *= white_noise_sigma[i] * white_noise_sigma[j]
+
+                        k += 1
+
     elif summary_type == "peaks":
         LOGGER.info(f"Loading the pre-binned peak statistics")
 
-        if apply_cl_scale_cut:
-            LOGGER.warning(
-                f"The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments"
-            )
+        LOGGER.warning(
+            f"The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments"
+        )
 
         file_dict = input_output.load_human_summaries(
             base_dir, summary_type, file_label=file_label, return_raw_cls=False
@@ -178,16 +233,20 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"With names {bin_names}")
     fidu_summs = fidu_summs[..., bin_indices]
     grid_summs = grid_summs[..., bin_indices]
+    if noise_cls is not None:
+        noise_cls = noise_cls[..., bin_indices]
 
     if only_keep_bins is not None:
         LOGGER.warning(f"Keeping only the first {only_keep_bins} bins")
         fidu_summs = fidu_summs[..., :only_keep_bins, :]
         grid_summs = grid_summs[..., :only_keep_bins, :]
+        if noise_cls is not None:
+            noise_cls = noise_cls[..., :only_keep_bins, :]
 
     # select the right cosmological parameters
-    conf = files.load_config(conf)
-    all_params = parameters.get_parameters(None, conf)
-    params = parameters.get_parameters(params, conf)
+    msfm_conf = files.load_config(msfm_conf)
+    all_params = parameters.get_parameters(None, msfm_conf)
+    params = parameters.get_parameters(params, msfm_conf)
 
     param_indices = []
     for i, param in enumerate(all_params):
@@ -205,6 +264,8 @@ def get_reshaped_human_summaries(
     # concatenate the bins along the last axis
     fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
     grid_summs = np.concatenate([grid_summs[..., i] for i in range(grid_summs.shape[-1])], axis=-1)
+    if noise_cls is not None:
+        noise_cls = np.concatenate([noise_cls[..., i] for i in range(noise_cls.shape[-1])], axis=-1)
 
     # TODO implement scale selection
     if summary_type == "peaks":
@@ -253,7 +314,7 @@ def get_reshaped_human_summaries(
                 grid_summs,
                 os.path.join(base_dir, summary_type),
                 label=label,
-                bin_size=conf["analysis"]["power_spectra"]["n_bins"] - 1,
+                bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
                 bin_names=bin_names,
             )
         elif summary_type == "peaks":
@@ -262,7 +323,7 @@ def get_reshaped_human_summaries(
                 grid_summs,
                 os.path.join(base_dir, summary_type),
                 label=label,
-                bin_size=conf["analysis"]["peak_statistics"]["n_bins"],
+                bin_size=msfm_conf["analysis"]["peak_statistics"]["n_bins"],
                 bin_names=bin_names,
             )
 
@@ -272,6 +333,10 @@ def get_reshaped_human_summaries(
     fidu_summs, _, _ = preprocess_human_summaries(
         fidu_summs, apply_log, standardize=standardize, pca_components=pca_components, scaler=scaler, pca=pca
     )
+    if noise_cls is not None:
+        noise_cls, _, _ = preprocess_human_summaries(
+            noise_cls, apply_log, standardize=standardize, pca_components=pca_components, scaler=scaler, pca=pca
+        )
 
     print("\n")
     LOGGER.info("Shapes after pre-processing")
@@ -279,7 +344,7 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
 
-    return fidu_summs, grid_summs, grid_cosmos, grid_i_sobols, file_dict, scaler, pca
+    return fidu_summs, grid_summs, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca
 
 
 def preprocess_human_summaries(
@@ -308,6 +373,8 @@ def preprocess_human_summaries(
         summaries = np.nan_to_num(summaries)
         summaries = pca.transform(summaries)
 
+    summaries = np.nan_to_num(summaries)
+
     return summaries, scaler, pca
 
 
@@ -316,6 +383,7 @@ def get_preprocessed_cl_observation(
     gc_count_map=None,
     # configuration
     conf=None,
+    from_raw_cls=False,
     # selection
     with_lensing=True,
     with_clustering=True,
@@ -346,15 +414,18 @@ def get_preprocessed_cl_observation(
 
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
     # msfm.observation.forward_model_observation_map
-    obs_cl, _ = power_spectra.bin_cls(
-        obs_cl,
-        l_mins=l_mins,
-        l_maxs=l_maxs,
-        n_bins=n_bins,
-        n_side=conf["analysis"]["n_side"],
-        with_cross=True,
-        fixed_binning=False,
-    )
+    if from_raw_cls:
+        obs_cl, _ = power_spectra.bin_cls(
+            obs_cl,
+            l_mins=l_mins,
+            l_maxs=l_maxs,
+            n_bins=n_bins,
+            n_side=conf["analysis"]["n_side"],
+            with_cross=True,
+            fixed_binning=False,
+        )
+    else:
+        obs_cl, _ = power_spectra.bin_according_to_config(obs_cl, conf)
 
     bin_indices, _ = cross_statistics.get_cross_bin_indices(
         with_lensing=with_lensing,
