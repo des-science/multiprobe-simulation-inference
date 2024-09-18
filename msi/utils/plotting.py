@@ -13,8 +13,8 @@ from trianglechain import TriangleChain
 from trianglechain.utils_plots import get_lines_and_labels
 from seaborn import color_palette
 
+from msfm.utils import parameters, logger, files, cross_statistics
 from msi.utils.chains import load_des_y3_key_project_chain
-from msfm.utils import parameters, logger, files
 
 LOGGER = logger.get_logger(__file__)
 
@@ -307,8 +307,27 @@ def plot_method_comparison(
 
 
 def plot_human_summary(
-    fidu_summs, grid_summs, out_dir=None, label=None, n_random_indices=20, bin_size=None, bin_names=None
+    fidu_summs,
+    grid_summs,
+    out_dir=None,
+    label=None,
+    n_random_indices=20,
+    bin_size=None,
+    bin_names=None,
+    yscale="log",
+    with_lensing=None,
+    with_clustering=None,
+    with_cross_z=None,
+    with_cross_probe=None,
 ):
+    if bin_names is None:
+        _, bin_names = cross_statistics.get_cross_bin_indices(
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+        )
+
     fig, ax = plt.subplots(figsize=(20, 10), nrows=2, sharex=True, sharey=True)
 
     # fiducial
@@ -317,7 +336,7 @@ def plot_human_summary(
     for i in random_indices:
         ax[0].plot(fidu_summs[i])
 
-    ax[0].set(xscale="linear", yscale="log", title="fiducial", xlabel="data vec dim", ylabel=r"$C_\ell$")
+    ax[0].set(xscale="linear", yscale=yscale, title="fiducial", xlabel="data vec dim", ylabel=r"$C_\ell$")
     ax[0].grid(True)
 
     # grid
@@ -329,16 +348,20 @@ def plot_human_summary(
     ax[1].set(title="grid", xlabel="data vec index", ylabel=r"$C_\ell$")
     ax[1].grid(True)
 
-    # cosmetics
-    if bin_size is not None and bin_names is not None:
+    # cosmetics TODO rewrite
+    if bin_size is not None:
         x = 0
         ticks = []
         for i, x in enumerate(np.arange(0, len(bin_names) * bin_size, bin_size)):
             ax[0].axvline(x, color="k", linestyle="--")
             ax[1].axvline(x, color="k", linestyle="--")
 
-            ax[0].text(x + 3, ax[0].get_ylim()[1] - 0.5 * ax[0].get_ylim()[1], bin_names[i])
-            ax[1].text(x + 3, ax[0].get_ylim()[1] - 0.5 * ax[0].get_ylim()[1], bin_names[i])
+            if yscale == "log":
+                ax[0].text(x + 3, ax[0].get_ylim()[1] - 0.5 * ax[0].get_ylim()[1], bin_names[i])
+                ax[1].text(x + 3, ax[1].get_ylim()[1] - 0.5 * ax[1].get_ylim()[1], bin_names[i])
+            else:
+                ax[0].text(x + 3, 1.1 * ax[0].get_ylim()[1], bin_names[i])
+                ax[1].text(x + 3, 1.1 * ax[1].get_ylim()[1], bin_names[i])
 
             ticks.append(x)
 

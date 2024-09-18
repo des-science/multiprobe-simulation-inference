@@ -81,6 +81,7 @@ def get_reshaped_human_summaries(
     l_maxs=None,
     n_bins=None,
     only_keep_bins=None,
+    fixed_binning=False,
     # peaks specific
     scale_indices=None,
     # additional preprocessing
@@ -94,8 +95,12 @@ def get_reshaped_human_summaries(
     noise_cls = None
 
     if summary_type == "cls":
+        if n_bins is None:
+            n_bins = msfm_conf["analysis"]["power_spectra"]["n_bins"]
+
         if dlss_conf is not None:
             LOGGER.info(f"Reading the smoothing scale from the DLSS configuration file")
+            # assert l_mins is None and l_maxs is None, f"l_mins and l_maxs are not supported for the DLSS configuration"
 
             if isinstance(dlss_conf, str):
                 dlss_conf = read_yaml(dlss_conf)
@@ -104,7 +109,10 @@ def get_reshaped_human_summaries(
                 dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
             )
 
-            assert l_mins is None and l_maxs is None, f"l_mins and l_maxs are not supported for the DLSS configuration"
+            if l_maxs is None:
+                l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
+            if l_mins is None:
+                l_mins = np.zeros_like(l_maxs, dtype=int)
 
         # apply scale cuts to the raw Cls
         if from_raw_cls:
@@ -118,7 +126,7 @@ def get_reshaped_human_summaries(
                 LOGGER.info(f"l_mins = {l_mins}")
                 LOGGER.info(f"l_maxs = {l_maxs}")
 
-                bin_names = f"l_mins={np.array(l_mins)},l_maxs={np.array(l_maxs)},n_bins={n_bins}"
+                bin_names = f"l_mins={np.array(l_mins)},l_maxs={np.array(l_maxs)},n_bins={n_bins},fixed_binning={fixed_binning}"
                 bin_names = re.sub(r"\s+", ",", bin_names)
 
                 fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{bin_names}.npy")
@@ -137,21 +145,21 @@ def get_reshaped_human_summaries(
                 )
                 LOGGER.warning(f"Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
                 LOGGER.timer.start("scale_cuts")
-                fidu_summs, _ = power_spectra.bin_cls(
+                fidu_summs, _ = power_spectra.smooth_and_bin_cls(
                     file_dict["fiducial/cls/raw"],
                     l_mins,
                     l_maxs,
                     n_bins,
                     n_side=msfm_conf["analysis"]["n_side"],
-                    fixed_binning=False,
+                    fixed_binning=fixed_binning,
                 )
-                grid_summs, _ = power_spectra.bin_cls(
+                grid_summs, _ = power_spectra.smooth_and_bin_cls(
                     file_dict["grid/cls/raw"],
                     l_mins,
                     l_maxs,
                     n_bins,
                     n_side=msfm_conf["analysis"]["n_side"],
-                    fixed_binning=False,
+                    fixed_binning=fixed_binning,
                 )
                 LOGGER.info(f"Done after {LOGGER.timer.elapsed('scale_cuts')}")
 
@@ -260,6 +268,14 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
     LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
+
+    # # TODO temporary hack
+    # fidu_summs[..., :2, :] = 1
+    # grid_summs[..., :2, :] = 1
+    # noise_cls[..., :2, :] = 1
+    # fidu_summs[..., -8:, :] = 1
+    # grid_summs[..., -8:, :] = 1
+    # noise_cls[..., -8:, :] = 1
 
     # concatenate the bins along the last axis
     fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
@@ -415,7 +431,7 @@ def get_preprocessed_cl_observation(
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
     # msfm.observation.forward_model_observation_map
     if from_raw_cls:
-        obs_cl, _ = power_spectra.bin_cls(
+        obs_cl, _ = power_spectra.smooth_and_bin_cls(
             obs_cl,
             l_mins=l_mins,
             l_maxs=l_maxs,

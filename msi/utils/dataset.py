@@ -2,7 +2,8 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 
-from msi.utils import preprocessing
+from msfm.utils import cross_statistics
+from msi.utils import preprocessing, plotting
 
 
 def get_binned_power_spectra_dset(
@@ -67,13 +68,6 @@ def get_binned_power_spectra_dset(
     grid_cls = grid_cls.astype(float_type)
     grid_cosmos = grid_cosmos.astype(float_type)
     noise_cls = noise_cls.astype(float_type)
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    i_random = np.random.randint(low=0, high=fidu_cls.shape[0], size=(n_examples_to_plot,))
-    ax.plot(fidu_cls[i_random].T, alpha=0.1)
-    ax.plot(np.mean(fidu_cls, axis=0))
-    ax.set(xlabel="(concatenated) data vector dimension", ylabel=r"$C_\ell$", title=r"fiducial $C_\ell$")
-    ax.grid(True)
 
     # split along the "examples per cosmo" axis
     i_split = int(train_test_split * grid_cls.shape[1])
@@ -142,6 +136,18 @@ def get_binned_power_spectra_dset(
     grid_cls_train = _noise_and_log(grid_cls_train)
     grid_cls_test = _noise_and_log(grid_cls_test)
 
+    plotting.plot_human_summary(
+        fidu_cls,
+        grid_cls_train,
+        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
+        n_random_indices=n_examples_to_plot,
+        yscale="linear",
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+    )
+
     out_dict = {
         "fidu/cls": fidu_cls,
         "grid/cls/train": grid_cls_train,
@@ -158,7 +164,8 @@ def get_binned_power_spectra_dset_legacy(
     # file
     file_label=None,
     # configuration
-    conf=None,
+    msfm_conf=None,
+    dlss_conf=None,
     params=None,
     train_test_split=0.8,
     n_examples_to_plot=10,
@@ -174,6 +181,7 @@ def get_binned_power_spectra_dset_legacy(
     l_mins=None,
     l_maxs=None,
     n_bins=None,
+    fixed_binning=False,
     # additional preprocessing
     apply_log=False,
     standardize=False,
@@ -186,7 +194,8 @@ def get_binned_power_spectra_dset_legacy(
             # file
             file_label=file_label,
             # configuration
-            msfm_conf=conf,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
             params=params,
             concat_example_dim=False,
             do_plot=False,
@@ -200,19 +209,13 @@ def get_binned_power_spectra_dset_legacy(
             l_mins=l_mins,
             l_maxs=l_maxs,
             n_bins=n_bins,
+            fixed_binning=fixed_binning,
             # additional preprocessing
             apply_log=apply_log,
             standardize=standardize,
             pca_components=pca_components,
         )
     )
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    i_random = np.random.randint(low=0, high=fidu_cls.shape[0], size=(n_examples_to_plot,))
-    ax.plot(fidu_cls[i_random].T, alpha=0.1)
-    ax.plot(np.mean(fidu_cls, axis=0))
-    ax.set(xlabel="(concatenated) data vector dimension", ylabel=r"$C_\ell$", title=r"fiducial $C_\ell$")
-    ax.grid(True)
 
     fidu_cls = fidu_cls.astype(float_type)
     grid_cls = grid_cls.astype(float_type)
@@ -238,6 +241,18 @@ def get_binned_power_spectra_dset_legacy(
 
     dset_test = tf.data.Dataset.from_tensor_slices((grid_cls_test, grid_cosmos_test))
     dset_test = dset_test.cache().batch(batch_size).prefetch(prefetch)
+
+    plotting.plot_human_summary(
+        fidu_cls,
+        grid_cls_train,
+        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
+        n_random_indices=n_examples_to_plot,
+        yscale="linear",
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=True,
+        with_cross_probe=(with_lensing and with_clustering),
+    )
 
     out_dict = {
         "fidu/cls": fidu_cls,
