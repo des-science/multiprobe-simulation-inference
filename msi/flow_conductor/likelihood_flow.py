@@ -399,6 +399,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         chain = mcmc.run_emcee(
             lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs, device=device),
             self.params,
+            conf=self.conf,
             out_dir=self.model_dir,
             label=label,
             n_walkers=n_walkers,
@@ -428,7 +429,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             log_prob = self.log_prob(inputs=inputs, context=context).to("cpu").numpy()
 
             # enforce the prior
-            log_prob = prior.log_posterior(theta_walkers, log_prob, params=self.params, conf=self.conf)
+            log_prob = prior.log_posterior(theta_walkers, log_prob, conf=self.conf, params=self.params)
 
         return log_prob
 

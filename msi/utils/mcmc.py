@@ -16,7 +16,7 @@ LOGGER = logger.get_logger(__file__)
 np.random.seed(12)
 
 
-def run_emcee(log_prob, params, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100):
+def run_emcee(log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
     TODO add support for Nautilus https://nautilus-sampler.readthedocs.io/en/stable/ in addition to emcee?
@@ -39,8 +39,8 @@ def run_emcee(log_prob, params, out_dir=None, label=None, n_walkers=1024, n_step
     n_params = len(params)
 
     # initial points (spread around the fiducial parameters)
-    theta_0 = np.random.normal(loc=parameters.get_fiducials(params), scale=1e-3, size=(n_walkers, n_params))
-    LOGGER.info(f"Initial values in prior: {np.all(prior.in_grid_prior(theta_0, params=params))}")
+    theta_0 = np.random.normal(loc=parameters.get_fiducials(params, conf=conf), scale=1e-3, size=(n_walkers, n_params))
+    LOGGER.info(f"Initial values in prior: {np.all(prior.in_grid_prior(theta_0, conf=conf, params=params))}")
 
     # sample burn in
     sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True)

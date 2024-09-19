@@ -148,9 +148,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
             scheduler_kwargs.setdefault("cooldown", 5)
             scheduler_kwargs.setdefault("min_delta", 1e-4)
 
-            callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="loss", verbose=0, **scheduler_kwargs
-            )
+            callback_reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor="loss", verbose=0, **scheduler_kwargs)
             callbacks.append(callback_reduce_lr)
 
         # early stopping
@@ -380,6 +378,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         chain = mcmc.run_emcee(
             lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs),
             self.params,
+            conf=self.conf,
             out_dir=self.model_dir,
             label=label,
             n_walkers=n_walkers,
