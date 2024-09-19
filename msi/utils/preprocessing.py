@@ -16,7 +16,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from msfm.utils import logger, cross_statistics, parameters, files, power_spectra, observation, scales
-from msfm.utils.input_output import read_yaml
+from deep_lss.utils import configuration
 from msi.utils.sklearn import GeneralizedSklearnModel
 from msi.utils import plotting, input_output
 
@@ -92,35 +92,31 @@ def get_reshaped_human_summaries(
     assert summary_type in ["cls", "peaks"], "Only cls and peaks are supported"
 
     msfm_conf = files.load_config(msfm_conf)
+    dlss_conf = configuration.load_deep_lss_config(dlss_conf)
+
     noise_cls = None
 
     if summary_type == "cls":
-        if n_bins is None:
-            n_bins = msfm_conf["analysis"]["power_spectra"]["n_bins"]
-
-        if dlss_conf is not None:
-            LOGGER.info(f"Reading the smoothing scale from the DLSS configuration file")
-            # assert l_mins is None and l_maxs is None, f"l_mins and l_maxs are not supported for the DLSS configuration"
-
-            if isinstance(dlss_conf, str):
-                dlss_conf = read_yaml(dlss_conf)
-
+        if l_maxs is None:
             theta_fwhm = (
                 dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
             )
-
-            if l_maxs is None:
-                l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
-            if l_mins is None:
-                l_mins = np.zeros_like(l_maxs, dtype=int)
+            l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
+            LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
+        if l_mins is None:
+            l_mins = np.zeros_like(l_maxs, dtype=int)
+            LOGGER.info(f"Using l_mins = {l_mins} by default (no smoothing)")
+        if n_bins is None:
+            n_bins = msfm_conf["analysis"]["power_spectra"]["n_bins"]
+            LOGGER.info(f"Using n_bins = {n_bins} from the msfm config")
 
         # apply scale cuts to the raw Cls
         if from_raw_cls:
+            LOGGER.warning(f"Applying scale cuts to the raw Cls, this is deprecated")
+
             assert (
                 (l_mins is not None) and (l_maxs is not None) and (n_bins is not None)
             ), "The l_mins, l_maxs, and n_bins arguments must be provided"
-
-            LOGGER.info(f"Applying scale cuts to the raw Cls")
 
             with np.printoptions(precision=1, suppress=True, floatmode="fixed"):
                 LOGGER.info(f"l_mins = {l_mins}")
@@ -202,6 +198,7 @@ def get_reshaped_human_summaries(
                         smoothing_fac = scales.gaussian_low_pass_factor_alm(
                             ells, theta_fwhm=current_fwhm, arcmin=dlss_conf["scale_cuts"]["arcmin"]
                         )
+                        # smoothing_fac = scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
                         smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
 
                         fidu_summs[..., k] *= smoothing_fac
@@ -268,14 +265,6 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
     LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
-
-    # # TODO temporary hack
-    # fidu_summs[..., :2, :] = 1
-    # grid_summs[..., :2, :] = 1
-    # noise_cls[..., :2, :] = 1
-    # fidu_summs[..., -8:, :] = 1
-    # grid_summs[..., -8:, :] = 1
-    # noise_cls[..., -8:, :] = 1
 
     # concatenate the bins along the last axis
     fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
@@ -398,13 +387,15 @@ def get_preprocessed_cl_observation(
     wl_gamma_map=None,
     gc_count_map=None,
     # configuration
-    conf=None,
+    msfm_conf=None,
+    dlss_conf=None,
+    base_dir=None,
     from_raw_cls=False,
     # selection
     with_lensing=True,
     with_clustering=True,
     with_cross_z=True,
-    with_cross_probe=True,
+    with_cross_probe=None,
     # CLs scale cuts
     l_mins=None,
     l_maxs=None,
@@ -417,12 +408,23 @@ def get_preprocessed_cl_observation(
     scaler=None,
     pca=None,
 ):
-    conf = files.load_config(conf)
+    msfm_conf = files.load_config(msfm_conf)
+    dlss_conf = configuration.load_deep_lss_config(dlss_conf)
+
+    if l_maxs is None:
+        theta_fwhm = (
+            dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
+        )
+        l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
+        LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
+    if l_mins is None:
+        l_mins = np.zeros_like(l_maxs, dtype=int)
+        LOGGER.info(f"Using l_mins = {l_mins} by default (no smoothing)")
 
     _, obs_cl, _ = observation.forward_model_observation_map(
         wl_gamma_map=wl_gamma_map,
         gc_count_map=gc_count_map,
-        conf=conf,
+        conf=msfm_conf,
         apply_norm=True,
         with_padding=True,
         nest=False,
@@ -431,17 +433,48 @@ def get_preprocessed_cl_observation(
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
     # msfm.observation.forward_model_observation_map
     if from_raw_cls:
+        LOGGER.warning(f"Applying scale cuts to the raw Cls, this is deprecated")
         obs_cl, _ = power_spectra.smooth_and_bin_cls(
             obs_cl,
-            l_mins=l_mins,
-            l_maxs=l_maxs,
+            l_mins_smoothing=l_mins,
+            l_maxs_smoothing=l_maxs,
             n_bins=n_bins,
-            n_side=conf["analysis"]["n_side"],
+            n_side=msfm_conf["analysis"]["n_side"],
             with_cross=True,
             fixed_binning=False,
         )
     else:
-        obs_cl, _ = power_spectra.bin_according_to_config(obs_cl, conf)
+        obs_cl, _ = power_spectra.smooth_and_bin_cls(
+            obs_cl,
+            l_mins_smoothing=l_mins,
+            l_maxs_smoothing=l_maxs,
+            with_cross=True,
+            fixed_binning=True,
+            n_bins=msfm_conf["analysis"]["power_spectra"]["n_bins"],
+            l_min_binning=msfm_conf["analysis"]["power_spectra"]["l_min"],
+            l_max_binning=msfm_conf["analysis"]["power_spectra"]["l_max"],
+        )
+
+    # like in get_reshaped_human_summaries
+    if base_dir is not None:
+        noise_cl = input_output.load_cl_white_noise(base_dir)[0]
+
+        white_noise_sigma = (
+            dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
+            + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
+        )
+        n_z = len(white_noise_sigma)
+        k = 0
+        for i in range(n_z):
+            for j in range(n_z):
+                if (i == j) or (i < j):
+                    noise_cl[:, k] *= white_noise_sigma[i] * white_noise_sigma[j]
+                    k += 1
+
+        obs_cl += noise_cl
+        LOGGER.info(f"Adding white noise to the observation")
+    else:
+        LOGGER.warning(f"Not adding white noise to the observation!")
 
     bin_indices, _ = cross_statistics.get_cross_bin_indices(
         with_lensing=with_lensing,
@@ -463,6 +496,15 @@ def get_preprocessed_cl_observation(
         pca_components=pca_components,
         scaler=scaler,
         pca=pca,
+    )
+
+    plotting.plot_single_power_spectrum(
+        obs_cl,
+        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
     )
 
     return obs_cl

@@ -306,6 +306,47 @@ def plot_method_comparison(
     tri.fig.savefig(out_file, bbox_inches="tight", dpi=300)
 
 
+def plot_single_power_spectrum(
+    cls,
+    bin_size=None,
+    bin_names=None,
+    yscale="linear",
+    with_lensing=None,
+    with_clustering=None,
+    with_cross_z=None,
+    with_cross_probe=None,
+    ylim=None,
+):
+    cls = np.squeeze(cls)
+
+    if bin_names is None:
+        _, bin_names = cross_statistics.get_cross_bin_indices(
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+        )
+
+    fig, ax = plt.subplots(figsize=(20, 5))
+
+    ax.plot(cls)
+    ax.set(
+        title="mock observation", xscale="linear", yscale=yscale, xlabel="data vec dim", ylabel=r"$C_\ell$", ylim=ylim
+    )
+    ax.grid(True)
+
+    # cosmetics
+    if bin_size is not None:
+        x = 0
+        ticks = []
+        for i, x in enumerate(np.arange(0, len(bin_names) * bin_size, bin_size)):
+            ax.axvline(x, color="k", linestyle="--")
+            ax.text(x + 3, 0.1, bin_names[i], transform=ax.get_xaxis_transform())
+            ticks.append(x)
+
+        ax.set_xticks(ticks)
+
+
 def plot_human_summary(
     fidu_summs,
     grid_summs,
@@ -348,7 +389,7 @@ def plot_human_summary(
     ax[1].set(title="grid", xlabel="data vec index", ylabel=r"$C_\ell$")
     ax[1].grid(True)
 
-    # cosmetics TODO rewrite
+    # cosmetics
     if bin_size is not None:
         x = 0
         ticks = []
@@ -356,12 +397,8 @@ def plot_human_summary(
             ax[0].axvline(x, color="k", linestyle="--")
             ax[1].axvline(x, color="k", linestyle="--")
 
-            if yscale == "log":
-                ax[0].text(x + 3, ax[0].get_ylim()[1] - 0.5 * ax[0].get_ylim()[1], bin_names[i])
-                ax[1].text(x + 3, ax[1].get_ylim()[1] - 0.5 * ax[1].get_ylim()[1], bin_names[i])
-            else:
-                ax[0].text(x + 3, 1.1 * ax[0].get_ylim()[1], bin_names[i])
-                ax[1].text(x + 3, 1.1 * ax[1].get_ylim()[1], bin_names[i])
+            ax[0].text(x + 3, 0.1, bin_names[i], transform=ax[0].get_xaxis_transform())
+            ax[1].text(x + 3, 0.1, bin_names[i], transform=ax[1].get_xaxis_transform())
 
             ticks.append(x)
 
