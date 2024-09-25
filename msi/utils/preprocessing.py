@@ -104,7 +104,7 @@ def get_reshaped_human_summaries(
             l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
             LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
         if l_mins is None:
-            l_mins = np.zeros_like(l_maxs, dtype=int)
+            l_mins = np.zeros_like(l_maxs)
             LOGGER.info(f"Using l_mins = {l_mins} by default (no smoothing)")
         if n_bins is None:
             n_bins = msfm_conf["analysis"]["power_spectra"]["n_bins"]
@@ -189,16 +189,27 @@ def get_reshaped_human_summaries(
                 + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
             )
 
-            n_z = len(theta_fwhm)
+            n_z = len(l_maxs)
             k = 0
             for i in range(n_z):
                 for j in range(n_z):
                     if (i == j) or (i < j):
-                        current_fwhm = max(theta_fwhm[i], theta_fwhm[j])
-                        smoothing_fac = scales.gaussian_low_pass_factor_alm(
-                            ells, theta_fwhm=current_fwhm, arcmin=dlss_conf["scale_cuts"]["arcmin"]
-                        )
-                        # smoothing_fac = scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
+                        # the theta_fwhm formulation is entirely equivalent
+                        # smoothing_fac = scales.gaussian_low_pass_factor_alm(
+                        #     ells, theta_fwhm=max(theta_fwhm[i], theta_fwhm[j]), arcmin=dlss_conf["scale_cuts"]["arcmin"]
+                        # )
+
+                        # smoothing_fac = np.ones_like(ells, dtype=np.float32)
+                        # if l_mins[i] is not None and l_mins[j] is not None:
+                        #     smoothing_fac *= scales.gaussian_high_pass_factor_alm(
+                        #         ells, l_min=max(l_mins[i], l_mins[j])
+                        #     )
+                        # if l_maxs[i] is not None and l_maxs[j] is not None:
+                        #     smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
+
+                        smoothing_fac = scales.gaussian_high_pass_factor_alm(ells, l_min=max(l_mins[i], l_mins[j]))
+                        smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
+                        smoothing_fac = smoothing_fac**2
                         smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
 
                         fidu_summs[..., k] *= smoothing_fac

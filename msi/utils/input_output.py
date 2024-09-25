@@ -73,18 +73,28 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
 
 
 def load_human_summaries(
-    base_dir, summary_type, file_label=None, return_raw_cls=False, return_fiducial=True, return_grid=True
+    base_dir,
+    summary_type,
+    file_label=None,
+    return_raw_cls=False,
+    return_fiducial=True,
+    return_grid=True,
+    cls_from_maps=False,
 ):
     LOGGER.timer.start("load_summaries")
 
     assert summary_type in ["peaks", "cls"]
 
-    if file_label is None:
-        fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{summary_type}.h5")
-        grid_file = os.path.join(base_dir, summary_type, f"grid_{summary_type}.h5")
-    else:
-        fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{summary_type}_{file_label}.h5")
-        grid_file = os.path.join(base_dir, summary_type, f"grid_{summary_type}_{file_label}.h5")
+    fidu_file = os.path.join(base_dir, summary_type, f"fiducial_{summary_type}")
+    grid_file = os.path.join(base_dir, summary_type, f"grid_{summary_type}")
+    if cls_from_maps:
+        fidu_file += "_from_maps"
+        grid_file += "_from_maps"
+    if file_label is not None:
+        fidu_file += f"_{file_label}"
+        grid_file += f"_{file_label}"
+    fidu_file += ".h5"
+    grid_file += ".h5"
 
     out_dict = {}
 
