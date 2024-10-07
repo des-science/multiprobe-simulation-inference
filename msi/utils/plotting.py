@@ -27,18 +27,27 @@ method_label_dict = {
 }
 
 param_label_dict = {
+    # cosmo
     "Om": r"$\Omega_m$",
     "s8": r"$\sigma_8$",
     "H0": r"$H_0$",
     "Ob": r"$\Omega_b$",
     "ns": r"$n_s$",
     "w0": r"$w_0$",
+    # IA
     "Aia": r"$A_{IA}$",
     "n_Aia": r"$\eta_{A_{IA}}$",
+    "bta": r"$b_{TA}$",
+    # biasing
     "bg": r"$b_g$",
+    "bg1": r"$b_{g,1}$",
+    "bg2": r"$b_{g,2}$",
+    "bg3": r"$b_{g,3}$",
+    "bg4": r"$b_{g,4}$",
     "n_bg": r"$\eta_{b_g}$",
     "bg2": r"$b_{g,2}$",
     "n_bg2": r"$\eta_{b_{g,2}}$",
+    "rg": r"$r_g$",
 }
 
 
