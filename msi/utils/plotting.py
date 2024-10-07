@@ -52,6 +52,7 @@ def plot_chains(
     file_type="png",
     # cosmetics
     title=None,
+    colors=None,
     plot_labels="chain",
     scale_to_prior=True,
     group_params=False,
@@ -159,24 +160,16 @@ def plot_chains(
 
     # multiple chains
     if isinstance(chains, list):
-        if isinstance(plot_labels, list):
-            # different parameters like https://cosmo-docs.phys.ethz.ch/trianglechain/multichains/multichains.html#plot-2-chains-with-different-parameters
-            if is_params_list_of_lists:
-                for chain, param, label in zip(chains, params, plot_labels):
-                    tri.contour_cl(chain, names=param, label=label)
-            # shared parameters
-            else:
-                for chain, label in zip(chains, plot_labels):
-                    tri.contour_cl(chain, names=params, label=label)
-        else:
-            raise NotImplementedError
+        colors = colors if isinstance(colors, list) else [colors] * len(chains)
+        plot_labels = plot_labels if isinstance(plot_labels, list) else [plot_labels] * len(chains)
+        params = params if is_params_list_of_lists else [params] * len(chains)
+
+        for chain, color, label, param in zip(chains, colors, plot_labels, params):
+            tri.contour_cl(chain, names=param, label=label, color=color)
 
     # single chain
-    elif isinstance(plot_labels, str) and isinstance(params[0], str):
-        tri.contour_cl(chains, names=params, label=plot_labels)
-
     else:
-        raise NotImplementedError
+        tri.contour_cl(chains, names=params, label=plot_labels)
 
     # DES key project chains
     if with_des_chain:
