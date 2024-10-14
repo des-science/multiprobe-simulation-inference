@@ -16,6 +16,7 @@ def get_binned_power_spectra_dset(
     params=None,
     train_test_split=0.8,
     n_examples_to_plot=10,
+    cls_from_maps=False,
     # tf.data
     batch_size=2**12,
     shuffle_buffer=2**14,
@@ -28,9 +29,12 @@ def get_binned_power_spectra_dset(
     with_cross_z=True,
     with_cross_probe=None,
     with_gaussian_noise=True,
+    bin_indices=None,
     # CLs scale cuts
     l_mins=None,
     l_maxs=None,
+    theta_fwhms=None,
+    white_noise_sigmas=None,
     n_bins=None,
     # additional preprocessing
     apply_log=True,
@@ -52,11 +56,15 @@ def get_binned_power_spectra_dset(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
+            bin_indices=bin_indices,
             # power spectra: scales
             from_raw_cls=False,
             l_mins=l_mins,
             l_maxs=l_maxs,
+            theta_fwhms=theta_fwhms,
+            white_noise_sigmas=white_noise_sigmas,
             n_bins=n_bins,
+            cls_from_maps=cls_from_maps,
             # unlike the standardization, the logarithm is not linear and has to be applied as log(signal + noise), not
             # log(signal) + log(noise)
             apply_log=False,

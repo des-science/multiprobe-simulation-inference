@@ -69,6 +69,12 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
             except KeyError:
                 LOGGER.warning(f"Could not find {h5_key} in {preds_file}")
 
+        try:
+            for h5_key in f["mocks/pred"].keys():
+                out_dict[f"mocks/pred/{h5_key}"] = f["mocks/pred"][h5_key][:]
+        except KeyError:
+            LOGGER.debug(f"Could not find mocks/pred in {preds_file}")
+
     return out_dict
 
 
@@ -82,6 +88,7 @@ def load_human_summaries(
     cls_from_maps=False,
 ):
     LOGGER.timer.start("load_summaries")
+    LOGGER.info(f"Loading summaries from {base_dir}")
 
     assert summary_type in ["peaks", "cls"]
 
@@ -102,7 +109,11 @@ def load_human_summaries(
     if return_fiducial:
         fidu_keys = ["i_example", "i_noise"]
         if summary_type == "cls":
-            fidu_keys += ["cls/binned", "cls/bin_edges"]
+            # TODO hacky
+            if cls_from_maps:
+                fidu_keys += ["cls/binned"]
+            else:
+                fidu_keys += ["cls/binned", "cls/bin_edges"]
             if return_raw_cls:
                 LOGGER.warning(f"Returning the raw Cls, this is potentially slow")
                 fidu_keys += ["cls/raw"]
@@ -121,7 +132,11 @@ def load_human_summaries(
     if return_grid:
         grid_keys = ["cosmo", "i_example", "i_noise", "i_sobol"]
         if summary_type == "cls":
-            grid_keys += ["cls/binned", "cls/bin_edges"]
+            # TODO hacky
+            if cls_from_maps:
+                grid_keys += ["cls/binned"]
+            else:
+                grid_keys += ["cls/binned", "cls/bin_edges"]
             if return_raw_cls:
                 grid_keys += ["cls/raw"]
         elif summary_type == "peaks":
@@ -132,6 +147,12 @@ def load_human_summaries(
                 dict_key = f"grid/{h5_key}"
                 out_dict[dict_key] = f[h5_key][:]
                 LOGGER.info(f"{dict_key:<18} = {out_dict[dict_key].shape}")
+
+    # TODO hacky
+    if cls_from_maps:
+        out_dict["grid/cosmo"] = np.repeat(
+            out_dict["grid/cosmo"][:, np.newaxis, :], out_dict["grid/cls/binned"].shape[1], axis=1
+        )
 
     LOGGER.info(f"Done loading the summaries after {LOGGER.timer.elapsed('load_summaries')}")
     return out_dict

@@ -48,7 +48,7 @@ def get_reshaped_network_preds(
 
     # combine the example and cosmology axes
     grid_preds = np.concatenate(grid_preds, axis=0)
-    grid_cosmos = np.repeat(grid_cosmos, grid_preds.shape[0] // grid_cosmos.shape[0], axis=0)
+    grid_cosmos = np.concatenate(grid_cosmos, axis=0)
 
     print("\n")
     LOGGER.info(f"Shapes after concatenation and selection:")
@@ -76,12 +76,16 @@ def get_reshaped_human_summaries(
     with_cross_z=True,
     with_cross_probe=None,
     # power spectra specific
+    bin_indices=None,
     from_raw_cls=False,
     l_mins=None,
     l_maxs=None,
+    theta_fwhms=None,
+    white_noise_sigmas=None,
     n_bins=None,
     only_keep_bins=None,
     fixed_binning=False,
+    cls_from_maps=False,
     # peaks specific
     scale_indices=None,
     # additional preprocessing
@@ -97,11 +101,22 @@ def get_reshaped_human_summaries(
     noise_cls = None
 
     if summary_type == "cls":
-        if l_maxs is None:
-            theta_fwhm = (
+        if theta_fwhms is None:
+            theta_fwhms = (
                 dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
             )
-            l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
+            LOGGER.info(f"Using theta_fwhm = {theta_fwhms} from the dlss config")
+        if white_noise_sigmas is None:
+            white_noise_sigmas = (
+                dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
+                + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
+            )
+            LOGGER.info(f"Using white_noise_sigma = {white_noise_sigmas} from the dlss config")
+        if l_maxs is None:
+            theta_fwhms = (
+                dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
+            )
+            l_maxs = scales.angle_to_ell(np.array(theta_fwhms), arcmin=dlss_conf["scale_cuts"]["arcmin"])
             LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
         if l_mins is None:
             l_mins = np.zeros_like(l_maxs)
@@ -167,7 +182,11 @@ def get_reshaped_human_summaries(
         else:
             LOGGER.info(f"Loading the pre-binned Cls")
             file_dict = input_output.load_human_summaries(
-                base_dir, summary_type, file_label=file_label, return_raw_cls=False
+                base_dir,
+                summary_type,
+                file_label=file_label,
+                cls_from_maps=cls_from_maps,
+                return_raw_cls=False,
             )
             fidu_summs = file_dict[f"fiducial/cls/binned"]
             grid_summs = file_dict[f"grid/cls/binned"]
@@ -184,10 +203,6 @@ def get_reshaped_human_summaries(
 
             # white noise
             noise_cls = input_output.load_cl_white_noise(base_dir)
-            white_noise_sigma = (
-                dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
-                + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
-            )
 
             n_z = len(l_maxs)
             k = 0
@@ -207,14 +222,28 @@ def get_reshaped_human_summaries(
                         # if l_maxs[i] is not None and l_maxs[j] is not None:
                         #     smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
 
-                        smoothing_fac = scales.gaussian_high_pass_factor_alm(ells, l_min=max(l_mins[i], l_mins[j]))
-                        smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
+                        if l_mins[i] is not None and l_mins[j] is not None:
+                            l_min = max(l_mins[i], l_mins[j])
+                        else:
+                            raise ValueError("l_mins must be provided")
+
+                        if l_maxs[i] is not None and l_maxs[j] is not None:
+                            l_max = min(l_maxs[i], l_maxs[j])
+                            theta_fwhms = None
+                        elif theta_fwhms[i] is not None and theta_fwhms[j] is not None:
+                            l_max = None
+                            theta_fwhms = max(theta_fwhms[i], theta_fwhms[j])
+                        else:
+                            raise ValueError("l_maxs or theta_fwhms must be provided")
+
+                        smoothing_fac = scales.gaussian_high_pass_factor_alm(ells, l_min=l_min)
+                        smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=l_max, theta_fwhm=theta_fwhms)
                         smoothing_fac = smoothing_fac**2
                         smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
 
                         fidu_summs[..., k] *= smoothing_fac
                         grid_summs[..., k] *= smoothing_fac
-                        noise_cls[..., k] *= white_noise_sigma[i] * white_noise_sigma[j]
+                        noise_cls[..., k] *= white_noise_sigmas[i] * white_noise_sigmas[j]
 
                         k += 1
 
@@ -237,16 +266,18 @@ def get_reshaped_human_summaries(
     grid_cosmos = file_dict["grid/cosmo"]
     grid_i_sobols = file_dict["grid/i_sobol"]
 
-    bin_indices, bin_names = cross_statistics.get_cross_bin_indices(
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-    )
+    if bin_indices is None:
+        bin_indices, bin_names = cross_statistics.get_cross_bin_indices(
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+        )
+        LOGGER.info(f"Using the bin names {bin_names}")
 
-    # select the right auto and cross bins
+    # select the right auto and cross bins)
+    assert isinstance(bin_indices, (list, np.ndarray)), "bin_indices must be a list or numpy array"
     LOGGER.info(f"Using the bin indices {bin_indices}")
-    LOGGER.info(f"With names {bin_names}")
     fidu_summs = fidu_summs[..., bin_indices]
     grid_summs = grid_summs[..., bin_indices]
     if noise_cls is not None:
@@ -412,6 +443,7 @@ def get_preprocessed_cl_observation(
     l_maxs=None,
     n_bins=None,
     only_keep_bins=None,
+    bin_indices=None,
     # additional preprocessing
     apply_log=False,
     standardize=False,
@@ -487,12 +519,16 @@ def get_preprocessed_cl_observation(
     else:
         LOGGER.warning(f"Not adding white noise to the observation!")
 
-    bin_indices, _ = cross_statistics.get_cross_bin_indices(
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-    )
+    if bin_indices is None:
+        bin_indices, _ = cross_statistics.get_cross_bin_indices(
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+        )
+
+    assert isinstance(bin_indices, (list, np.ndarray)), "bin_indices must be a list or numpy array"
+    LOGGER.info(f"Using the bin indices {bin_indices}")
     obs_cl = obs_cl[..., bin_indices]
     if only_keep_bins is not None:
         obs_cl = obs_cl[..., :only_keep_bins, :]
