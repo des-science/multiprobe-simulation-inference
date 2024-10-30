@@ -53,15 +53,22 @@ def run_emcee(log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1
     LOGGER.info(f"Starting the main MCMC chain ({n_steps} steps)")
     sampler.run_mcmc(state, n_steps, progress=True)
 
-    # save the result
     chain = sampler.get_chain(flat=True)
+    log_probs = sampler.get_log_prob(flat=True)
+
+    # get MAP
+    MAP_params = chain[np.argmax(log_probs)]
+    LOGGER.info(f"MAP parameters: " + str({p: np.round(v, 3) for p, v in zip(params, MAP_params)}))
+
+    # save the result
     if out_dir is not None:
-        if label is not None:
-            out_file = os.path.join(out_dir, f"chain_{label}.npy")
-        else:
-            out_file = os.path.join(out_dir, f"chain.npy")
-        np.save(out_file, chain)
-        LOGGER.info(f"Saved the MCMC chain to {out_file}")
+        chain_file = os.path.join(out_dir, f"chain_{label}.npy" if label else "chain.npy")
+        log_probs_file = os.path.join(out_dir, f"log_probs_{label}.npy" if label else "log_probs.npy")
+
+        np.save(chain_file, chain)
+        np.save(log_probs_file, log_probs)
+
+        LOGGER.info(f"Saved the MCMC chain to {chain_file}")
     else:
         LOGGER.warning(f"Not saving the MCMC chain")
 
