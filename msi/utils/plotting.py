@@ -40,13 +40,17 @@ param_label_dict = {
     "bta": r"$b_{TA}$",
     # biasing
     "bg": r"$b_g$",
+    "n_bg": r"$\eta_{b_g}$",
+    "qbg": r"$b_{g,2}$",
+    "n_qbg": r"$\eta_{b_{g,2}}$",
     "bg1": r"$b_{g,1}$",
     "bg2": r"$b_{g,2}$",
     "bg3": r"$b_{g,3}$",
     "bg4": r"$b_{g,4}$",
-    "n_bg": r"$\eta_{b_g}$",
-    "bg2": r"$b_{g,2}$",
-    "n_bg2": r"$\eta_{b_{g,2}}$",
+    "qbg1": r"$b_{g,1}^q$",
+    "qbg2": r"$b_{g,2}^q$",
+    "qbg3": r"$b_{g,3}^q$",
+    "qbg4": r"$b_{g,4}^q$",
     "rg": r"$r_g$",
 }
 
@@ -66,6 +70,7 @@ def plot_chains(
     scale_to_prior=True,
     group_params=False,
     tri_kwargs={},
+    density=False,
     # cosmo
     plot_obs=True,
     obs_point=None,
@@ -107,11 +112,14 @@ def plot_chains(
         # check that all of the params are supported
         config_params = (
             conf["analysis"]["params"]["cosmo"]
-            + conf["analysis"]["params"]["ia"]
+            + conf["analysis"]["params"]["ia"]["nla"]
             + conf["analysis"]["params"]["bg"]["linear"]
         )
 
-        if conf["analysis"]["modelling"]["quadratic_biasing"]:
+        if conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
+            config_params += conf["analysis"]["params"]["ia"]["tatt"]
+
+        if conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
             config_params += conf["analysis"]["params"]["bg"]["quadratic"]
 
         assert all([param in config_params for param in all_params])
@@ -151,19 +159,25 @@ def plot_chains(
     else:
         grouping_kwargs = {}
 
+    tri_kwargs.setdefault("fill", True)
+    tri_kwargs.setdefault("show_values", False)
+    tri_kwargs.setdefault("n_ticks", 3)
+    tri_kwargs.setdefault("grid", True)
+    tri_kwargs.setdefault("scatter_kwargs", {"s": 500, "marker": "*", "zorder": 299})
+
     # initialize plot
     tri = TriangleChain(
         params=all_params,
         ranges=ranges,
-        show_values=False,
+        # show_values=False,
         # cosmetics
         labels=[param_label_dict[param] for param in all_params],
-        n_ticks=3,
-        grid=True,
-        fill=True,
+        # n_ticks=3,
+        # grid=True,
+        # fill=True,
         de_kwargs=de_kwargs,
         grouping_kwargs=grouping_kwargs,
-        scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
+        # scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
         **tri_kwargs,
     )
 
@@ -176,9 +190,15 @@ def plot_chains(
         for chain, color, label, param in zip(chains, colors, plot_labels, params):
             tri.contour_cl(chain, names=param, label=label, color=color)
 
+            if density:
+                tri.density_image(chain, names=param, label=label)
+
     # single chain
     else:
-        tri.contour_cl(chains, names=params, label=plot_labels)
+        tri.contour_cl(chains, names=params, label=plot_labels, color=colors)
+
+        if density:
+            tri.density_image(chains, names=params, label=plot_labels)
 
     # DES key project chains
     if with_des_chain:
@@ -219,7 +239,7 @@ def plot_chains(
     # fiducial
     if plot_obs:
         if obs_point is None:
-            obs_point = dict(zip(all_params, parameters.get_fiducials(all_params)))
+            obs_point = dict(zip(all_params, parameters.get_fiducials(all_params, conf=conf)))
 
         tri.scatter(
             obs_point,
@@ -228,6 +248,7 @@ def plot_chains(
             color="k",
             scatter_vline_1D=True,
             show_legend=True,
+            alpha=1,
         )
 
     # title
