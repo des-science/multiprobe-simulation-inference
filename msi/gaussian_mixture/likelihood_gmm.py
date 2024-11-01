@@ -374,6 +374,10 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         x_obs = tf.cast(x_obs, dtype=self.floatx)
         if x_obs.ndim == 1:
             x_obs = tf.expand_dims(x_obs, axis=0)
+        if x_obs.shape[0] == 1:
+            LOGGER.info(f"Sampling the posterior from a single observation")
+        else:
+            LOGGER.info(f"Sampling the posterior from multiple observations")
 
         chain = mcmc.run_emcee(
             lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs),
@@ -391,14 +395,28 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
 
         return chain
 
-    def _mcmc_log_posterior(self, theta_walkers, x_obs):
+    def _single_log_posterior(self, theta_walkers, x_obs):
         """theta_walkers.shape = (n_walkers, theta_dim)"""
+        assert x_obs.shape[0] == 1
 
         # evaluate the mixture model
         log_prob = self.log_likelihood(x_obs, theta_walkers, return_numpy=True)
 
         # enforce the prior
         log_prob = prior.log_posterior(theta_walkers, log_prob, params=self.params, conf=self.conf)
+
+        return log_prob
+
+    def _mcmc_log_posterior(self, theta_walkers, x_obs):
+        assert x_obs.ndim == 2
+
+        if x_obs.shape[0] == 1:
+            log_prob = self._single_log_posterior(theta_walkers, x_obs)
+        else:
+            log_prob = np.zeros((theta_walkers.shape[0]))
+            for x in x_obs:
+                x = tf.expand_dims(x, axis=0)
+                log_prob += self._single_log_posterior(theta_walkers, x)
 
         return log_prob
 

@@ -392,6 +392,10 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
         x_obs = torch.atleast_2d(x_obs)
+        if x_obs.shape[0] == 1:
+            LOGGER.info(f"Sampling the posterior from a single observation")
+        else:
+            LOGGER.info(f"Sampling the posterior from multiple observations")
 
         self.to(device)
         self.eval()
@@ -415,8 +419,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         return chain
 
-    def _mcmc_log_posterior(self, theta_walkers, x_obs, device="cuda"):
+    def _single_log_posterior(self, theta_walkers, x_obs, device="cuda"):
         """theta_walkers.shape = (n_walkers, theta_dim)"""
+        assert x_obs.shape[0] == 1
 
         # FlowConductor doesn't broadcast the context, so we have to do it manually
         inputs = x_obs.repeat(theta_walkers.shape[0], 1)
@@ -430,6 +435,21 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
             # enforce the prior
             log_prob = prior.log_posterior(theta_walkers, log_prob, conf=self.conf, params=self.params)
+
+        return log_prob
+
+    def _mcmc_log_posterior(self, theta_walkers, x_obs, device="cuda"):
+        """theta_walkers.shape = (n_walkers, theta_dim)"""
+
+        assert x_obs.ndim == 2
+
+        if x_obs.shape[0] == 1:
+            log_prob = self._single_log_posterior(theta_walkers, x_obs, device=device)
+        else:
+            log_prob = np.zeros((theta_walkers.shape[0]))
+            for x in x_obs:
+                x = torch.atleast_2d(x)
+                log_prob += self._single_log_posterior(theta_walkers, x, device=device)
 
         return log_prob
 
