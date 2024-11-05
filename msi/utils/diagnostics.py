@@ -27,27 +27,22 @@ def _assert_and_return_grid_pred_shapes(grid_preds_true, grid_preds_sample):
     Returns:
         ints: The shapes.
     """
-
-    assert (
-        grid_preds_true.ndim == grid_preds_sample.ndim == 3
-    ), "grid_preds_gt and grid_preds_samples must have 3 dims containing (n_cosmos, n_samples/n_examples, n_summaries)"
     assert grid_preds_true.shape[0] == grid_preds_sample.shape[0], "n_cosmos must be the same for both arrays"
-    assert grid_preds_true.shape[2] == grid_preds_sample.shape[2], "n_summaries must be the same for both arrays"
+    assert grid_preds_true.shape[-1] == grid_preds_sample.shape[-1], "n_summaries must be the same for both arrays"
+    assert (
+        grid_preds_sample.ndim == 3
+    ), "grid_preds_sample must have 3 dims containing (n_cosmos, n_samples, n_summaries)"
 
-    # shared
     n_cosmos = grid_preds_true.shape[0]
-    n_summaries = grid_preds_true.shape[2]
-
-    # different
-    n_examples = grid_preds_true.shape[1]
+    n_summaries = grid_preds_true.shape[-1]
     n_samples = grid_preds_sample.shape[1]
 
-    return (
-        n_cosmos,
-        n_summaries,
-        n_examples,
-        n_samples,
-    )
+    if grid_preds_true.ndim == 3:
+        n_examples = grid_preds_true.shape[1]
+    elif grid_preds_true.ndim == 2:
+        n_examples = 1
+
+    return n_cosmos, n_summaries, n_examples, n_samples
 
 
 def plot_histogram_check(grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=None):
@@ -109,16 +104,25 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
         grid_preds_true (ndarray): The true predicted summaries (directly from the CosmoGrid evaluations) of shape
             (n_cosmos, n_examples, n_summaries).
         grid_preds_sample (ndarray): Samples from the model of shape (n_cosmos, n_samples, n_summaries).
-        plot_per_summary_dim_hist (bool, optional): Whether to plot the per summary dimension histograms. Defaults to 
+        plot_per_summary_dim_hist (bool, optional): Whether to plot the per summary dimension histograms. Defaults to
             True.
         out_dir (str, optional): The output directory to save the plot to. Defaults to None, then it isn't saved.
     """
 
-    _, n_summaries, _, _ = _assert_and_return_grid_pred_shapes(grid_preds_true, grid_preds_sample)
+    _, n_summaries, n_examples, _ = _assert_and_return_grid_pred_shapes(grid_preds_true, grid_preds_sample)
 
     # "true" network predictions
-    mean_true = np.mean(grid_preds_true, axis=1)
-    std_true = np.std(grid_preds_true, axis=1)
+    if n_examples > 1:
+        mean_true = np.mean(grid_preds_true, axis=1)
+        std_true = np.std(grid_preds_true, axis=1)
+    else:
+        raise NotImplementedError
+        mean_true = grid_preds_true
+        # the std should have to be computed within a single cosmology
+        std_true = np.std(grid_preds_true, axis=0)
+        # https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/notebooks/utils_plots.py#L1268C51-L1268C60
+        # https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/notebooks/figures_deeplss_paper1.ipynb
+        # https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/notebooks/likemodel_check.ipynb
 
     # samples from the model
     mean_sample = np.mean(grid_preds_sample, axis=1)
@@ -149,7 +153,7 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
     if out_dir is not None:
         fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_relative_stat.png"), bbox_inches="tight", dpi=100)
 
-    if plot_per_summary_dim_hist and n_summaries < 20:
+    if plot_per_summary_dim_hist and n_summaries < 20 and n_examples != 1:
         fig, ax = plt.subplots(figsize=(15, 5), ncols=n_summaries, nrows=2)
 
         # per summary dimension mean
@@ -208,13 +212,6 @@ def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_co
     assert grid_cosmos.shape[0] == n_cosmos, "n_cosmos must be the same for grid_cosmos and grid_preds"
     assert grid_cosmos.ndim == 2, "grid_cosmos must have 2 dims containing (n_cosmos, n_params)"
 
-    # shape (n_cosmos, n_examples)
-    log_probs_true = model.log_likelihood(
-        grid_preds_true,
-        np.repeat(grid_cosmos[:, np.newaxis, :], grid_preds_true.shape[1], axis=1),
-        return_numpy=True,
-    )
-
     # shape (n_cosmos, n_samples)
     log_probs_sample = model.log_likelihood(
         grid_preds_sample,
@@ -222,26 +219,58 @@ def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_co
         return_numpy=True,
     )
 
-    # empirical expected coverage probability
-    eecp = np.zeros((n_cosmos, n_examples, n_confidence_levels))
+    if n_examples > 1:
+        # shape (n_cosmos, n_examples)
+        log_probs_true = model.log_likelihood(
+            grid_preds_true,
+            np.repeat(grid_cosmos[:, np.newaxis, :], grid_preds_true.shape[1], axis=1),
+            return_numpy=True,
+        )
+        # empirical expected coverage probability
+        eecp = np.zeros((n_cosmos, n_examples, n_confidence_levels))
 
-    # cosmos
-    for i in LOGGER.progressbar(range(n_cosmos), at_level="info", desc="EECP: looping through cosmos"):
-        sample_log_prob = log_probs_sample[i]
-        sample_log_prob = np.sort(sample_log_prob)[::-1]
+        # cosmos
+        for i in LOGGER.progressbar(range(n_cosmos), at_level="info", desc="EECP: looping through cosmos"):
+            sample_log_prob = log_probs_sample[i]
+            sample_log_prob = np.sort(sample_log_prob)[::-1]
 
-        # shape (n_conficence_levels,)
-        log_prob_at_cls = sample_log_prob[:: n_samples // n_confidence_levels]
+            # shape (n_conficence_levels,)
+            log_prob_at_cls = sample_log_prob[:: n_samples // n_confidence_levels]
 
-        # examples
-        for j in range(n_examples):
-            true_log_prob = log_probs_true[i, j]
+            # examples
+            for j in range(n_examples):
+                true_log_prob = log_probs_true[i, j]
+
+                # per cosmology
+                eecp[i, j] = true_log_prob >= log_prob_at_cls
+
+        # mean over all cosmologies and examples
+        eecp = np.mean(eecp, axis=(0, 1))
+
+    else:
+        # shape (n_cosmos)
+        log_probs_true = model.log_likelihood(
+            grid_preds_true,
+            grid_cosmos,
+            return_numpy=True,
+        )
+        # empirical expected coverage probability
+        eecp = np.zeros((n_cosmos, n_confidence_levels))
+
+        # cosmos
+        for i in LOGGER.progressbar(range(n_cosmos), at_level="info", desc="EECP: looping through cosmos"):
+            sample_log_prob = log_probs_sample[i]
+            sample_log_prob = np.sort(sample_log_prob)[::-1]
+
+            # shape (n_conficence_levels,)
+            log_prob_at_cls = sample_log_prob[:: n_samples // n_confidence_levels]
+            true_log_prob = log_probs_true[i]
 
             # per cosmology
-            eecp[i, j] = true_log_prob >= log_prob_at_cls
+            eecp[i] = true_log_prob >= log_prob_at_cls
 
-    # mean over all cosmologies and examples
-    eecp = np.mean(eecp, axis=(0, 1))
+        # mean over all cosmologies
+        eecp = np.mean(eecp, axis=0)
 
     # plot
     true_coverage = np.linspace(0, 1, n_confidence_levels)
@@ -276,6 +305,7 @@ def plot_tarp_check(
     randoms_dependence=False,
     np_seed=17,
     # plotting
+    n_bootstrap=100,
     n_sigma=2,
     out_dir=None,
 ):
@@ -359,32 +389,52 @@ def plot_tarp_check(
     else:
         raise ValueError
 
-    # there's multiple truth samples for each cosmology in this case
-    ecps, alphas = [], []
-    for i in LOGGER.progressbar(range(n_examples), at_level="info", desc="TARP: looping through examples"):
-        # shape (n_sims, n_dim), these are summaries x from the true distribution p(x|theta) in this case
-        truth = grid_preds_true[:, i, :]
-        randoms = get_randoms(truth.shape)
+    if n_examples > 1:
+        LOGGER.info(f"TARP uncertainty from {n_examples} examples per cosmology")
+
+        # there's multiple truth samples for each cosmology in this case
+        ecps, alphas = [], []
+        for i in LOGGER.progressbar(range(n_examples), at_level="info", desc="TARP: looping through examples"):
+            # shape (n_sims, n_dim), these are summaries x from the true distribution p(x|theta) in this case
+            truth = grid_preds_true[:, i, :]
+            randoms = get_randoms(truth.shape)
+
+            ecp, alpha = get_tarp_coverage(
+                # shape (n_samples, n_sims, n_dim)
+                samples=grid_preds_sample,
+                # shape (n_sims, n_dim)
+                theta=truth,
+                references=randoms,
+                metric="euclidean",
+                # this could be used in addition to the sample loop
+                bootstrap=False,
+                norm=False,
+            )
+            ecps.append(ecp)
+            alphas.append(alpha)
+
+        # the alphas are all the same
+        alpha = alphas[0]
+
+        ecp_mean = np.mean(ecps, axis=0)
+        ecp_std = np.std(ecps, axis=0)
+
+    else:
+        LOGGER.info(f"TARP uncertainty from {n_bootstrap} bootstrap samples")
 
         ecp, alpha = get_tarp_coverage(
             # shape (n_samples, n_sims, n_dim)
             samples=grid_preds_sample,
             # shape (n_sims, n_dim)
-            theta=truth,
-            references=randoms,
+            theta=grid_preds_true,
+            references=get_randoms(grid_preds_true.shape),
             metric="euclidean",
-            # this could be used in addition to the sample loop
-            bootstrap=False,
+            bootstrap=True,
+            num_bootstrap=n_bootstrap,
             norm=False,
         )
-        ecps.append(ecp)
-        alphas.append(alpha)
-
-    # the alphas are all the same
-    alpha = alphas[0]
-
-    ecp_mean = np.mean(ecps, axis=0)
-    ecp_std = np.std(ecps, axis=0)
+        ecp_mean = np.mean(ecp, axis=0)
+        ecp_std = np.std(ecp, axis=0)
 
     fig, ax = plt.subplots(figsize=(5, 5))
 

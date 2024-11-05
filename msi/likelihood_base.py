@@ -106,6 +106,7 @@ class LikelihoodBase(ABC):
         grid_preds_true,
         grid_cosmos,
         # sampling
+        n_cosmos=None,
         n_samples=100,
         batch_size=10000,
         # flags
@@ -120,10 +121,12 @@ class LikelihoodBase(ABC):
         distribution.
 
         Args:
-            grid_preds_true (ndarray): Array of shape (n_cosmos, n_examples, n_summary) true predictions for each
-                cosmology in the grid. These are used as the true baseline to compare to.
+            grid_preds_true (ndarray): Array of shape (n_cosmos, n_examples, n_summary) or (n_cosmos, n_summary) true
+                predictions for each cosmology in the grid. These are used as the true baseline to compare to.
             grid_cosmos (ndarray): Array of shape (n_cosmos, n_params) of the cosmologies in the grid. This is used
                 to condition the flow and sample from it.
+            n_cosmos (int, optional): Number of cosmologies to select randomly from the grid. Defaults to None, then
+                all cosmologies are used.
             n_samples (int, optional): Number of samples per cosmology. Defaults to 100.
             batch_size (int, optional): Batch size for sampling. Defaults to 4096.
 
@@ -133,19 +136,34 @@ class LikelihoodBase(ABC):
         """
 
         assert grid_preds_true.shape[0] == grid_cosmos.shape[0], "n_cosmos must be the same for both arrays"
-        assert (
-            grid_preds_true.ndim == 3
-        ), "grid_preds_true must have 3 dims containing (n_cosmos, n_samples, n_summaries)"
         assert grid_cosmos.ndim == 2, "grid_cosmos must have 2 dims containing (n_cosmos, n_params)"
 
-        LOGGER.info(f"Drawing samples from the likelihood")
+        if grid_preds_true.ndim == 2:
+            LOGGER.warning(
+                f"grid_preds_true.shape = {grid_preds_true.shape}, for sobol sequence + latin hypercube sampling"
+            )
+        elif grid_preds_true.ndim == 3:
+            LOGGER.warning(f"grid_preds_true.shape = {grid_preds_true.shape}, for sobol sequence")
+        else:
+            raise ValueError(f"grid_preds_true.ndim = {grid_preds_true.ndim} not supported")
+
+        if n_cosmos is not None:
+            LOGGER.info(f"Selecting {n_cosmos} random cosmologies")
+            random_indices = np.random.choice(grid_preds_true.shape[0], n_cosmos, replace=False)
+            grid_preds_true = grid_preds_true[random_indices]
+            grid_cosmos = grid_cosmos[random_indices]
+
         LOGGER.timer.start("sampling")
+        LOGGER.info(f"Drawing samples from the likelihood")
         grid_preds_sample = self.sample_likelihood(
             grid_cosmos, n_samples=n_samples, batch_size=batch_size, return_numpy=True
         )
         LOGGER.info(f"Done drawing samples after {LOGGER.timer.elapsed('sampling')}")
 
         if do_hist:
+            assert (
+                grid_preds_true.ndim == 3
+            ), "grid_preds_true must have 3 dims containing (n_cosmos, n_samples, n_summaries)"
             diagnostics.plot_histogram_check(
                 grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=self.model_dir
             )
@@ -158,7 +176,7 @@ class LikelihoodBase(ABC):
                 grid_preds_true, grid_preds_sample, grid_cosmos, out_dir=self.model_dir, **tarp_kwargs
             )
 
-        # n_cosmos, n_samples, n_summary
+        # (n_cosmos, n_samples, n_summary)
         return grid_preds_sample
 
     def _plot_epochs(self, train_losses, vali_losses):
