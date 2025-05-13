@@ -60,6 +60,7 @@ class LikelihoodBase(ABC):
         # cosmetics
         scale_to_prior=True,
         group_params=True,
+        density=False,
         # cosmo
         plot_obs=True,
         obs_point=None,
@@ -94,6 +95,7 @@ class LikelihoodBase(ABC):
             plot_labels=self.label,
             scale_to_prior=scale_to_prior,
             group_params=group_params,
+            density=density,
             # cosmology
             plot_obs=plot_obs,
             obs_point=obs_point,
@@ -110,10 +112,10 @@ class LikelihoodBase(ABC):
         n_samples=100,
         batch_size=10000,
         # flags
-        do_hist=True,
-        do_dlss=True,
-        do_eecp=True,
-        do_tarp=True,
+        do_hist=False,
+        do_dlss=False,
+        do_eecp=False,
+        do_tarp=False,
         tarp_kwargs={},
     ):
         """

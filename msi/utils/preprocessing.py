@@ -24,37 +24,57 @@ LOGGER = logger.get_logger(__file__)
 
 
 def get_reshaped_network_preds(
-    base_dir, model_dir, n_steps=None, file_label=None, preds_file=None, n_params=None, n_perms_per_cosmo=None
+    base_dir,
+    model_dir,
+    n_steps=None,
+    file_label=None,
+    preds_file=None,
+    n_params=None,
+    n_perms_per_cosmo=None,
+    with_fidu=True,
+    with_grid=True,
 ):
     file_dict = input_output.load_network_preds(
         base_dir, model_dir, n_steps=n_steps, file_label=file_label, preds_file=preds_file
     )
 
-    fidu_preds = file_dict["fiducial/vali/pred"]
-    grid_preds = file_dict["grid/pred"]
-    grid_cosmos = file_dict["grid/cosmo"]
-
-    # only relevant for the likelihood loss
-    fidu_preds = fidu_preds[..., :n_params]
-    grid_preds = grid_preds[..., :n_params]
-
-    # only take a subset of the permutations
-    if n_perms_per_cosmo is not None:
-        LOGGER.warning(f"Only taking the first {n_perms_per_cosmo} permutations per cosmology")
-        LOGGER.warning(f"n_patches and n_noise are hard-coded here!")
-        n_patches = 4
-        n_noise = 3
-        grid_preds = grid_preds[:, : (n_perms_per_cosmo * n_patches * n_noise), :]
-
-    # combine the example and cosmology axes
-    grid_preds = np.concatenate(grid_preds, axis=0)
-    grid_cosmos = np.concatenate(grid_cosmos, axis=0)
-
     print("\n")
     LOGGER.info(f"Shapes after concatenation and selection:")
-    LOGGER.info(f"fidu_preds  = {fidu_preds.shape}")
-    LOGGER.info(f"grid_preds  = {grid_preds.shape}")
-    LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+
+    if with_fidu:
+        fidu_preds = file_dict["fiducial/vali/pred"]
+
+        # only relevant for the likelihood loss
+        fidu_preds = fidu_preds[..., :n_params]
+
+        LOGGER.info(f"fidu_preds  = {fidu_preds.shape}")
+    else:
+        fidu_preds = None
+
+    if with_grid:
+        grid_preds = file_dict["grid/pred"]
+        grid_cosmos = file_dict["grid/cosmo"]
+
+        # only relevant for the likelihood loss
+        grid_preds = grid_preds[..., :n_params]
+
+        # only take a subset of the permutations
+        if n_perms_per_cosmo is not None:
+            LOGGER.warning(f"Only taking the first {n_perms_per_cosmo} permutations per cosmology")
+            LOGGER.warning(f"n_patches and n_noise are hard-coded here!")
+            n_patches = 4
+            n_noise = 3
+            grid_preds = grid_preds[:, : (n_perms_per_cosmo * n_patches * n_noise), :]
+
+        # combine the example and cosmology axes
+        grid_preds = np.concatenate(grid_preds, axis=0)
+        grid_cosmos = np.concatenate(grid_cosmos, axis=0)
+
+        LOGGER.info(f"grid_preds  = {grid_preds.shape}")
+        LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
+    else:
+        grid_preds = None
+        grid_cosmos = None
 
     return fidu_preds, grid_preds, grid_cosmos, file_dict
 
@@ -75,6 +95,8 @@ def get_reshaped_human_summaries(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
+    with_fiducial=True,
+    with_grid=True,
     # power spectra specific
     bin_indices=None,
     from_raw_cls=False,
@@ -94,6 +116,7 @@ def get_reshaped_human_summaries(
     pca_components=None,
 ):
     assert summary_type in ["cls", "peaks"], "Only cls and peaks are supported"
+    assert with_fiducial or with_grid, "At least one of with_fiducial and with_grid must be True"
 
     msfm_conf = files.load_config(msfm_conf)
     dlss_conf = configuration.load_deep_lss_config(dlss_conf)
@@ -428,11 +451,13 @@ def preprocess_human_summaries(
 def get_preprocessed_cl_observation(
     wl_gamma_map=None,
     gc_count_map=None,
+    obs_cl=None,
     # configuration
     msfm_conf=None,
     dlss_conf=None,
     base_dir=None,
     from_raw_cls=False,
+    nest_in=False,
     # selection
     with_lensing=True,
     with_clustering=True,
@@ -468,9 +493,9 @@ def get_preprocessed_cl_observation(
         wl_gamma_map=wl_gamma_map,
         gc_count_map=gc_count_map,
         conf=msfm_conf,
-        apply_norm=True,
+        apply_norm=False,
         with_padding=True,
-        nest=False,
+        nest_in=nest_in,
     )
 
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by

@@ -58,6 +58,7 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
     if return_training:
         h5_keys.append("fiducial/train/pred")
 
+    LOGGER.info(f"Loading predictions from {preds_file}")
     with h5py.File(preds_file, "r") as f:
         LOGGER.info(f"Array shapes:")
 

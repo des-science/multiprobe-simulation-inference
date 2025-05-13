@@ -46,7 +46,7 @@ def run_emcee(log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1
     sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True)
 
     LOGGER.info(f"Starting the burn in MCMC chain ({n_burnin_steps} steps)")
-    state = sampler.run_mcmc(theta_0, n_burnin_steps)
+    state = sampler.run_mcmc(theta_0, n_burnin_steps, progress=True)
     sampler.reset()
 
     # run the actual chain
