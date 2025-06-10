@@ -179,7 +179,7 @@ class LikelihoodBase(ABC):
             )
 
         # (n_cosmos, n_samples, n_summary)
-        return grid_preds_sample
+        return grid_preds_sample, grid_preds_true, grid_cosmos
 
     def _plot_epochs(self, train_losses, vali_losses):
         """Produce a diagnostics plot of the loss curves after training has finished"""

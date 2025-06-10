@@ -120,6 +120,7 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
         mean_true = grid_preds_true
         # the std should have to be computed within a single cosmology
         std_true = np.std(grid_preds_true, axis=0)
+        std_true = np.repeat(std_true[np.newaxis, :], grid_preds_sample.shape[0], axis=0)
         # https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/notebooks/utils_plots.py#L1268C51-L1268C60
         # https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/notebooks/figures_deeplss_paper1.ipynb
         # https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/notebooks/likemodel_check.ipynb
@@ -193,9 +194,11 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
             fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=100)
 
 
-def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_confidence_levels=100, out_dir=None):
-    """Plot the Expected Empirical Coverage Probability (EECP) developed in https://arxiv.org/pdf/2211.12346 for a
-    given model. Note that this test was also performed in Appendix A.3 of https://arxiv.org/pdf/2211.12346.
+def plot_eecp_check(
+    grid_preds_true, grid_preds_sample, grid_cosmos, model, n_confidence_levels=100, out_dir=None, do_plot=True
+):
+    """Plot the Expected Empirical Coverage Probability (EECP) developed in https://joerihermans.com/papers/crisissbi.pdf
+    for a given model. Note that this test was also performed in Appendix A.3 of https://arxiv.org/pdf/2211.12346.
 
     Args:
         grid_preds_true (ndarray): The true predicted summaries (directly from the CosmoGrid evaluations) of shape
@@ -275,24 +278,28 @@ def plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, model, n_co
     # plot
     true_coverage = np.linspace(0, 1, n_confidence_levels)
 
-    fig, ax = plt.subplots(figsize=(5, 5))
+    if do_plot:
+        fig, ax = plt.subplots(figsize=(5, 5))
 
-    ax.plot(true_coverage, eecp, label="model")
-    ax.plot([0, 1], [0, 1], color="k", linestyle="--", label="ideal")
+        ax.plot(true_coverage, eecp, label="HPD")
+        ax.plot([0, 1], [0, 1], color="k", linestyle="--", label="ideal")
 
-    ax.set(
-        title="Expected Empirical Coverage Probability (EECP)",
-        xlabel="credibility level",
-        ylabel="empirical coverage",
-        aspect="equal",
-    )
-    ax.text(0.2, 0.5, "underconfident", fontsize="large", alpha=0.5, rotation=45)
-    ax.text(0.5, 0.2, "overconfident", fontsize="large", alpha=0.5, rotation=45)
-    ax.legend(loc="upper left")
-    ax.grid(True)
+        ax.set(
+            title="Expected Empirical Coverage Probability (EECP)",
+            xlabel="credibility level",
+            # ylabel="empirical coverage",
+            ylabel="expected coverage",
+            aspect="equal",
+        )
+        ax.text(0.2, 0.5, "underconfident", fontsize="large", alpha=0.5, rotation=45)
+        ax.text(0.5, 0.2, "overconfident", fontsize="large", alpha=0.5, rotation=45)
+        ax.legend(loc="upper left")
+        ax.grid(True)
 
-    if out_dir is not None:
-        fig.savefig(os.path.join(out_dir, "diagnostic_eecp.png"), bbox_inches="tight", dpi=100)
+        if out_dir is not None:
+            fig.savefig(os.path.join(out_dir, "diagnostic_eecp.png"), bbox_inches="tight", dpi=100)
+    else:
+        return true_coverage, eecp
 
 
 def plot_tarp_check(
@@ -305,9 +312,12 @@ def plot_tarp_check(
     randoms_dependence=False,
     np_seed=17,
     # plotting
+    do_plot=True,
     n_bootstrap=100,
+    n_alpha_bins=None,
     n_sigma=2,
     out_dir=None,
+    eps=1e-10,
 ):
     """Plot the Tests of Accuracy with Random Points (TARP) diagnostic introduced in https://arxiv.org/pdf/2302.03026
     from https://github.com/Ciela-Institute/tarp.
@@ -350,8 +360,8 @@ def plot_tarp_check(
     low = np.min(grid_preds_true, axis=(0, 1), keepdims=True)
     high = np.max(grid_preds_true, axis=(0, 1), keepdims=True)
 
-    grid_preds_true = (grid_preds_true - low) / (high - low + 1e-10)
-    grid_preds_sample = (grid_preds_sample - low) / (high - low + 1e-10)
+    grid_preds_true = (grid_preds_true - low) / (high - low + eps)
+    grid_preds_sample = (grid_preds_sample - low) / (high - low + eps)
 
     # define how the random reference points are generated
     rng = np.random.default_rng(seed=np_seed)
@@ -432,32 +442,36 @@ def plot_tarp_check(
             bootstrap=True,
             num_bootstrap=n_bootstrap,
             norm=False,
+            num_alpha_bins=n_alpha_bins,
         )
         ecp_mean = np.mean(ecp, axis=0)
         ecp_std = np.std(ecp, axis=0)
 
-    fig, ax = plt.subplots(figsize=(5, 5))
+    if do_plot:
+        fig, ax = plt.subplots(figsize=(5, 5))
 
-    ax.plot(alpha, ecp_mean, label="model")
-    ax.fill_between(
-        alpha,
-        ecp_mean - n_sigma * ecp_std,
-        ecp_mean + n_sigma * ecp_std,
-        label=str(n_sigma) + r"$\sigma$ uncertainty",
-        alpha=0.3,
-    )
-    ax.plot([0, 1], [0, 1], color="k", ls="--", label="ideal")
-    ax.set(
-        title="Tests of Accuracy with Random Points (TARP)",
-        xlabel="credibility level",
-        ylabel="expected coverage",
-        aspect="equal",
-    )
-    ax.legend(loc="upper left")
-    ax.grid(True)
+        ax.plot(alpha, ecp_mean, label="DRP")
+        ax.fill_between(
+            alpha,
+            ecp_mean - n_sigma * ecp_std,
+            ecp_mean + n_sigma * ecp_std,
+            label=str(n_sigma) + r"$\sigma$",
+            alpha=0.3,
+        )
+        ax.plot([0, 1], [0, 1], color="k", ls="--", label="ideal")
+        ax.set(
+            title="Tests of Accuracy with Random Points (TARP)",
+            xlabel="credibility level",
+            ylabel="expected coverage",
+            aspect="equal",
+        )
+        ax.legend(loc="upper left")
+        ax.grid(True)
 
-    if out_dir is not None:
-        fig.savefig(os.path.join(out_dir, "diagnostic_tarp.png"), bbox_inches="tight", dpi=100)
+        if out_dir is not None:
+            fig.savefig(os.path.join(out_dir, "diagnostic_tarp.png"), bbox_inches="tight", dpi=100)
+    else:
+        return alpha, ecp_mean, ecp_std
 
 
 def plot_sbc_checks():
