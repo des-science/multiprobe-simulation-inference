@@ -1,9 +1,10 @@
 import tensorflow as tf
 import numpy as np
-import matplotlib.pyplot as plt
 
-from msfm.utils import cross_statistics
+from msfm.utils import logger
 from msi.utils import preprocessing, plotting
+
+LOGGER = logger.get_logger(__file__)
 
 
 def get_binned_power_spectra_dset(
@@ -40,57 +41,45 @@ def get_binned_power_spectra_dset(
     apply_log=True,
     standardize=False,
 ):
-    fidu_cls, grid_cls, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = (
-        preprocessing.get_reshaped_human_summaries(
-            base_dir,
-            "cls",
-            file_label=file_label,
-            # configuration
-            msfm_conf=msfm_conf,
-            dlss_conf=dlss_conf,
-            params=params,
-            concat_example_dim=False,
-            do_plot=False,
-            # selection
-            with_lensing=with_lensing,
-            with_clustering=with_clustering,
-            with_cross_z=with_cross_z,
-            with_cross_probe=with_cross_probe,
-            bin_indices=bin_indices,
-            # power spectra: scales
-            from_raw_cls=False,
-            l_mins=l_mins,
-            l_maxs=l_maxs,
-            theta_fwhms=theta_fwhms,
-            white_noise_sigmas=white_noise_sigmas,
-            n_bins=n_bins,
-            cls_from_maps=cls_from_maps,
-            # unlike the standardization, the logarithm is not linear and has to be applied as log(signal + noise), not
-            # log(signal) + log(noise)
-            apply_log=False,
-            standardize=standardize,
-        )
+    out_dict = preprocessing.get_binned_power_spectra(
+        base_dir=base_dir,
+        # file
+        file_label=file_label,
+        # configuration
+        msfm_conf=msfm_conf,
+        dlss_conf=dlss_conf,
+        params=params,
+        train_test_split=train_test_split,
+        n_examples_to_plot=n_examples_to_plot,
+        cls_from_maps=cls_from_maps,
+        concat_bin_dim=True,
+        # selection
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        with_gaussian_noise=with_gaussian_noise,
+        bin_indices=bin_indices,
+        # Cls scale cuts
+        l_mins=l_mins,
+        l_maxs=l_maxs,
+        theta_fwhms=theta_fwhms,
+        white_noise_sigmas=white_noise_sigmas,
+        n_bins=n_bins,
+        # additional preprocessing
+        apply_log=apply_log,
+        standardize=standardize,
     )
 
-    fidu_cls = fidu_cls.astype(float_type)
-    grid_cls = grid_cls.astype(float_type)
-    grid_cosmos = grid_cosmos.astype(float_type)
-    noise_cls = noise_cls.astype(float_type)
+    for key in out_dict:
+        if isinstance(out_dict[key], np.ndarray):
+            out_dict[key] = out_dict[key].astype(float_type)
 
-    # split along the "examples per cosmo" axis
-    i_split = int(train_test_split * grid_cls.shape[1])
-
-    grid_cls_train = grid_cls[:, :i_split, :]
-    grid_cls_test = grid_cls[:, i_split:, :]
-    grid_cosmos_train = grid_cosmos[:, :i_split, :]
-    grid_cosmos_test = grid_cosmos[:, i_split:, :]
-
-    _concat_example_axis = lambda array: np.concatenate([array[i, ...] for i in range(array.shape[0])], axis=0)
-
-    grid_cls_train = _concat_example_axis(grid_cls_train)
-    grid_cls_test = _concat_example_axis(grid_cls_test)
-    grid_cosmos_train = _concat_example_axis(grid_cosmos_train)
-    grid_cosmos_test = _concat_example_axis(grid_cosmos_test)
+    grid_cls_train = out_dict["grid/cls/train"]
+    grid_cls_test = out_dict["grid/cls/test"]
+    grid_cosmos_train = out_dict["grid/cosmos/train"]
+    grid_cosmos_test = out_dict["grid/cosmos/test"]
+    noise_cls = out_dict["noise/cls"]
 
     def _augmentations(example, noise):
         signal, label = example
@@ -129,161 +118,7 @@ def get_binned_power_spectra_dset(
         .prefetch(prefetch)
     )
 
-    # add the white noise to the non-dataset cls too
-    rng = np.random.default_rng()
-
-    def _noise_and_log(cls):
-        if with_gaussian_noise:
-            cls += noise_cls[rng.integers(low=0, high=noise_cls.shape[0], size=cls.shape[0])]
-
-        cls = preprocessing.preprocess_human_summaries(cls, apply_log=apply_log)[0]
-
-        return cls
-
-    fidu_cls = _noise_and_log(fidu_cls)
-    grid_cls_train = _noise_and_log(grid_cls_train)
-    grid_cls_test = _noise_and_log(grid_cls_test)
-
-    plotting.plot_human_summary(
-        fidu_cls,
-        grid_cls_train,
-        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
-        n_random_indices=n_examples_to_plot,
-        yscale="linear",
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-    )
-
-    out_dict = {
-        "fidu/cls": fidu_cls,
-        "grid/cls/train": grid_cls_train,
-        "grid/cls/test": grid_cls_test,
-        "grid/cosmos/train": grid_cosmos_train,
-        "grid/cosmos/test": grid_cosmos_test,
-    }
-
     return dset_train, dset_test, out_dict
-
-
-def get_noisy_cls(
-    base_dir,
-    # file
-    file_label=None,
-    # configuration
-    msfm_conf=None,
-    dlss_conf=None,
-    params=None,
-    train_test_split=0.8,
-    n_examples_to_plot=10,
-    cls_from_maps=False,
-    float_type=np.float32,
-    # selection
-    with_lensing=True,
-    with_clustering=True,
-    with_cross_z=True,
-    with_cross_probe=None,
-    with_gaussian_noise=True,
-    bin_indices=None,
-    # CLs scale cuts
-    l_mins=None,
-    l_maxs=None,
-    theta_fwhms=None,
-    white_noise_sigmas=None,
-    n_bins=None,
-    # additional preprocessing
-    apply_log=True,
-    standardize=False,
-):
-    fidu_cls, grid_cls, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = (
-        preprocessing.get_reshaped_human_summaries(
-            base_dir,
-            "cls",
-            file_label=file_label,
-            # configuration
-            msfm_conf=msfm_conf,
-            dlss_conf=dlss_conf,
-            params=params,
-            concat_example_dim=False,
-            do_plot=False,
-            # selection
-            with_lensing=with_lensing,
-            with_clustering=with_clustering,
-            with_cross_z=with_cross_z,
-            with_cross_probe=with_cross_probe,
-            bin_indices=bin_indices,
-            # power spectra: scales
-            from_raw_cls=False,
-            l_mins=l_mins,
-            l_maxs=l_maxs,
-            theta_fwhms=theta_fwhms,
-            white_noise_sigmas=white_noise_sigmas,
-            n_bins=n_bins,
-            cls_from_maps=cls_from_maps,
-            # unlike the standardization, the logarithm is not linear and has to be applied as log(signal + noise), not
-            # log(signal) + log(noise)
-            apply_log=False,
-            standardize=standardize,
-        )
-    )
-
-    fidu_cls = fidu_cls.astype(float_type)
-    grid_cls = grid_cls.astype(float_type)
-    grid_cosmos = grid_cosmos.astype(float_type)
-    noise_cls = noise_cls.astype(float_type)
-
-    # split along the "examples per cosmo" axis
-    i_split = int(train_test_split * grid_cls.shape[1])
-
-    grid_cls_train = grid_cls[:, :i_split, :]
-    grid_cls_test = grid_cls[:, i_split:, :]
-    grid_cosmos_train = grid_cosmos[:, :i_split, :]
-    grid_cosmos_test = grid_cosmos[:, i_split:, :]
-
-    _concat_example_axis = lambda array: np.concatenate([array[i, ...] for i in range(array.shape[0])], axis=0)
-
-    grid_cls_train = _concat_example_axis(grid_cls_train)
-    grid_cls_test = _concat_example_axis(grid_cls_test)
-    grid_cosmos_train = _concat_example_axis(grid_cosmos_train)
-    grid_cosmos_test = _concat_example_axis(grid_cosmos_test)
-
-    # add the white noise to the non-dataset cls too
-    rng = np.random.default_rng()
-
-    def _noise_and_log(cls):
-        if with_gaussian_noise:
-            cls += noise_cls[rng.integers(low=0, high=noise_cls.shape[0], size=cls.shape[0])]
-
-        cls = preprocessing.preprocess_human_summaries(cls, apply_log=apply_log)[0]
-
-        return cls
-
-    fidu_cls = _noise_and_log(fidu_cls)
-    grid_cls_train = _noise_and_log(grid_cls_train)
-    grid_cls_test = _noise_and_log(grid_cls_test)
-
-    plotting.plot_human_summary(
-        fidu_cls,
-        grid_cls_train,
-        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
-        n_random_indices=n_examples_to_plot,
-        yscale="linear",
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-    )
-
-    out_dict = {
-        "fidu/cls": fidu_cls,
-        "grid/cls/train": grid_cls_train,
-        "grid/cls/test": grid_cls_test,
-        "grid/cosmos/train": grid_cosmos_train,
-        "grid/cosmos/test": grid_cosmos_test,
-    }
-
-    return out_dict
 
 
 def get_binned_power_spectra_dset_legacy(

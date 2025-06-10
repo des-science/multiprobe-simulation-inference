@@ -89,6 +89,7 @@ def get_reshaped_human_summaries(
     dlss_conf=None,
     params=None,
     concat_example_dim=True,
+    concat_bin_dim=True,
     do_plot=True,
     # selection
     with_lensing=True,
@@ -332,10 +333,11 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
 
     # concatenate the bins along the last axis
-    fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
-    grid_summs = np.concatenate([grid_summs[..., i] for i in range(grid_summs.shape[-1])], axis=-1)
-    if noise_cls is not None:
-        noise_cls = np.concatenate([noise_cls[..., i] for i in range(noise_cls.shape[-1])], axis=-1)
+    if concat_bin_dim:
+        fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
+        grid_summs = np.concatenate([grid_summs[..., i] for i in range(grid_summs.shape[-1])], axis=-1)
+        if noise_cls is not None:
+            noise_cls = np.concatenate([noise_cls[..., i] for i in range(noise_cls.shape[-1])], axis=-1)
 
     # TODO implement scale selection
     if summary_type == "peaks":
@@ -448,6 +450,131 @@ def preprocess_human_summaries(
     return summaries, scaler, pca
 
 
+def get_binned_power_spectra(
+    base_dir,
+    # file
+    file_label=None,
+    # configuration
+    msfm_conf=None,
+    dlss_conf=None,
+    params=None,
+    train_test_split=0.8,
+    n_examples_to_plot=10,
+    cls_from_maps=False,
+    concat_bin_dim=True,
+    # selection
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    with_gaussian_noise=True,
+    bin_indices=None,
+    # CLs scale cuts
+    l_mins=None,
+    l_maxs=None,
+    theta_fwhms=None,
+    white_noise_sigmas=None,
+    n_bins=None,
+    # additional preprocessing
+    apply_log=True,
+    standardize=False,
+):
+    """like msi.utils.dataset.get_binned_power_spectra_dset, but without the TensorFlow dependency and dset"""
+
+    if concat_bin_dim == False:
+        LOGGER.warning("concat_example_dim = False should not be used when training networks, it's just for plotting")
+
+    fidu_cls, grid_cls, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = get_reshaped_human_summaries(
+        base_dir,
+        "cls",
+        file_label=file_label,
+        # configuration
+        msfm_conf=msfm_conf,
+        dlss_conf=dlss_conf,
+        params=params,
+        concat_example_dim=False,
+        concat_bin_dim=concat_bin_dim,
+        do_plot=False,
+        # selection
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        bin_indices=bin_indices,
+        # power spectra: scales
+        from_raw_cls=False,
+        l_mins=l_mins,
+        l_maxs=l_maxs,
+        theta_fwhms=theta_fwhms,
+        white_noise_sigmas=white_noise_sigmas,
+        n_bins=n_bins,
+        cls_from_maps=cls_from_maps,
+        # unlike the standardization, the logarithm is not linear and has to be applied as log(signal + noise), not
+        # log(signal) + log(noise)
+        apply_log=False,
+        standardize=standardize,
+    )
+
+    # TODO sort grid cosmologies
+    i_sort = np.argsort(grid_i_sobols, axis=0)
+    i_sort = i_sort[:, 0]
+    grid_cls = grid_cls[i_sort]
+    grid_cosmos = grid_cosmos[i_sort]
+
+    # split along the "examples per cosmo" axis
+    i_split = int(train_test_split * grid_cls.shape[1])
+
+    grid_cls_train = grid_cls[:, :i_split, :]
+    grid_cls_test = grid_cls[:, i_split:, :]
+    grid_cosmos_train = grid_cosmos[:, :i_split, :]
+    grid_cosmos_test = grid_cosmos[:, i_split:, :]
+
+    _concat_example_axis = lambda array: np.concatenate([array[i, ...] for i in range(array.shape[0])], axis=0)
+
+    grid_cls_train = _concat_example_axis(grid_cls_train)
+    grid_cls_test = _concat_example_axis(grid_cls_test)
+    grid_cosmos_train = _concat_example_axis(grid_cosmos_train)
+    grid_cosmos_test = _concat_example_axis(grid_cosmos_test)
+
+    rng = np.random.default_rng()
+
+    def _noise_and_log(cls):
+        if with_gaussian_noise:
+            cls += noise_cls[rng.integers(low=0, high=noise_cls.shape[0], size=cls.shape[0])]
+
+        cls = preprocess_human_summaries(cls, apply_log=apply_log)[0]
+
+        return cls
+
+    fidu_cls = _noise_and_log(fidu_cls)
+    grid_cls_train = _noise_and_log(grid_cls_train)
+    grid_cls_test = _noise_and_log(grid_cls_test)
+
+    plotting.plot_human_summary(
+        fidu_cls,
+        grid_cls_train,
+        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
+        n_random_indices=n_examples_to_plot,
+        yscale="linear",
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+    )
+
+    out_dict = {
+        "fidu/cls": fidu_cls,
+        "grid/cls/train": grid_cls_train,
+        "grid/cls/test": grid_cls_test,
+        "grid/cosmos/train": grid_cosmos_train,
+        "grid/cosmos/test": grid_cosmos_test,
+        "noise/cls": noise_cls,
+        "grid/i_sobols": grid_i_sobols,
+    }
+
+    return out_dict
+
+
 def get_preprocessed_cl_observation(
     wl_gamma_map=None,
     gc_count_map=None,
@@ -475,7 +602,16 @@ def get_preprocessed_cl_observation(
     pca_components=None,
     scaler=None,
     pca=None,
+    # plotting
+    make_plot=True,
+    obs_label=None,
 ):
+    """To forward model a mock observation like the Buzzards"""
+
+    assert (obs_cl is not None) or (
+        (wl_gamma_map is not None) and (gc_count_map is not None)
+    ), "Either obs_cl or wl_gamma_map and gc_count_map must be provided"
+
     msfm_conf = files.load_config(msfm_conf)
     dlss_conf = configuration.load_deep_lss_config(dlss_conf)
 
@@ -489,14 +625,15 @@ def get_preprocessed_cl_observation(
         l_mins = np.zeros_like(l_maxs, dtype=int)
         LOGGER.info(f"Using l_mins = {l_mins} by default (no smoothing)")
 
-    _, obs_cl, _ = observation.forward_model_observation_map(
-        wl_gamma_map=wl_gamma_map,
-        gc_count_map=gc_count_map,
-        conf=msfm_conf,
-        apply_norm=False,
-        with_padding=True,
-        nest_in=nest_in,
-    )
+    if obs_cl is None:
+        _, obs_cl, _ = observation.forward_model_observation_map(
+            wl_gamma_map=wl_gamma_map,
+            gc_count_map=gc_count_map,
+            conf=msfm_conf,
+            apply_norm=False,
+            with_padding=True,
+            nest_in=nest_in,
+        )
 
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
     # msfm.observation.forward_model_observation_map
@@ -570,13 +707,15 @@ def get_preprocessed_cl_observation(
         pca=pca,
     )
 
-    plotting.plot_single_power_spectrum(
-        obs_cl,
-        bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-    )
+    if make_plot:
+        plotting.plot_single_power_spectrum(
+            obs_cl,
+            bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            out_file=f"./{obs_label}.png",
+        )
 
     return obs_cl
