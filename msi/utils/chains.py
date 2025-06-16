@@ -69,7 +69,10 @@ param_correspondence = {
     # only if a2 == 0 and bias_ta == 0
     "Aia": "a1",
     "n_Aia": "alpha1",
-    # "bg":
+    "bg1": "b1",
+    "bg2": "b2",
+    "bg3": "b3",
+    "bg4": "b4",
 }
 
 
