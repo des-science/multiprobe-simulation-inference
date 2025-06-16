@@ -18,6 +18,19 @@ from msi.utils.chains import load_des_y3_key_project_chain
 
 LOGGER = logger.get_logger(__file__)
 
+# plt.rcParams.update(
+#     {
+#         "font.size": 64,
+#         "axes.titlesize": 64,
+#         "axes.labelsize": 64,
+#         "xtick.labelsize": 64,
+#         "ytick.labelsize": 64,
+#         # "legend.fontsize": 64,
+#         "legend.fontsize": 96,
+#         "figure.titlesize": 64,
+#     }
+# )
+
 method_label_dict = {
     "gp_abc": "GP ABC",
     "flow_likelihood": "flow (likelihood)",
@@ -30,6 +43,7 @@ param_label_dict = {
     # cosmo
     "Om": r"$\Omega_m$",
     "s8": r"$\sigma_8$",
+    "S8": r"$S_8$",
     "H0": r"$H_0$",
     "Ob": r"$\Omega_b$",
     "ns": r"$n_s$",
@@ -64,16 +78,19 @@ def plot_chains(
     file_label=None,
     file_type="png",
     # cosmetics
+    tri_kwargs={},
     title=None,
     colors=None,
     plot_labels="chain",
-    scale_to_prior=True,
     group_params=False,
-    tri_kwargs={},
     density=False,
+    show_legend=True,
+    scale_to_prior=True,
+    ranges=None,
     # cosmo
     plot_obs=True,
     obs_point=None,
+    obs_as_star=False,
     obs_label="synthetic observation",
     with_des_chain=False,
     des_tri="upper",
@@ -110,15 +127,13 @@ def plot_chains(
         all_params = set.union(*map(set, params))
 
         # check that all of the params are supported
-        config_params = (
-            conf["analysis"]["params"]["cosmo"]
-            + conf["analysis"]["params"]["ia"]["nla"]
-            + conf["analysis"]["params"]["bg"]["linear"]
-        )
+        config_params = conf["analysis"]["params"]["cosmo"].copy()
 
+        config_params += conf["analysis"]["params"]["ia"]["nla"]
         if conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
             config_params += conf["analysis"]["params"]["ia"]["tatt"]
 
+        config_params += conf["analysis"]["params"]["bg"]["linear"]
         if conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
             config_params += conf["analysis"]["params"]["bg"]["quadratic"]
 
@@ -132,26 +147,35 @@ def plot_chains(
         all_params = params
 
     n_cosmo_params = sum([param in conf["analysis"]["params"]["cosmo"] for param in all_params])
+
+    n_ia_params = sum(
+        [
+            param in conf["analysis"]["params"]["ia"]["nla"] + conf["analysis"]["params"]["ia"]["tatt"]
+            for param in all_params
+        ]
+    )
     n_bg_params = sum(
         [
             param in conf["analysis"]["params"]["bg"]["linear"] + conf["analysis"]["params"]["bg"]["quadratic"]
             for param in all_params
         ]
     )
-    n_ia_params = sum([param in conf["analysis"]["params"]["ia"] for param in all_params])
+
     includes_clustering_params = n_bg_params > 0
     includes_lensing_params = n_ia_params > 0
 
-    if scale_to_prior:
-        ranges = dict(zip(all_params, parameters.get_prior_intervals(all_params, conf=conf)))
+    if ranges is None:
+        if scale_to_prior:
+            ranges = dict(zip(all_params, parameters.get_prior_intervals(all_params, conf=conf)))
+        else:
+            ranges = {}
+    elif isinstance(ranges, list):
+        ranges = dict(zip(all_params, ranges))
+    elif isinstance(ranges, dict):
+        pass
     else:
-        ranges = None
+        raise ValueError("ranges must be a list or a dict")
 
-    # density estimation kwargs, used to smooth the plots, have to be defined globally
-    de_kwargs = {
-        "smoothing_parameter1D": 0.5,
-        "smoothing_parameter2D": 0.5,
-    }
     if group_params:
         n_per_group = [n_cosmo_params, n_ia_params, n_bg_params]
         n_per_group = list(filter(lambda x: x != 0, n_per_group))
@@ -164,20 +188,15 @@ def plot_chains(
     tri_kwargs.setdefault("n_ticks", 3)
     tri_kwargs.setdefault("grid", True)
     tri_kwargs.setdefault("scatter_kwargs", {"s": 500, "marker": "*", "zorder": 299})
+    tri_kwargs.setdefault("de_kwargs", {"smoothing_parameter1D": 0.2, "smoothing_parameter2D": 0.2})
 
     # initialize plot
     tri = TriangleChain(
         params=all_params,
         ranges=ranges,
-        # show_values=False,
         # cosmetics
         labels=[param_label_dict[param] for param in all_params],
-        # n_ticks=3,
-        # grid=True,
-        # fill=True,
-        de_kwargs=de_kwargs,
         grouping_kwargs=grouping_kwargs,
-        # scatter_kwargs={"s": 500, "marker": "*", "zorder": 299},
         **tri_kwargs,
     )
 
@@ -204,8 +223,7 @@ def plot_chains(
     if with_des_chain:
         # clustering params (2x2pt)
         if includes_clustering_params and not includes_lensing_params:
-            # TODO treat the (per bin) galaxy bias somehow?
-            des_params = ["Om", "s8"]
+            des_params = ["Om", "s8", "bg1", "bg2", "bg3", "bg4"]
             des_probes = "2x2pt"
             des_ia = "tatt"
         # lensing params (1x2pt)
@@ -215,9 +233,7 @@ def plot_chains(
             des_ia = "tatt"
         # combined probes (3x2pt)
         else:
-            # TODO treat the (per bin) galaxy bias somehow?
-            # des_params = ["Om", "s8", "Aia", "n_Aia"]
-            des_params = ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia"]
+            des_params = ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia", "bg1", "bg2", "bg3", "bg4"]
             des_probes = "3x2pt"
             des_ia = "nla"
 
@@ -241,15 +257,18 @@ def plot_chains(
         if obs_point is None:
             obs_point = dict(zip(all_params, parameters.get_fiducials(all_params, conf=conf)))
 
-        tri.scatter(
-            obs_point,
-            label=obs_label,
-            plot_histograms_1D=False,
-            color="k",
-            scatter_vline_1D=True,
-            show_legend=True,
-            alpha=1,
-        )
+        if obs_as_star:
+            tri.scatter(
+                obs_point,
+                label=obs_label,
+                plot_histograms_1D=False,
+                color="k",
+                scatter_vline_1D=True,
+                show_legend=show_legend,
+                alpha=1,
+            )
+        else:
+            tri.axlines(obs_point, color="k", show_legend=show_legend)
 
     # title
     if title is not None:
@@ -264,7 +283,7 @@ def plot_chains(
         else:
             out_file = os.path.join(out_dir, f"contours.{file_type}")
 
-        tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=300)
+        tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=100)
         LOGGER.info(f"Saved the plot to {out_file}")
     else:
         LOGGER.warning(f"Not saving the plot")
@@ -339,6 +358,7 @@ def plot_single_power_spectrum(
     with_cross_z=None,
     with_cross_probe=None,
     ylim=None,
+    out_file=None,
 ):
     cls = np.squeeze(cls)
 
@@ -368,6 +388,12 @@ def plot_single_power_spectrum(
             ticks.append(x)
 
         ax.set_xticks(ticks)
+
+    if out_file is not None:
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        fig.savefig(out_file, bbox_inches="tight", dpi=100)
+
+    return fig, ax
 
 
 def plot_human_summary(
