@@ -37,6 +37,8 @@ def get_binned_power_spectra_dset(
     theta_fwhms=None,
     white_noise_sigmas=None,
     n_bins=None,
+    keep_first_i_bins=None,
+    keep_last_i_bins=None,
     # additional preprocessing
     apply_log=True,
     standardize=False,
@@ -66,6 +68,8 @@ def get_binned_power_spectra_dset(
         theta_fwhms=theta_fwhms,
         white_noise_sigmas=white_noise_sigmas,
         n_bins=n_bins,
+        keep_first_i_bins=keep_first_i_bins,
+        keep_last_i_bins=keep_last_i_bins,
         # additional preprocessing
         apply_log=apply_log,
         standardize=standardize,

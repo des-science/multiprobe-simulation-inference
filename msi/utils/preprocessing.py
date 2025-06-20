@@ -106,7 +106,8 @@ def get_reshaped_human_summaries(
     theta_fwhms=None,
     white_noise_sigmas=None,
     n_bins=None,
-    only_keep_bins=None,
+    keep_first_i_bins=None,
+    keep_last_i_bins=None,
     fixed_binning=False,
     cls_from_maps=False,
     # peaks specific
@@ -307,12 +308,18 @@ def get_reshaped_human_summaries(
     if noise_cls is not None:
         noise_cls = noise_cls[..., bin_indices]
 
-    if only_keep_bins is not None:
-        LOGGER.warning(f"Keeping only the first {only_keep_bins} bins")
-        fidu_summs = fidu_summs[..., :only_keep_bins, :]
-        grid_summs = grid_summs[..., :only_keep_bins, :]
+    if keep_first_i_bins is not None:
+        LOGGER.warning(f"Keeping only the first {keep_first_i_bins} bins")
+        fidu_summs = fidu_summs[..., :keep_first_i_bins, :]
+        grid_summs = grid_summs[..., :keep_first_i_bins, :]
         if noise_cls is not None:
-            noise_cls = noise_cls[..., :only_keep_bins, :]
+            noise_cls = noise_cls[..., :keep_first_i_bins, :]
+    if keep_last_i_bins is not None:
+        LOGGER.warning(f"Keeping only the last {keep_last_i_bins} bins")
+        fidu_summs = fidu_summs[..., -keep_last_i_bins:, :]
+        grid_summs = grid_summs[..., -keep_last_i_bins:, :]
+        if noise_cls is not None:
+            noise_cls = noise_cls[..., -keep_last_i_bins:, :]
 
     # select the right cosmological parameters
     msfm_conf = files.load_config(msfm_conf)
@@ -475,6 +482,8 @@ def get_binned_power_spectra(
     theta_fwhms=None,
     white_noise_sigmas=None,
     n_bins=None,
+    keep_first_i_bins=None,
+    keep_last_i_bins=None,
     # additional preprocessing
     apply_log=True,
     standardize=False,
@@ -509,13 +518,14 @@ def get_binned_power_spectra(
         white_noise_sigmas=white_noise_sigmas,
         n_bins=n_bins,
         cls_from_maps=cls_from_maps,
+        keep_first_i_bins=keep_first_i_bins,
+        keep_last_i_bins=keep_last_i_bins,
         # unlike the standardization, the logarithm is not linear and has to be applied as log(signal + noise), not
         # log(signal) + log(noise)
         apply_log=False,
         standardize=standardize,
     )
 
-    # TODO sort grid cosmologies
     i_sort = np.argsort(grid_i_sobols, axis=0)
     i_sort = i_sort[:, 0]
     grid_cls = grid_cls[i_sort]
@@ -715,7 +725,6 @@ def get_preprocessed_cl_observation(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            out_file=f"./{obs_label}.png",
         )
 
     return obs_cl
