@@ -8,6 +8,7 @@ Utils to run the MCMC algorithm to get the chain to be plotted as the parameter 
 import os
 import numpy as np
 
+import emcee
 from emcee import EnsembleSampler
 
 from msfm.utils import prior, parameters, logger
@@ -16,7 +17,9 @@ LOGGER = logger.get_logger(__file__)
 np.random.seed(12)
 
 
-def run_emcee(log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100):
+def run_emcee(
+    log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100, moves=None
+):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
     TODO add support for Nautilus https://nautilus-sampler.readthedocs.io/en/stable/ in addition to emcee?
@@ -32,6 +35,8 @@ def run_emcee(log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1
             vectorization. Defaults to 1024.
         n_steps (int, optional): Number of steps to run the chain for. Defaults to 1000.
         n_burnin_steps (int, optional): Number of steps to run the burn in chain for. Defaults to 100.
+        moves (list, optional): List of emcee moves to use. Defaults to None, which uses the default moves. An example
+            is [(emcee.moves.StretchMove(a=1.6), 0.75), (emcee.moves.WalkMove(), 0.25)].
 
     Returns:
         chain (np.ndarray): An array of shape (n_samples, n_params)
@@ -43,7 +48,7 @@ def run_emcee(log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1
     LOGGER.info(f"Initial values in prior: {np.all(prior.in_grid_prior(theta_0, conf=conf, params=params))}")
 
     # sample burn in
-    sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True)
+    sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True, moves=moves)
 
     LOGGER.info(f"Starting the burn in MCMC chain ({n_burnin_steps} steps)")
     state = sampler.run_mcmc(theta_0, n_burnin_steps, progress=True)
