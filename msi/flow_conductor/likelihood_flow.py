@@ -42,6 +42,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         conf=None,
         # output
         out_dir=None,
+        model_dir=None,
         label=None,
         load_existing=True,
         # architecture
@@ -51,6 +52,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         # computational
         device=None,
         floatx=torch.float32,
+        torch_seed=7,
     ):
         """
         Initialize the LikelihoodFlow object.
@@ -78,6 +80,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         self.conf = files.load_config(conf)
 
         self.out_dir = out_dir
+        self.model_dir = model_dir
         self.label = label
         self._setup_dirs(".pt")
 
@@ -110,6 +113,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         self.floatx = floatx
+        self.torch_seed = torch_seed
         self.to(self.device)
         LOGGER.info(f"Running on device {self.device} with default float {self.floatx}")
 
@@ -249,10 +253,13 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         theta = torch.tensor(theta, dtype=self.floatx, device=self.device)
 
         dset = TensorDataset(x, theta)
-        train_dset, vali_dset = random_split(dset, [1 - vali_split, vali_split])
 
-        self.train_loader = DataLoader(train_dset, batch_size, shuffle=True, drop_last=True)
-        self.vali_loader = DataLoader(vali_dset, batch_size, shuffle=False, drop_last=True)
+        self.train_dset, self.vali_dset = random_split(
+            dset, [1 - vali_split, vali_split], torch.Generator().manual_seed(self.torch_seed)
+        )
+
+        self.train_loader = DataLoader(self.train_dset, batch_size, shuffle=True, drop_last=True)
+        self.vali_loader = DataLoader(self.vali_dset, batch_size, shuffle=False, drop_last=True)
 
     def _train_epoch(self):
         """Train the model for one epoch."""
@@ -432,6 +439,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         with torch.no_grad():
             # evaluate the normalizing flow, for emcee the result must always be on the CPU in the end
             log_prob = self.log_prob(inputs=inputs, context=context).to("cpu").numpy()
+            # log_prob = self.log_prob(inputs=context, context=inputs).to("cpu").numpy()
 
             # enforce the prior
             log_prob = prior.log_posterior(theta_walkers, log_prob, conf=self.conf, params=self.params)
