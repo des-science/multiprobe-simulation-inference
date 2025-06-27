@@ -1,5 +1,16 @@
 # setup python environmnent
-### pytorch
+## pytorch
+### new
+See https://docs.nersc.gov/machinelearning/pytorch/#using-nersc-pytorch-modules
+```
+module load pytorch
+
+pip install --user healpy sbi icecream trianglechain seaborn emcee esub-epipe
+
+# msfm, deep_lss, msi
+pip install -e .
+```
+### old
 ```
 module load python/3.11
 
