@@ -5,7 +5,7 @@ See https://docs.nersc.gov/machinelearning/pytorch/#using-nersc-pytorch-modules
 ```
 module load pytorch
 
-pip install --user healpy sbi icecream trianglechain seaborn emcee esub-epipe
+pip install --user healpy sbi icecream trianglechain seaborn emcee esub-epipe numba sobol_seq tarp deprecation enflows flowcon
 
 # msfm, deep_lss, msi
 pip install -e .
