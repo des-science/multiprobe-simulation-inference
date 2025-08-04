@@ -13,23 +13,10 @@ from trianglechain import TriangleChain
 from trianglechain.utils_plots import get_lines_and_labels
 from seaborn import color_palette
 
-from msfm.utils import parameters, logger, files, cross_statistics
+from msfm.utils import parameters, logger, files, cross_statistics, prior
 from msi.utils.chains import load_des_y3_key_project_chain
 
 LOGGER = logger.get_logger(__file__)
-
-# plt.rcParams.update(
-#     {
-#         "font.size": 64,
-#         "axes.titlesize": 64,
-#         "axes.labelsize": 64,
-#         "xtick.labelsize": 64,
-#         "ytick.labelsize": 64,
-#         # "legend.fontsize": 64,
-#         "legend.fontsize": 96,
-#         "figure.titlesize": 64,
-#     }
-# )
 
 method_label_dict = {
     "gp_abc": "GP ABC",
@@ -57,14 +44,14 @@ param_label_dict = {
     "n_bg": r"$\eta_{b_g}$",
     "qbg": r"$b_{g,2}$",
     "n_qbg": r"$\eta_{b_{g,2}}$",
-    "bg1": r"$b_{g,1}$",
-    "bg2": r"$b_{g,2}$",
-    "bg3": r"$b_{g,3}$",
-    "bg4": r"$b_{g,4}$",
-    "qbg1": r"$b_{g,1}^q$",
-    "qbg2": r"$b_{g,2}^q$",
-    "qbg3": r"$b_{g,3}^q$",
-    "qbg4": r"$b_{g,4}^q$",
+    "bg1": r"$b_g^1$",
+    "bg2": r"$b_g^2$",
+    "bg3": r"$b_g^3$",
+    "bg4": r"$b_g^4$",
+    "qbg1": r"$b_{g,q}^1$",
+    "qbg2": r"$b_{g,q}^2$",
+    "qbg3": r"$b_{g,q}^3$",
+    "qbg4": r"$b_{g,q}^4$",
     "rg": r"$r_g$",
 }
 
@@ -73,27 +60,35 @@ def plot_chains(
     chains,
     params,
     conf=None,
-    # file
-    out_dir=None,
-    file_label=None,
-    file_type="png",
     # cosmetics
     tri_kwargs={},
     title=None,
     colors=None,
+    fills=True,
+    zorders=None,
     plot_labels="chain",
     group_params=False,
     density=False,
     show_legend=True,
-    scale_to_prior=True,
+    linestyles="-",
+    # parameters
+    params_plot=None,
+    use_S8=False,
     ranges=None,
+    scale_to_prior=True,
+    include_prior=False,
+    prior_params="cosmo",
+    np_seed=8,
     # cosmo
-    plot_obs=True,
-    obs_point=None,
+    obs_cosmo="fiducial",
     obs_as_star=False,
-    obs_label="synthetic observation",
+    obs_label=None,
     with_des_chain=False,
     des_tri="upper",
+    # file
+    out_dir=None,
+    file_label=None,
+    file_type="png",
 ):
     """Plot a given MCMC chain as a triangle plot.
 
@@ -119,7 +114,12 @@ def plot_chains(
     """
     conf = files.load_config(conf)
 
-    is_params_list_of_lists = any(isinstance(el, list) for el in params)
+    use_S8 = use_S8 or ("S8" in params_plot if params_plot is not None else False)
+    is_params_list_of_lists = any(isinstance(element, list) for element in params)
+    multi_chain = isinstance(chains, list)
+    assert not (
+        is_params_list_of_lists and not multi_chain
+    ), "If params is a list of lists, chains must be a list of arrays."
 
     # different parameters
     if is_params_list_of_lists:
@@ -146,8 +146,48 @@ def plot_chains(
     else:
         all_params = params
 
-    n_cosmo_params = sum([param in conf["analysis"]["params"]["cosmo"] for param in all_params])
+    def sigma8_to_S8(sigma8, Om):
+        return sigma8 * np.sqrt(Om / 0.3)
 
+    if use_S8:
+        all_params = [param if param != "s8" else "S8" for param in all_params]
+
+        if is_params_list_of_lists:
+            for param, chain in zip(params, chains):
+                Om_index = param.index("Om")
+                s8_index = param.index("s8")
+
+                param[s8_index] = "S8"
+                chain[:, s8_index] = sigma8_to_S8(chain[:, s8_index], chain[:, Om_index])
+        else:
+            Om_index = params.index("Om")
+            s8_index = params.index("s8")
+            params[s8_index] = "S8"
+
+            if multi_chain:
+                for chain in chains:
+                    chain[:, s8_index] = sigma8_to_S8(chain[:, s8_index], chain[:, Om_index])
+            else:
+                chains[:, s8_index] = sigma8_to_S8(chains[:, s8_index], chains[:, Om_index])
+
+    if params_plot is not None:
+        all_params = [param for param in all_params if param in params_plot]
+
+        if is_params_list_of_lists:
+            for param, chain in zip(params, chains):
+                param_indices = np.array([i for i, p in enumerate(param) if p in params_plot])
+                chain = chain[:, param_indices]
+                param = [param[i] for i in param_indices]
+        else:
+            param_indices = np.array([i for i, param in enumerate(params) if param in params_plot])
+            params = [params[i] for i in param_indices]
+
+            if multi_chain:
+                chains = [chain[:, param_indices] for chain in chains]
+            else:
+                chains = chains[:, param_indices]
+
+    n_cosmo_params = sum([param in conf["analysis"]["params"]["cosmo"] + ["S8"] for param in all_params])
     n_ia_params = sum(
         [
             param in conf["analysis"]["params"]["ia"]["nla"] + conf["analysis"]["params"]["ia"]["tatt"]
@@ -183,38 +223,67 @@ def plot_chains(
     else:
         grouping_kwargs = {}
 
-    tri_kwargs.setdefault("fill", True)
-    tri_kwargs.setdefault("show_values", False)
-    tri_kwargs.setdefault("n_ticks", 3)
-    tri_kwargs.setdefault("grid", True)
-    tri_kwargs.setdefault("scatter_kwargs", {"s": 500, "marker": "*", "zorder": 299})
-    tri_kwargs.setdefault("de_kwargs", {"smoothing_parameter1D": 0.2, "smoothing_parameter2D": 0.2})
+    # TriangleChain
+    tri_kwargs.setdefault("size", 2)
 
-    # initialize plot
+    tri_kwargs.setdefault(
+        "de_kwargs", {"levels": [0.68, 0.95], "smoothing_parameter1D": 0.2, "smoothing_parameter2D": 0.2}
+    )
+    tri_kwargs.setdefault("line_kwargs", {"linestyles": linestyles, "linewidths": 1})  # 2d
+    tri_kwargs.setdefault("hist_kwargs", {"linestyle": "-", "lw": 1})  # 1d
+    tri_kwargs.setdefault("axlines_kwargs", {"linestyle": "--", "lw": 1})  # 1d
+
+    tri_kwargs.setdefault("tick_fontsize", 8)
+    tri_kwargs.setdefault("label_fontsize", 12)
+    tri_kwargs.setdefault("legend_fontsize", 12)
+
+    tri_kwargs.setdefault("n_ticks", 3)
+    tri_kwargs.setdefault("tick_length", 2)
+    tri_kwargs.setdefault("show_values", False)
+
+    tri_kwargs.setdefault("fill", True)
+    tri_kwargs.setdefault("grid", True)
+
+    tri_kwargs.setdefault("scatter_kwargs", {"s": 500, "marker": "*", "zorder": 299})
+
     tri = TriangleChain(
         params=all_params,
         ranges=ranges,
         # cosmetics
+        show_legend=show_legend,
         labels=[param_label_dict[param] for param in all_params],
         grouping_kwargs=grouping_kwargs,
         **tri_kwargs,
     )
 
     # multiple chains
-    if isinstance(chains, list):
+    if multi_chain:
         colors = colors if isinstance(colors, list) else [colors] * len(chains)
         plot_labels = plot_labels if isinstance(plot_labels, list) else [plot_labels] * len(chains)
         params = params if is_params_list_of_lists else [params] * len(chains)
+        linestyles = linestyles if isinstance(linestyles, list) else [linestyles] * len(chains)
+        fills = fills if isinstance(fills, list) else [fills] * len(chains)
+        zorders = zorders if isinstance(zorders, list) else [zorders] * len(chains)
 
-        for chain, color, label, param in zip(chains, colors, plot_labels, params):
-            tri.contour_cl(chain, names=param, label=label, color=color)
+        for chain, param, color, label, linestyle, fill, zorder in zip(
+            chains, params, colors, plot_labels, linestyles, fills, zorders
+        ):
+            tri.contour_cl(
+                chain,
+                names=param,
+                label=label,
+                color=color,
+                line_kwargs={**tri_kwargs["line_kwargs"], "linestyles": linestyle, "zorder": zorder},
+                hist_kwargs={**tri_kwargs["hist_kwargs"], "linestyle": linestyle, "zorder": zorder},
+                fill=fill,
+            )
 
             if density:
                 tri.density_image(chain, names=param, label=label)
 
     # single chain
     else:
-        tri.contour_cl(chains, names=params, label=plot_labels, color=colors)
+        tri.contour_cl(chains, names=params, label=plot_labels, color=colors, fill=fills, zorder=zorders)
 
         if density:
             tri.density_image(chains, names=params, label=plot_labels)
@@ -248,31 +317,67 @@ def plot_chains(
             label=f"des_kp_{des_probes}",
             fill=False,
             color="k",
-            line_kwargs={"linewidth": 0.01000, "linestyle": "-"},
             tri=des_tri,
         )
 
-    # fiducial
-    if plot_obs:
-        if obs_point is None:
-            obs_point = dict(zip(all_params, parameters.get_fiducials(all_params, conf=conf)))
+    # observation
+    if obs_cosmo is not None:
+        if obs_cosmo == "fiducial":
+            obs_cosmo = dict(zip(all_params, parameters.get_fiducials(all_params, conf=conf)))
+
+        elif use_S8:
+            obs_cosmo["S8"] = sigma8_to_S8(obs_cosmo["s8"], obs_cosmo["Om"])
 
         if obs_as_star:
             tri.scatter(
-                obs_point,
+                obs_cosmo,
+                params=all_params,
                 label=obs_label,
                 plot_histograms_1D=False,
                 color="k",
                 scatter_vline_1D=True,
-                show_legend=show_legend,
-                alpha=1,
             )
         else:
-            tri.axlines(obs_point, color="k", show_legend=show_legend)
+            tri.axlines(obs_cosmo, params=all_params, label=obs_label, color="k")
+
+    if include_prior:
+        if prior_params == "cosmo":
+            prior_params = [param for param in all_params if param in conf["analysis"]["params"]["cosmo"] + ["S8"]]
+
+        np.random.seed(np_seed)
+        prior_rands = prior.generate_randoms(
+            params=prior_params,
+            n_draws=10_000_000,
+            conf=conf,
+            output_S8=use_S8,
+        )
+        tri.contour_cl(
+            prior_rands,
+            names=prior_params,
+            color="k",
+            alpha=0.1,
+            plot_histograms_1D=False,
+            de_kwargs={
+                **tri_kwargs["de_kwargs"],
+                "levels": [0.99],
+                "n_points": 100,
+                "n_levels_check": 2000,
+                "inverted": True,
+            },
+            line_kwargs={**tri_kwargs["line_kwargs"], "zorder": -10},
+            fill=True,
+        )
+
+    # only keep the last legend
+    try:
+        for legend in tri.fig.legends[:-1]:
+            legend.remove()
+    except AttributeError:
+        pass
 
     # title
     if title is not None:
-        tri.fig.suptitle(title, fontsize=24, y=0.9)
+        tri.fig.suptitle(title, fontsize=16, y=0.9)
 
     # save figure
     if out_dir is not None:
@@ -334,7 +439,6 @@ def plot_method_comparison(
         label="fiducial",
         plot_histograms_1D=False,
         color="k",
-        show_legend=True,
         scatter_vline_1D=True,
     )
 
