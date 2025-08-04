@@ -476,3 +476,75 @@ def plot_tarp_check(
 
 def plot_sbc_checks():
     raise NotImplementedError
+
+
+def posterior_hpd_check(
+    log_probs_true,
+    log_probs_sample,
+    n_alpha=100,
+):
+    """Highest Posterior Density (HPD) check for the posterior samples from
+    https://joerihermans.com/papers/crisissbi.pdf, like algorithm 1 in https://arxiv.org/pdf/2302.03026"""
+
+    n_sims = log_probs_true.shape[0]
+    n_samples = log_probs_sample.shape[0]
+
+    # empirical expected coverage probability
+    ecp = np.zeros((n_sims, n_alpha))
+
+    # cosmos
+    for i in LOGGER.progressbar(range(n_sims), at_level="info", desc="EECP: looping through cosmos"):
+        log_prob_sample = log_probs_sample[:, i]
+        log_prob_sample = np.sort(log_prob_sample)[::-1]
+
+        # shape (n_conficence_levels,)
+        log_prob_at_cls = log_prob_sample[:: n_samples // n_alpha]
+        log_prob_true = log_probs_true[i]
+
+        # per cosmology
+        ecp[i] = log_prob_at_cls <= log_prob_true
+
+    # mean over all cosmologies
+    ecp_mean = np.mean(ecp, axis=0)
+
+    alpha = np.linspace(0, 1, n_alpha)
+
+    return alpha, ecp_mean
+
+
+def posterior_tarp_check(
+    theta_true,
+    theta_sample,
+    # tarp
+    n_bootstrap=100,
+    n_alpha=20,
+    # random reference points
+    x_true=None,
+    randoms_dist=None,
+    randoms_scale=1.0,
+    randoms_dependence=False,
+    np_seed=17,
+):
+    """Test of Accuracy with Random Points (TARP) for the posterior samples, like algorithm 2 from
+    https://arxiv.org/pdf/2302.03026"""
+
+    assert (
+        theta_sample.shape[1] == theta_true.shape[0]
+    ), f"theta_samples must have shape (n_samples, n_sims, n_dim) but got {theta_sample.shape} and {theta_true.shape}"
+
+    ecp, alpha = get_tarp_coverage(
+        # shape (n_samples, n_sims, n_dim)
+        samples=theta_sample,
+        # shape (n_sims, n_dim)
+        theta=theta_true,
+        references="random",
+        metric="euclidean",
+        bootstrap=True,
+        num_bootstrap=n_bootstrap,
+        norm=False,
+        num_alpha_bins=n_alpha,
+    )
+    ecp_mean = np.mean(ecp, axis=0)
+    ecp_std = np.std(ecp, axis=0)
+
+    return alpha, ecp_mean, ecp_std

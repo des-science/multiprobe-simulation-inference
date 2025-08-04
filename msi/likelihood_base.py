@@ -202,13 +202,13 @@ class LikelihoodBase(ABC):
     # utils ###########################################################################################################
 
     def _setup_dirs(self, file_type):
-        if self.out_dir is None:
-            self.model_dir = None
-            self.model_file = None
-        elif self.model_dir is None:
+        if self.model_dir is not None:
+            self.model_file = os.path.join(self.model_dir, self.model_name + file_type)
+        elif self.out_dir is not None and self.model_dir is None:
             self.model_dir = os.path.join(self.out_dir, self.label, self.model_name)
             os.makedirs(self.model_dir, exist_ok=True)
             LOGGER.info(f"Set up the model directory {self.model_dir}")
             self.model_file = os.path.join(self.model_dir, self.model_name + file_type)
         else:
-            self.model_file = os.path.join(self.model_dir, self.model_name + file_type)
+            self.model_dir = None
+            self.model_file = None

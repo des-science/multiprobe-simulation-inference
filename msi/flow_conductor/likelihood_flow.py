@@ -142,7 +142,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         scheduler_type=None,
         scheduler_kwargs={},
         # early stopping
-        n_patience_epochs=10,
+        n_patience_epochs=None,
         min_delta=1e-4,
         save_model=True,
     ):
@@ -373,7 +373,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
     # posterior #######################################################################################################
 
-    def sample_posterior(self, x_obs, n_samples=512000, n_walkers=1024, n_burnin_steps=100, label=None, device=None):
+    def sample_posterior(
+        self, x_obs, n_samples=512000, n_walkers=1024, n_burnin_steps=100, label=None, device=None, dont_save=False
+    ):
         """
         Sample from the posterior distribution p(theta|x) using likelihood learned by the flow model and the flat
         analysis prior. The sampling is done using the emcee library, which runs on the CPU and in numpy.
@@ -411,7 +413,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs, device=device),
             self.params,
             conf=self.conf,
-            out_dir=self.model_dir,
+            out_dir=self.model_dir if not dont_save else None,
             label=label,
             n_walkers=n_walkers,
             n_steps=int(np.ceil(n_samples / n_walkers)),
@@ -475,8 +477,13 @@ class LikelihoodFlow(Flow, LikelihoodBase):
     def load(self):
         """Load the weights of the model from disk."""
 
+        if self.device == "cpu":
+            map_location = torch.device("cpu")
+        else:
+            map_location = None
+
         if self.model_dir is not None:
-            self.load_state_dict(torch.load(self.model_file))
+            self.load_state_dict(torch.load(self.model_file, map_location=map_location))
             LOGGER.info(f"Loaded the model from {self.model_file}")
 
 
