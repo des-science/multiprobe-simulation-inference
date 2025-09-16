@@ -79,8 +79,8 @@ def get_binned_power_spectra_dset(
         if isinstance(out_dict[key], np.ndarray):
             out_dict[key] = out_dict[key].astype(float_type)
 
-    grid_cls_train = out_dict["grid/cls/train"]
-    grid_cls_test = out_dict["grid/cls/test"]
+    grid_cls_train = out_dict["grid/cls_raw/train"]
+    grid_cls_test = out_dict["grid/cls_raw/test"]
     grid_cosmos_train = out_dict["grid/cosmos/train"]
     grid_cosmos_test = out_dict["grid/cosmos/test"]
     noise_cls = out_dict["noise/cls"]

@@ -283,7 +283,7 @@ def plot_chains(
 
     # single chain
     else:
-        tri.contour_cl(chains, names=params, label=plot_labels, color=colors, fill=fills, zorder=zorders)
+        tri.contour_cl(chains, names=params, label=plot_labels, color=colors, fill=fills)
 
         if density:
             tri.density_image(chains, names=params, label=plot_labels)

@@ -45,7 +45,8 @@ def run_emcee(
 
     # initial points (spread around the fiducial parameters)
     theta_0 = np.random.normal(loc=parameters.get_fiducials(params, conf=conf), scale=1e-3, size=(n_walkers, n_params))
-    LOGGER.info(f"Initial values in prior: {np.all(prior.in_grid_prior(theta_0, conf=conf, params=params))}")
+
+    LOGGER.info(f"Initial values in prior: {np.mean(prior.in_grid_prior(theta_0, conf=conf, params=params)*100):.1f}%")
 
     # sample burn in
     sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True, moves=moves)

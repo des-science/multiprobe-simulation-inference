@@ -556,9 +556,15 @@ def get_binned_power_spectra(
 
         return cls
 
-    fidu_cls = _noise_and_log(fidu_cls)
-    grid_cls_train = _noise_and_log(grid_cls_train)
-    grid_cls_test = _noise_and_log(grid_cls_test)
+    out_dict = {
+        "fidu/cls_raw": fidu_cls.copy(),
+        "grid/cls_raw/train": grid_cls_train.copy(),
+        "grid/cls_raw/test": grid_cls_test.copy(),
+    }
+
+    fidu_cls = _noise_and_log(fidu_cls.copy())
+    grid_cls_train = _noise_and_log(grid_cls_train.copy())
+    grid_cls_test = _noise_and_log(grid_cls_test.copy())
 
     plotting.plot_human_summary(
         fidu_cls,
@@ -572,15 +578,17 @@ def get_binned_power_spectra(
         with_cross_probe=with_cross_probe,
     )
 
-    out_dict = {
-        "fidu/cls": fidu_cls,
-        "grid/cls/train": grid_cls_train,
-        "grid/cls/test": grid_cls_test,
-        "grid/cosmos/train": grid_cosmos_train,
-        "grid/cosmos/test": grid_cosmos_test,
-        "noise/cls": noise_cls,
-        "grid/i_sobols": grid_i_sobols,
-    }
+    out_dict.update(
+        {
+            "fidu/cls": fidu_cls,
+            "grid/cls/train": grid_cls_train,
+            "grid/cls/test": grid_cls_test,
+            "grid/cosmos/train": grid_cosmos_train,
+            "grid/cosmos/test": grid_cosmos_test,
+            "noise/cls": noise_cls,
+            "grid/i_sobols": grid_i_sobols,
+        }
+    )
 
     return out_dict
 

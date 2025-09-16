@@ -62,7 +62,6 @@ class LikelihoodBase(ABC):
         group_params=True,
         density=False,
         # cosmo
-        plot_obs=True,
         obs_point=None,
         obs_label="synthetic observation",
         with_des_chain=False,
@@ -97,8 +96,7 @@ class LikelihoodBase(ABC):
             group_params=group_params,
             density=density,
             # cosmology
-            plot_obs=plot_obs,
-            obs_point=obs_point,
+            obs_cosmo=obs_point,
             obs_label=obs_label,
             with_des_chain=with_des_chain,
         )
