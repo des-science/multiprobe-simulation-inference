@@ -121,32 +121,34 @@ def get_reshaped_human_summaries(
     assert with_fiducial or with_grid, "At least one of with_fiducial and with_grid must be True"
 
     msfm_conf = files.load_config(msfm_conf)
-    dlss_conf = configuration.load_deep_lss_config(dlss_conf)
+
+    if scales_from_conf := dlss_conf is not None:
+        dlss_conf = configuration.load_deep_lss_config(dlss_conf)
 
     noise_cls = None
 
     if summary_type == "cls":
-        if theta_fwhms is None:
+        if theta_fwhms is None and scales_from_conf:
             theta_fwhms = (
                 dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
             )
             LOGGER.info(f"Using theta_fwhm = {theta_fwhms} from the dlss config")
-        if white_noise_sigmas is None:
+        if white_noise_sigmas is None and scales_from_conf:
             white_noise_sigmas = (
                 dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
                 + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
             )
             LOGGER.info(f"Using white_noise_sigma = {white_noise_sigmas} from the dlss config")
-        if l_maxs is None:
+        if l_maxs is None and scales_from_conf:
             theta_fwhms = (
                 dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
             )
             l_maxs = scales.angle_to_ell(np.array(theta_fwhms), arcmin=dlss_conf["scale_cuts"]["arcmin"])
             LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
-        if l_mins is None:
+        if l_mins is None and scales_from_conf:
             l_mins = np.zeros_like(l_maxs)
             LOGGER.info(f"Using l_mins = {l_mins} by default (no smoothing)")
-        if n_bins is None:
+        if n_bins is None and scales_from_conf:
             n_bins = msfm_conf["analysis"]["power_spectra"]["n_bins"]
             LOGGER.info(f"Using n_bins = {n_bins} from the msfm config")
 
@@ -227,26 +229,23 @@ def get_reshaped_human_summaries(
             )
 
             # white noise
-            noise_cls = input_output.load_cl_white_noise(base_dir)
+            try:
+                noise_cls = input_output.load_cl_white_noise(base_dir)
+                with_noise = True
+            except FileNotFoundError:
+                with_noise = False
+                LOGGER.warning(f"No white noise Cls found, continuing without")
 
-            n_z = len(l_maxs)
+            n_z = 0
+            if with_lensing:
+                n_z += len(msfm_conf["survey"]["metacal"]["z_bins"])
+            if with_clustering:
+                n_z += len(msfm_conf["survey"]["maglim"]["z_bins"])
+
             k = 0
             for i in range(n_z):
                 for j in range(n_z):
                     if (i == j) or (i < j):
-                        # the theta_fwhm formulation is entirely equivalent
-                        # smoothing_fac = scales.gaussian_low_pass_factor_alm(
-                        #     ells, theta_fwhm=max(theta_fwhm[i], theta_fwhm[j]), arcmin=dlss_conf["scale_cuts"]["arcmin"]
-                        # )
-
-                        # smoothing_fac = np.ones_like(ells, dtype=np.float32)
-                        # if l_mins[i] is not None and l_mins[j] is not None:
-                        #     smoothing_fac *= scales.gaussian_high_pass_factor_alm(
-                        #         ells, l_min=max(l_mins[i], l_mins[j])
-                        #     )
-                        # if l_maxs[i] is not None and l_maxs[j] is not None:
-                        #     smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=min(l_maxs[i], l_maxs[j]))
-
                         if l_mins[i] is not None and l_mins[j] is not None:
                             l_min = max(l_mins[i], l_mins[j])
                         else:
@@ -268,7 +267,8 @@ def get_reshaped_human_summaries(
 
                         fidu_summs[..., k] *= smoothing_fac
                         grid_summs[..., k] *= smoothing_fac
-                        noise_cls[..., k] *= white_noise_sigmas[i] * white_noise_sigmas[j]
+                        if with_noise:
+                            noise_cls[..., k] *= white_noise_sigmas[i] * white_noise_sigmas[j]
 
                         k += 1
 
@@ -305,20 +305,20 @@ def get_reshaped_human_summaries(
     LOGGER.info(f"Using the bin indices {bin_indices}")
     fidu_summs = fidu_summs[..., bin_indices]
     grid_summs = grid_summs[..., bin_indices]
-    if noise_cls is not None:
+    if with_noise:
         noise_cls = noise_cls[..., bin_indices]
 
     if keep_first_i_bins is not None:
         LOGGER.warning(f"Keeping only the first {keep_first_i_bins} bins")
         fidu_summs = fidu_summs[..., :keep_first_i_bins, :]
         grid_summs = grid_summs[..., :keep_first_i_bins, :]
-        if noise_cls is not None:
+        if with_noise:
             noise_cls = noise_cls[..., :keep_first_i_bins, :]
     if keep_last_i_bins is not None:
         LOGGER.warning(f"Keeping only the last {keep_last_i_bins} bins")
         fidu_summs = fidu_summs[..., -keep_last_i_bins:, :]
         grid_summs = grid_summs[..., -keep_last_i_bins:, :]
-        if noise_cls is not None:
+        if with_noise:
             noise_cls = noise_cls[..., -keep_last_i_bins:, :]
 
     # select the right cosmological parameters

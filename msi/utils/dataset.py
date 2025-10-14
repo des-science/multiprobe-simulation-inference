@@ -25,6 +25,7 @@ def get_binned_power_spectra_dset(
     num_parallel_calls=tf.data.AUTOTUNE,
     float_type=np.float32,
     # selection
+    probe=None,
     with_lensing=True,
     with_clustering=True,
     with_cross_z=True,
@@ -43,6 +44,16 @@ def get_binned_power_spectra_dset(
     apply_log=True,
     standardize=False,
 ):
+    if probe == "lensing":
+        with_clustering = False
+        with_cross_probe = False
+    elif probe == "clustering":
+        with_lensing = False
+        with_cross_probe = False
+    elif probe == "combined":
+        with_lensing = True
+        with_clustering = True
+
     out_dict = preprocessing.get_binned_power_spectra(
         base_dir=base_dir,
         # file
