@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msi"
+version = "0.1.0"
+description = "Simulation-based inference from arbitrary summary statistics for cosmological parameter constraints"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Arne Thomsen", email = "athomsen@phys.ethz.ch"}
+]
+keywords = ["cosmology", "simulation-based-inference", "normalizing-flows", "gaussian-mixture-models", "mcmc", "posterior-inference"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "torch",
+    "enflows",
+    "h5py",
+    "pyyaml",
+    "emcee",
+    "matplotlib",
+    "tqdm",
+    "tarp",
+]
+
+[project.optional-dependencies]
+# Only for environments where TensorFlow is not pre-installed
+tf = [
+    "tensorflow>=2.0",
+    "tensorflow-probability",
+]
+
+# Development tools
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "ipython",
+    "jupyter",
+]
+
+[project.urls]
+Repository = "https://github.com/des-science/multiprobe-simulation-inference"
+Documentation = "https://arxiv.org/abs/2511.04681"
+
+[tool.setuptools]
+packages = ["msi"]
+
+[tool.setuptools.package-data]
+msi = ["*.yaml", "*.yml"]
+
+[tool.black]
+line-length = 119
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
