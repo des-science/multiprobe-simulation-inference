@@ -20,7 +20,7 @@ def get_binned_power_spectra_dset(
     cls_from_maps=False,
     # tf.data
     batch_size=2**12,
-    shuffle_buffer=2**14,
+    shuffle_buffer="full",
     prefetch=3,
     num_parallel_calls=tf.data.AUTOTUNE,
     float_type=np.float32,
@@ -96,6 +96,9 @@ def get_binned_power_spectra_dset(
     grid_cosmos_test = out_dict["grid/cosmos/test"]
     noise_cls = out_dict["noise/cls"]
 
+    if shuffle_buffer == "full":
+        shuffle_buffer = grid_cls_train.shape[0]
+
     def _augmentations(example, noise):
         signal, label = example
 
@@ -110,13 +113,13 @@ def get_binned_power_spectra_dset(
         return signal, label
 
     # create the datasets
-    dset_noise = tf.data.Dataset.from_tensor_slices(noise_cls).cache().repeat().shuffle(shuffle_buffer)
+    dset_noise = tf.data.Dataset.from_tensor_slices(noise_cls).cache().shuffle(shuffle_buffer).repeat()
 
     dset_train = (
         tf.data.Dataset.from_tensor_slices((grid_cls_train, grid_cosmos_train))
         .cache()
-        .repeat()
         .shuffle(shuffle_buffer)
+        .repeat()
     )
     dset_train = (
         tf.data.Dataset.zip((dset_train, dset_noise))
