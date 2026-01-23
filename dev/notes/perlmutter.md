@@ -3,13 +3,18 @@
 ### new
 See https://docs.nersc.gov/machinelearning/pytorch/#using-nersc-pytorch-modules
 ```
-module load pytorch
+module load pytorch/2.6.0
+rm -rf $PYTHONUSERBASE
 
 pip install --user healpy sbi icecream trianglechain seaborn emcee esub-epipe numba sobol_seq tarp deprecation enflows flowcon
 
-# msfm, deep_lss, msi
-pip install -e .
+# pandas isn't properly built against the numpy version
+pip uninstall -y pandas
+pip install --no-cache-dir pandas
+
+python -m ipykernel install --user --name pytorch_sbi
 ```
+
 ### old
 ```
 module load python/3.11
