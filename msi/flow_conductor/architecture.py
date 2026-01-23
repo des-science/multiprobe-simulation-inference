@@ -51,8 +51,8 @@ def get_normal_dist(feature_dim, type="standard"):
 def get_context_embedding_net(
     context_dim,
     context_embedding_dim=default_context_embedding_dim,
-    hidden_dim=32,
-    n_blocks=2,
+    hidden_dim=64,
+    n_blocks=3,
     activation=torch.nn.functional.silu,
     dropout_probability=0.0,
     use_batch_norm=False,
@@ -139,8 +139,8 @@ def get_lipschitz_transform(
 def get_sigmoids_transform(
     feature_dim,
     context_embedding_dim=default_context_embedding_dim,
-    n_layers=3,
-    hidden_dim=64,
+    n_layers=4,
+    hidden_dim=256,
     svd_kwargs={},
     sigmoids_kwargs={},
 ):
@@ -149,8 +149,8 @@ def get_sigmoids_transform(
     Args:
         feature_dim (int): The dimension of the input features.
         context_embedding_dim (int): The dimension of the context embedding. Defaults to 16.
-        n_layers (int, optional): The number of layers in the transform. Defaults to 3.
-        hidden_dim (int, optional): The dimension of the hidden layer. Defaults to 128.
+        n_layers (int, optional): The number of layers in the transform. Defaults to 4.
+        hidden_dim (int, optional): The dimension of the hidden layer. Defaults to 256.
         svd_kwargs (dict, optional): Keyword arguments for the ConditionalSVDTransform layer. Defaults to {}.
         sigmoids_kwargs (dict, optional): Keyword arguments for the MaskedSumOfSigmoidsTransform layer. Defaults to {}.
 
@@ -163,8 +163,8 @@ def get_sigmoids_transform(
     svd_kwargs.setdefault("activation", torch.nn.functional.relu)
     svd_kwargs.setdefault("use_batch_norm", False)
 
-    sigmoids_kwargs.setdefault("n_sigmoids", 10)
-    sigmoids_kwargs.setdefault("num_blocks", 2)
+    sigmoids_kwargs.setdefault("n_sigmoids", 16)
+    sigmoids_kwargs.setdefault("num_blocks", 3)
     sigmoids_kwargs.setdefault("dropout_probability", 0.0)
     sigmoids_kwargs.setdefault("activation", torch.nn.functional.relu)
     sigmoids_kwargs.setdefault("use_batch_norm", False)

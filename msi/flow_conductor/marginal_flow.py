@@ -250,11 +250,7 @@ class MarginalFlow(Flow):
         plt.legend(fontsize=11)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-
-        filename = "marginal_flow_loss_curve.png"
-        plt.savefig(filename, dpi=150, bbox_inches="tight")
-        plt.close()
-        LOGGER.info(f"Saved loss curve plot to {filename}")
+        plt.show()
 
     def sample(self, n_samples=1000, return_numpy=True):
         """
