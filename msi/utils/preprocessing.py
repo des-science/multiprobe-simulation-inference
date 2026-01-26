@@ -24,8 +24,8 @@ LOGGER = logger.get_logger(__file__)
 
 
 def get_reshaped_network_preds(
-    base_dir,
     model_dir,
+    base_dir="",
     n_steps=None,
     file_label=None,
     preds_file=None,

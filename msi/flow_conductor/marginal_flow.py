@@ -18,7 +18,8 @@ from enflows.flows import Flow
 from enflows.distributions.normal import StandardNormal
 from enflows.transforms import CompositeTransform, MaskedSumOfSigmoidsTransform, ActNorm, SVDLinear
 
-from msfm.utils import logger
+from msi.utils import mcmc
+from msfm.utils import logger, prior
 
 LOGGER = logger.get_logger(__file__)
 
@@ -272,6 +273,106 @@ class MarginalFlow(Flow):
             samples = samples.cpu().numpy()
 
         return samples
+
+    def sample_residual_posterior(
+        self,
+        x_obs,
+        params_wl,
+        params_gc,
+        emulator_wl,
+        emulator_gc,
+        conf,
+        n_samples=1_024_000,
+        n_walkers=1_024,
+        n_burnin_steps=1_000,
+        device=None,
+        out_dir=None,
+        label=None,
+    ):
+        """
+        Sample from the residual posterior p(theta_wl, theta_gc | x_obs) using the learned residual distribution
+        p(x_obs - mu(theta)) and emulators for the mean predictions.
+
+        Args:
+            x_obs (np.ndarray or torch.Tensor): The observed data vector.
+            paramsp_wl (list): List of parameter names for the weak lensing emulator.
+            params_gc (list): List of parameter names for the galaxy clustering emulator.
+            emulator_wl (nn.Module): Emulator network for weak lensing mean.
+            emulator_gc (nn.Module): Emulator network for galaxy clustering mean.
+            conf (dict): Configuration dictionary containing priors.
+            n_samples (int, optional): Number of samples to generate. Defaults to 100,000.
+            n_walkers (int, optional): Number of MCMC walkers. Defaults to 100.
+            n_burnin_steps (int, optional): Number of burn-in steps. Defaults to 100.
+            device (str, optional): Device to run computations on. Defaults to None.
+            out_dir (str, optional): Directory to save chains. Defaults to None.
+            label (str, optional): Label for saved files. Defaults to None.
+
+        Returns:
+            np.ndarray: MCMC chain of samples.
+        """
+        if device is None:
+            device = self.device
+
+        # Prepare data
+        x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
+        x_obs = torch.atleast_2d(x_obs)
+
+        # Ensure models are in eval mode
+        self.to(device)
+        self.eval()
+        emulator_wl.to(device)
+        emulator_wl.eval()
+        emulator_gc.to(device)
+        emulator_gc.eval()
+
+        combined_params = params_wl + params_gc
+        n_wl = len(params_wl)
+
+        def _log_posterior(theta_walkers):
+            # theta_walkers shape: (n_walkers, n_params)
+
+            # Split parameters
+            theta_wl = theta_walkers[:, :n_wl]
+            theta_gc = theta_walkers[:, n_wl:]
+
+            t_theta_wl = torch.tensor(theta_wl, dtype=self.floatx, device=device)
+            t_theta_gc = torch.tensor(theta_gc, dtype=self.floatx, device=device)
+
+            with torch.no_grad():
+                # Compute emulated means
+                mu_wl = emulator_wl(t_theta_wl)
+                mu_gc = emulator_gc(t_theta_gc)
+                mu_joint = torch.cat([mu_wl, mu_gc], dim=1)
+
+                log_prob_total = np.zeros(len(theta_walkers))
+
+                # Sum log likelihood over observations
+                for i in range(len(x_obs)):
+                    obs = x_obs[i].unsqueeze(0)  # (1, feature_dim)
+                    residual = obs - mu_joint  # (n_walkers, feature_dim)
+
+                    # Log probability of residual under the flow
+                    lp = self.log_prob(residual).cpu().numpy()
+                    log_prob_total += lp
+
+                # Add prior
+                log_prob_total = prior.log_posterior(theta_walkers, log_prob_total, conf=conf, params=combined_params)
+
+            return log_prob_total
+
+        # Run MCMC
+        chain = mcmc.run_emcee(
+            _log_posterior,
+            combined_params,
+            conf=conf,
+            out_dir=out_dir,
+            label=label,
+            n_walkers=n_walkers,
+            n_steps=int(np.ceil(n_samples / n_walkers)),
+            n_burnin_steps=n_burnin_steps,
+        )
+
+        return chain[:n_samples]
 
     def log_prob(self, x, return_numpy=False, no_grad=False):
         """

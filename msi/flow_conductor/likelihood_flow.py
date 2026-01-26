@@ -376,7 +376,14 @@ class LikelihoodFlow(Flow, LikelihoodBase):
     # posterior #######################################################################################################
 
     def sample_posterior(
-        self, x_obs, n_samples=512000, n_walkers=1024, n_burnin_steps=100, label=None, device=None, dont_save=False
+        self,
+        x_obs,
+        n_samples=1_024_000,
+        n_walkers=1_024,
+        n_burnin_steps=1_000,
+        label=None,
+        device=None,
+        dont_save=False,
     ):
         """
         Sample from the posterior distribution p(theta|x) using likelihood learned by the flow model and the flat
@@ -723,9 +730,9 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
     def sample_posterior(
         self,
         x_obs,
-        n_samples=512000,
-        n_walkers=1024,
-        n_burnin_steps=100,
+        n_samples=1_024_000,
+        n_walkers=1_024,
+        n_burnin_steps=1_000,
         label=None,
         device=None,
         dont_save=False,
@@ -737,9 +744,9 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
 
         Args:
             x_obs (np.ndarray): The observation to condition on.
-            n_samples (int, optional): The number of samples to generate. Defaults to 512000.
-            n_walkers (int, optional): The number of walkers in the MCMC chain. Defaults to 1024.
-            n_burnin_steps (int, optional): The number of burn-in steps. Defaults to 100.
+            n_samples (int, optional): The number of samples to generate. Defaults to 1_024_000.
+            n_walkers (int, optional): The number of walkers in the MCMC chain. Defaults to 1_024.
+            n_burnin_steps (int, optional): The number of burn-in steps. Defaults to 1_000.
             label (str, optional): Additional label for the saved chain. Defaults to None.
             device (str, optional): The device to use. Defaults to None.
             dont_save (bool, optional): Whether to skip saving the chain. Defaults to False.
