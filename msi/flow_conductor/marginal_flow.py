@@ -293,6 +293,8 @@ class MarginalFlow(Flow):
         Sample from the residual posterior p(theta_wl, theta_gc | x_obs) using the learned residual distribution
         p(x_obs - mu(theta)) and emulators for the mean predictions.
 
+        This is useful to sample P(Delta theta) in https://arxiv.org/pdf/2105.03324 for correlated observables.
+
         Args:
             x_obs (np.ndarray or torch.Tensor): The observed data vector.
             paramsp_wl (list): List of parameter names for the weak lensing emulator.
@@ -313,11 +315,12 @@ class MarginalFlow(Flow):
         if device is None:
             device = self.device
 
-        # Prepare data
         x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
-        x_obs = torch.atleast_2d(x_obs)
+        if x_obs.ndim == 1:
+            x_obs = x_obs.unsqueeze(0)
+        assert x_obs.shape[0] == 1, "sample_residual_posterior only supports a single observation vector."
 
-        # Ensure models are in eval mode
+        # ensure eval mode
         self.to(device)
         self.eval()
         emulator_wl.to(device)
@@ -331,7 +334,6 @@ class MarginalFlow(Flow):
         def _log_posterior(theta_walkers):
             # theta_walkers shape: (n_walkers, n_params)
 
-            # Split parameters
             theta_wl = theta_walkers[:, :n_wl]
             theta_gc = theta_walkers[:, n_wl:]
 
@@ -339,28 +341,25 @@ class MarginalFlow(Flow):
             t_theta_gc = torch.tensor(theta_gc, dtype=self.floatx, device=device)
 
             with torch.no_grad():
-                # Compute emulated means
-                mu_wl = emulator_wl(t_theta_wl)
-                mu_gc = emulator_gc(t_theta_gc)
+                mu_wl = emulator_wl.predict(t_theta_wl, device=device)
+                mu_gc = emulator_gc.predict(t_theta_gc, device=device)
                 mu_joint = torch.cat([mu_wl, mu_gc], dim=1)
 
-                log_prob_total = np.zeros(len(theta_walkers))
+                # x_obs: (1, data_dim), mu_joint: (n_walkers, data_dim)
+                residual = x_obs - mu_joint
 
-                # Sum log likelihood over observations
-                for i in range(len(x_obs)):
-                    obs = x_obs[i].unsqueeze(0)  # (1, feature_dim)
-                    residual = obs - mu_joint  # (n_walkers, feature_dim)
+                # log probability of residual under the flow
+                log_prob_total = self.log_prob(residual).cpu().numpy()
 
-                    # Log probability of residual under the flow
-                    lp = self.log_prob(residual).cpu().numpy()
-                    log_prob_total += lp
+                # add prior
+                in_prior_wl = prior.in_grid_prior(theta_wl, conf=conf, params=params_wl)
+                in_prior_gc = prior.in_grid_prior(theta_gc, conf=conf, params=params_gc)
 
-                # Add prior
-                log_prob_total = prior.log_posterior(theta_walkers, log_prob_total, conf=conf, params=combined_params)
+                in_prior = np.logical_and(in_prior_wl, in_prior_gc)
+                log_prob_total = np.where(in_prior, log_prob_total, -np.inf)
 
             return log_prob_total
 
-        # Run MCMC
         chain = mcmc.run_emcee(
             _log_posterior,
             combined_params,

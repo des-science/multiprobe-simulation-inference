@@ -44,7 +44,6 @@ class MLP(nn.Module):
         self.output_dim = output_dim
         self.use_layer_norm = use_layer_norm
 
-        # Choose activation function
         if activation == "relu":
             self.activation = nn.ReLU()
         elif activation == "tanh":
@@ -54,32 +53,27 @@ class MLP(nn.Module):
         else:
             raise ValueError(f"Unknown activation: {activation}")
 
-        # Build network layers
         layers = []
         dims = [input_dim] + hidden_dims
-
         for i in range(len(dims) - 1):
-            # Linear layer
             layers.append(nn.Linear(dims[i], dims[i + 1]))
 
-            # Layer normalization
             if use_layer_norm:
                 layers.append(nn.LayerNorm(dims[i + 1]))
 
-            # Activation
             layers.append(self.activation)
 
-            # Dropout
             if dropout is not None and dropout > 0:
                 layers.append(nn.Dropout(dropout))
 
-        # Output layer (no activation, dropout, or normalization)
         layers.append(nn.Linear(dims[-1], output_dim))
 
         self.network = nn.Sequential(*layers)
 
-        # Initialize weights
         self._initialize_weights()
+
+        self.y_mean = None
+        self.y_std = None
 
     def _initialize_weights(self):
         """Initialize network weights using Xavier initialization."""
@@ -107,6 +101,7 @@ class MLP(nn.Module):
         verbose: bool = True,
         plot_history: bool = False,
         device: str = "cpu",
+        standardize_labels: bool = True,
     ) -> dict:
         """
         Train the MLP on the provided data.
@@ -137,6 +132,8 @@ class MLP(nn.Module):
             Whether to plot training and validation loss curves
         device : str
             Device to train on ('cpu' or 'cuda')
+        standardize_labels : bool
+            Whether to standardize the labels (y) before training
 
         Returns
         -------
@@ -146,11 +143,10 @@ class MLP(nn.Module):
         """
         self.to(device)
 
-        # Convert to tensors
         X_tensor = torch.FloatTensor(X)
         y_tensor = torch.FloatTensor(y)
 
-        # Split into train and validation
+        # split into train and validation
         n_samples = len(X)
         n_val = int(n_samples * validation_split)
         n_train = n_samples - n_val
@@ -162,22 +158,31 @@ class MLP(nn.Module):
         X_train, y_train = X_tensor[train_idx], y_tensor[train_idx]
         X_val, y_val = X_tensor[val_idx], y_tensor[val_idx]
 
-        # Create data loaders
+        if standardize_labels:
+            self.y_mean = torch.mean(y_train, dim=0)
+            self.y_std = torch.std(y_train, dim=0)
+            self.y_std[self.y_std == 0] = 1.0  # Avoid division by zero
+
+            y_train = (y_train - self.y_mean) / self.y_std
+            y_val = (y_val - self.y_mean) / self.y_std
+        else:
+            self.y_mean = None
+            self.y_std = None
+
         train_dataset = TensorDataset(X_train, y_train)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-        # Loss and optimizer
-        criterion = nn.MSELoss()
+        # loss and optimizer
+        loss_fn = nn.MSELoss()
         optimizer = optim.Adam(self.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-        # Training history
         history = {"train_loss": [], "val_loss": [], "epoch": []}
 
-        # Early stopping
+        # early stopping
         best_val_loss = float("inf")
         patience_counter = 0
 
-        # Training loop with progress bar
+        # training
         pbar = tqdm(range(num_epochs), desc="Training", disable=not verbose)
         for epoch in pbar:
             self.train()
@@ -187,40 +192,36 @@ class MLP(nn.Module):
                 batch_X = batch_X.to(device)
                 batch_y = batch_y.to(device)
 
-                # Forward pass
                 optimizer.zero_grad()
                 outputs = self(batch_X)
-                loss = criterion(outputs, batch_y)
+                loss_fn = loss_fn(outputs, batch_y)
 
-                # Backward pass
-                loss.backward()
+                loss_fn.backward()
 
-                # Gradient clipping
                 if clip_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.parameters(), clip_grad_norm)
 
                 optimizer.step()
 
-                train_losses.append(loss.item())
+                train_losses.append(loss_fn.item())
 
-            # Validation
+            # validation
             self.eval()
             with torch.no_grad():
                 X_val_device = X_val.to(device)
                 y_val_device = y_val.to(device)
                 val_outputs = self(X_val_device)
-                val_loss = criterion(val_outputs, y_val_device).item()
+                val_loss = loss_fn(val_outputs, y_val_device).item()
 
-            # Record history
+            # history
             train_loss = np.mean(train_losses)
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
             history["epoch"].append(epoch + 1)
 
-            # Update progress bar
             pbar.set_postfix({"train_loss": f"{train_loss:.6f}", "val_loss": f"{val_loss:.6f}"})
 
-            # Early stopping
+            # early stopping
             if patience is not None:
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -233,7 +234,6 @@ class MLP(nn.Module):
 
         pbar.close()
 
-        # Plot training history
         if plot_history:
             self._plot_history(history)
 
@@ -259,28 +259,43 @@ class MLP(nn.Module):
         plt.tight_layout()
         plt.show()
 
-    def predict(self, X: np.ndarray, device: str = "cpu") -> np.ndarray:
+    def predict(self, X, device: str = "cpu"):
         """
         Make predictions on new data.
 
         Parameters
         ----------
-        X : np.ndarray
+        X : np.ndarray or torch.Tensor
             Input data of shape (n_samples, input_dim)
         device : str
             Device to use for prediction
 
         Returns
         -------
-        predictions : np.ndarray
-            Predicted outputs of shape (n_samples, output_dim)
+        predictions : np.ndarray or torch.Tensor
+            Predicted outputs of shape (n_samples, output_dim). Returns tensor if input is tensor,
+            numpy array otherwise.
         """
         self.to(device)
         self.eval()
 
+        is_tensor = isinstance(X, torch.Tensor)
+
         with torch.no_grad():
-            X_tensor = torch.FloatTensor(X).to(device)
-            predictions = self(X_tensor).cpu().numpy()
+            if is_tensor:
+                X_tensor = X.to(device)
+            else:
+                X_tensor = torch.tensor(X, dtype=torch.float32, device=device)
+
+            predictions = self(X_tensor)
+
+            if getattr(self, "y_mean", None) is not None:
+                mean = self.y_mean.to(device)
+                std = self.y_std.to(device)
+                predictions = predictions * std + mean
+
+            if not is_tensor:
+                predictions = predictions.cpu().numpy()
 
         return predictions
 
