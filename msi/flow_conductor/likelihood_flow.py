@@ -147,6 +147,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         n_patience_epochs=None,
         min_delta=1e-4,
         save_model=True,
+        seed=None,
     ):
         """
         Fits the likelihood flow model to the given data and saves the resulting model.
@@ -170,9 +171,10 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             min_delta (float, optional): The minimum change in validation loss to consider as improvement for
                 early stopping. Defaults to 0.05.
             save_model (bool, optional): Whether to save the model after training. Defaults to True.
+            seed (int, optional): The seed for the random data split. Defaults to None, then self.torch_seed is used.
         """
 
-        self._prepare_data(x, theta, batch_size, vali_split)
+        self._prepare_data(x, theta, batch_size, vali_split, seed=seed)
 
         # optimizer
         self.clip_by_global_norm = clip_by_global_norm
@@ -237,7 +239,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         if save_model:
             self.save()
 
-    def _prepare_data(self, x, theta, batch_size, vali_split):
+    def _prepare_data(self, x, theta, batch_size, vali_split, seed=None):
         """
         Prepare the data for training and validation.
 
@@ -246,10 +248,14 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             theta (numpy.ndarray): The input context (cosmological parameters).
             batch_size (int): Batch size for training and validation.
             vali_split (float): Proportion of data to be used for validation.
+            seed (int, optional): The seed for the random split. Defaults to None.
 
         Returns:
             None
         """
+
+        if seed is None:
+            seed = self.torch_seed
 
         x = torch.tensor(x, dtype=self.floatx, device=self.device)
         theta = torch.tensor(theta, dtype=self.floatx, device=self.device)
@@ -257,7 +263,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         dset = TensorDataset(x, theta)
 
         self.train_dset, self.vali_dset = random_split(
-            dset, [1 - vali_split, vali_split], torch.Generator().manual_seed(self.torch_seed)
+            dset, [1 - vali_split, vali_split], torch.Generator().manual_seed(seed)
         )
 
         self.train_loader = DataLoader(self.train_dset, batch_size, shuffle=True, drop_last=True)
@@ -646,6 +652,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_patience_epochs=n_patience_epochs,
                 min_delta=min_delta,
                 save_model=save_model,
+                seed=self.torch_seed,
             )
             final_vali_loss = flow._vali_epoch()
             self.validation_losses.append(final_vali_loss)
