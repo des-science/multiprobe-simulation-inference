@@ -4,6 +4,8 @@
 *.DS_store
 *.json
 
+!data/figures/*.png
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
