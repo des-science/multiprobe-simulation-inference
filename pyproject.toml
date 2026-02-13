@@ -29,17 +29,25 @@ dependencies = [
     "numpy",
     "scipy",
     "scikit-learn",
-    "torch",
-    "enflows",
     "h5py",
     "pyyaml",
     "emcee",
     "matplotlib",
+    "seaborn",
     "tqdm",
     "tarp",
+    "trianglechain",
+    "icecream",
 ]
 
 [project.optional-dependencies]
+# Only for environments where PyTorch is not pre-installed
+torch = [
+    "torch",
+    "enflows",
+    "sbi",
+]
+
 # Only for environments where TensorFlow is not pre-installed
 tf = [
     "tensorflow>=2.0",

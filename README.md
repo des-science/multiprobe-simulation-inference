@@ -11,15 +11,13 @@ Collection of inference methods to go from arbitrary summary statistics (neural 
 
 ## Installation
 
-### Requirements
-- Python >= 3.8
-- Pre-existing installation of [`PyTorch`](https://pytorch.org/) (required for normalizing flows), [`TensorFlow`](https://www.tensorflow.org/install) and [`TensorFlow-Probability`](https://www.tensorflow.org/probability) (optional, only required for Gaussian Mixture Model components)in the python environment
+Requires Python >= 3.8, PyTorch (for normalizing flows), and optionally TensorFlow >= 2.0/TensorFlow-Probability (for Gaussian mixture models).
+
+**Dependencies:**
 - [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model) for utilities and data loading
 - [`y3-deep-lss`](https://github.com/des-science/y3-deep-lss) for neural network summary statistics preprocessing
 
-### Installation Steps
-
-1. **Install dependencies from GitHub:**
+**Step 1: Install companion packages from GitHub**
 ```bash
 # Install multiprobe-simulation-forward-model
 pip install git+https://github.com/des-science/multiprobe-simulation-forward-model.git
@@ -28,10 +26,24 @@ pip install git+https://github.com/des-science/multiprobe-simulation-forward-mod
 pip install git+https://github.com/des-science/y3-deep-lss.git
 ```
 
-2. **Install this package in editable mode:**
+**Step 2: Install this package**
+
+*On HPC clusters with pre-installed PyTorch* (recommended):
 ```bash
 pip install -e .
 ```
+
+*On systems without PyTorch*:
+```bash
+pip install -e .[torch]
+```
+
+*To include TensorFlow for Gaussian mixture models*:
+```bash
+pip install -e .[torch,tf]
+```
+
+Use the first option when PyTorch is available via system modules (e.g., `module load pytorch`) to preserve optimized GPU configurations.
 
 ## Repository Structure
 
