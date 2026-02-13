@@ -7,13 +7,13 @@ Collection of inference methods to go from arbitrary summary statistics (neural 
 - **Gaussian Mixture Models:** As a simpler baseline neural density estimator.
 - **Gaussian Process Approximate Bayesian Computation:** As an alternative to standard SBI methods [[Fluri et al. 2021](https://arxiv.org/abs/2107.09002)]
 
-![](data/figures/example_posteriors.png)
+![](data/figures/example_posterior_small.png)
 
 ## Installation
 
 Requires Python >= 3.8, PyTorch (for normalizing flows), and optionally TensorFlow >= 2.0/TensorFlow-Probability (for Gaussian mixture models).
 
-**Dependencies:**
+**Main dependencies:**
 - [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model) for utilities and data loading
 - [`y3-deep-lss`](https://github.com/des-science/y3-deep-lss) for neural network summary statistics preprocessing
 
@@ -48,20 +48,20 @@ Use the first option when PyTorch is available via system modules (e.g., `module
 ## Repository Structure
 
 ### `msi`
-- `msi/apps` inference scripts for training normalizing flows and running MCMC sampling
-- `msi/flow_conductor` normalizing flow implementation using PyTorch and [`enflows`](https://github.com/VincentStimper/normalizing-flows)
-- `msi/gaussian_mixture` Gaussian mixture model implementation using TensorFlow Probability
-- `msi/utils` utilities for MCMC sampling, preprocessing, diagnostics, and visualization
-- `msi/likelihood_base.py` base class for likelihood implementations
+- `msi/apps` - Inference scripts for normalizing flow training and MCMC sampling
+- `msi/flow_conductor` - Normalizing flow implementation using PyTorch and [`enflows`](https://github.com/VincentStimper/normalizing-flows)
+- `msi/gaussian_mixture` - Gaussian mixture model implementation using TensorFlow Probability
+- `msi/utils` - MCMC sampling, preprocessing, diagnostics, and visualization utilities
+- `msi/likelihood_base.py` - Base class for likelihood implementations
 
 ### `configs`
-Configuration files specifying inference settings and hyperparameters.
+Configuration files for inference settings and hyperparameters.
 
 ### `data`
 Stored chains from DES Y3 analyses and figures.
 
 ### `notebooks`
-Notebooks to perform simulation-based inference via neural likelihood estimation and MCMC sampling. 
+Notebooks for simulation-based inference via neural likelihood estimation and MCMC sampling. 
 
 ## Companion Repositories
 - Forward modeling: [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model)
