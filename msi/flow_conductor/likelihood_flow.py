@@ -89,9 +89,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         # the summary statistic has the same dimension as the constrained parameters
         context_dim = len(params)
 
-        if feature_dim is None:
-            feature_dim = context_dim
-            LOGGER.warning(f"Assuming that the feature/summary dimension is equal to the context/parameter dimension")
+        # if feature_dim is None:
+        #     feature_dim = context_dim
+        #     LOGGER.warning(f"Assuming that the feature/summary dimension is equal to the context/parameter dimension")
 
         # default architecture
         if embedding_net is None:
@@ -173,6 +173,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             save_model (bool, optional): Whether to save the model after training. Defaults to True.
             seed (int, optional): The seed for the random data split. Defaults to None, then self.torch_seed is used.
         """
+
+        n_examples = x.shape[0]
+        LOGGER.info(f"batch size = {batch_size} -> {n_examples // batch_size} steps per epoch for {n_epochs} epochs")
 
         self._prepare_data(x, theta, batch_size, vali_split, seed=seed)
 
@@ -384,9 +387,10 @@ class LikelihoodFlow(Flow, LikelihoodBase):
     def sample_posterior(
         self,
         x_obs,
-        n_samples=1_024_000,
         n_walkers=1_024,
+        n_steps=1_000,
         n_burnin_steps=1_000,
+        lambdaCDM=False,
         label=None,
         device=None,
         dont_save=False,
@@ -411,6 +415,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             array-like: The generated samples from the likelihood flow model.
         """
 
+        n_samples = n_steps * n_walkers
+
         if device is None:
             device = self.device
 
@@ -424,19 +430,30 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         self.to(device)
         self.eval()
 
+        if lambdaCDM:
+            LOGGER.warning("lambdaCDM")
+            label += "_lambdaCDM"
+            i_w = self.params.index("w0")
+            params = [p for p in self.params if p != "w0"]
+        else:
+            LOGGER.warning("wCDM")
+            params = self.params
+
+        def log_prob_fn(theta_walkers):
+            if lambdaCDM:
+                theta_walkers = np.insert(theta_walkers, i_w, -1.0, axis=1)
+            return self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
+
         chain = mcmc.run_emcee(
-            lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs, device=device),
-            self.params,
+            log_prob_fn,
+            params,
             conf=self.conf,
             out_dir=self.model_dir if not dont_save else None,
             label=label,
             n_walkers=n_walkers,
-            n_steps=int(np.ceil(n_samples / n_walkers)),
+            n_steps=n_steps,
             n_burnin_steps=n_burnin_steps,
         )
-
-        # there can be more samples than requested due the walkers
-        chain = chain[:n_samples]
 
         # restore the flow to the original device
         self.to(self.device)
@@ -737,9 +754,10 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
     def sample_posterior(
         self,
         x_obs,
-        n_samples=1_024_000,
         n_walkers=1_024,
+        n_steps=1_000,
         n_burnin_steps=1_000,
+        lambdaCDM=False,
         label=None,
         device=None,
         dont_save=False,
@@ -751,33 +769,51 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
 
         Args:
             x_obs (np.ndarray): The observation to condition on.
-            n_samples (int, optional): The number of samples to generate. Defaults to 1_024_000.
             n_walkers (int, optional): The number of walkers in the MCMC chain. Defaults to 1_024.
+            n_steps (int, optional): The number of steps per walker. Defaults to 1_000.
             n_burnin_steps (int, optional): The number of burn-in steps. Defaults to 1_000.
+            lambdaCDM (bool, optional): Whether to fix w0=-1 for LambdaCDM. Defaults to False.
             label (str, optional): Additional label for the saved chain. Defaults to None.
             device (str, optional): The device to use. Defaults to None.
             dont_save (bool, optional): Whether to skip saving the chain. Defaults to False.
-            method (str, optional): Either "ensemble" to sample from the averaged posterior, or "separate"
+            method (str, optional): Either "ensemble" to sample from the averaged posterior, or "individual"
                 to sample from each flow individually. Defaults to "ensemble".
             use_validation_weights (bool, optional): If True and method="ensemble", weight flows by their
                 validation performance (lower loss = higher weight). Defaults to False.
 
         Returns:
             array-like or list: If method="ensemble", returns a single array of posterior samples.
-                If method="separate", returns a list of arrays, one for each flow in the ensemble.
+                If method="individual", returns a list of arrays, one for each flow in the ensemble.
         """
+
+        n_samples = n_steps * n_walkers
 
         if device is None:
             device = self.device
 
         x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
         x_obs = torch.atleast_2d(x_obs)
+        if x_obs.shape[0] == 1:
+            LOGGER.info(f"Sampling the posterior from a single observation")
+        else:
+            LOGGER.info(f"Sampling the posterior from multiple observations")
 
         # move all flows to the specified device
         for flow in self.flows:
             flow.to(device)
             flow.eval()
 
+        # Handle lambdaCDM setup
+        if lambdaCDM:
+            LOGGER.warning("lambdaCDM")
+            label += "_lambdaCDM"
+            i_w = self.params.index("w0")
+            params = [p for p in self.params if p != "w0"]
+        else:
+            LOGGER.warning("wCDM")
+            params = self.params
+
+        # Compute weights for ensemble method
         if method == "ensemble":
             if use_validation_weights and len(self.validation_losses) == self.n_flows:
                 LOGGER.info("Using validation-weighted ensemble")
@@ -788,17 +824,23 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                     LOGGER.warning("Validation weights requested but not available. Using uniform weights.")
                 weights = None
 
+            # Create log probability function
+            def log_prob_fn(theta_walkers):
+                if lambdaCDM:
+                    theta_walkers = np.insert(theta_walkers, i_w, -1.0, axis=1)
+                return self._mcmc_log_posterior(theta_walkers, x_obs, device=device, weights=weights)
+
+        if method == "ensemble":
             chain = mcmc.run_emcee(
-                lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs, device=device, weights=weights),
-                self.params,
+                log_prob_fn,
+                params,
                 conf=self.conf,
                 out_dir=self.model_dir if not dont_save else None,
                 label=label,
                 n_walkers=n_walkers,
-                n_steps=int(np.ceil(n_samples / n_walkers)),
+                n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
             )
-            chain = chain[:n_samples]
 
         elif method == "individual":
             LOGGER.info(f"Sampling individual posteriors from {self.n_flows} flows")
@@ -809,9 +851,10 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
 
                 flow_chain = flow.sample_posterior(
                     x_obs=x_obs.cpu().numpy(),
-                    n_samples=n_samples,
                     n_walkers=n_walkers,
+                    n_steps=n_steps,
                     n_burnin_steps=n_burnin_steps,
+                    lambdaCDM=lambdaCDM,
                     label=flow_label,
                     device=device,
                     dont_save=dont_save,

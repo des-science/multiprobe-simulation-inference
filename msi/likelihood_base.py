@@ -65,6 +65,7 @@ class LikelihoodBase(ABC):
         obs_point=None,
         obs_label="synthetic observation",
         with_des_chain=False,
+        lambdaCDM=False,
         # output
         label=None,
     ):
@@ -83,9 +84,15 @@ class LikelihoodBase(ABC):
                 observations. Defaults to None.
         """
 
+        if lambdaCDM:
+            label += "_lambdaCDM"
+            params = [p for p in self.params if p != "w0"]
+        else:
+            params = self.params
+
         plotting.plot_chains(
             posterior_samples,
-            self.params,
+            params,
             self.conf,
             # file
             out_dir=self.model_dir,

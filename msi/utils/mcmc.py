@@ -18,14 +18,14 @@ np.random.seed(12)
 
 
 def run_emcee(
-    log_prob, params, conf=None, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100, moves=None
+    log_prob_fn, params, conf=None, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100, moves=None
 ):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
     TODO add support for Nautilus https://nautilus-sampler.readthedocs.io/en/stable/ in addition to emcee?
 
     Args:
-        log_prob (function): Vectorized function that takes in samples of shape (n_samples,) in parameter space and
+        log_prob_fn (function): Vectorized function that takes in samples of shape (n_samples,) in parameter space and
             returns an array of corresponding log probabilities of shape (n_samples,)
         params (list): List of strings of the constrained cosmological parameters.
         out_dir (str, optional): Output directory to store the plot at. Defaults to None, then the plot is not saved.
@@ -49,7 +49,7 @@ def run_emcee(
     LOGGER.info(f"Initial values in prior: {np.mean(prior.in_grid_prior(theta_0, conf=conf, params=params)*100):.1f}%")
 
     # sample burn in
-    sampler = EnsembleSampler(n_walkers, n_params, log_prob, vectorize=True, moves=moves)
+    sampler = EnsembleSampler(n_walkers, n_params, log_prob_fn, vectorize=True, moves=moves)
 
     LOGGER.info(f"Starting the burn in MCMC chain ({n_burnin_steps} steps)")
     state = sampler.run_mcmc(theta_0, n_burnin_steps, progress=True)
@@ -61,6 +61,10 @@ def run_emcee(
 
     chain = sampler.get_chain(flat=True)
     log_probs = sampler.get_log_prob(flat=True)
+
+    # there can be more samples than requested due the walkers
+    n_samples = n_steps * n_walkers
+    chain = chain[:n_samples]
 
     # get MAP
     MAP_params = chain[np.argmax(log_probs)]
