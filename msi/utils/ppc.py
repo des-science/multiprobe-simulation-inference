@@ -7,7 +7,7 @@ import torch
 from sbi.diagnostics.misspecification import calc_misspecification_mmd
 
 from msfm.utils import files, logger
-from msi.utils import preprocessing, plotting
+from msi.utils import input_output, plotting
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow
 from msi.flow_conductor import architecture
 
@@ -29,10 +29,10 @@ class PosteriorPredictiveChecks:
         cosmo_params=["Om", "s8", "w0"],
         seed=111,
         # data loading
-        wl_model_dir=None,
-        wl_model_steps=None,
-        gc_model_dir=None,
-        gc_model_steps=None,
+        wl_pred_file=None,
+        gc_pred_file=None,
+        wl_flow_dir=None,
+        gc_flow_dir=None,
     ):
         """
         Initialize the PosteriorPredictiveChecks object.
@@ -41,10 +41,6 @@ class PosteriorPredictiveChecks:
             conf: Path to the configuration file or dictionary.
             cosmo_params: List of cosmological parameters.
             seed: Random seed for reproducibility.
-            wl_model_dir: Directory containing the weak lensing model.
-            wl_model_steps: Number of steps for the weak lensing model.
-            gc_model_dir: Directory containing the galaxy clustering model.
-            gc_model_steps: Number of steps for the galaxy clustering model.
         """
 
         self.conf = files.load_config(conf)
@@ -52,40 +48,34 @@ class PosteriorPredictiveChecks:
         self.seed = seed
         self.rng = np.random.default_rng(self.seed)
 
-        self.wl_model_dir = wl_model_dir
-        self.wl_model_steps = wl_model_steps
-        self.gc_model_dir = gc_model_dir
-        self.gc_model_steps = gc_model_steps
+        self.wl_pred_file = wl_pred_file
+        self.gc_pred_file = gc_pred_file
+        self.wl_network_dir = os.path.dirname(wl_pred_file) if wl_pred_file is not None else None
+        self.gc_network_dir = os.path.dirname(gc_pred_file) if gc_pred_file is not None else None
 
-        if wl_model_dir and wl_model_steps:
+        self.wl_flow_dir = wl_flow_dir
+        self.gc_flow_dir = gc_flow_dir
+
+        if self.wl_pred_file:
             LOGGER.info("Loading weak lensing data")
-            self.s_wl_grid, self.theta_wl_grid, self.wl_data_dict = self._load_grid(wl_model_dir, wl_model_steps)
+            self.s_wl_grid, self.theta_wl_grid, self.wl_obs_dict = input_output.load_network_preds_simple(self.wl_pred_file)
 
             self.wl_params = cosmo_params.copy()
             self.wl_params += self.conf["analysis"]["params"]["ia"]["nla"]
             if self.conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
                 self.wl_params += self.conf["analysis"]["params"]["ia"]["tatt"]
 
-        if gc_model_dir and gc_model_steps:
+        if self.gc_pred_file:
             LOGGER.info("Loading galaxy clustering data")
-            self.s_gc_grid, self.theta_gc_grid, self.gc_data_dict = self._load_grid(gc_model_dir, gc_model_steps)
+            self.s_gc_grid, self.theta_gc_grid, self.gc_obs_dict = input_output.load_network_preds_simple(self.gc_pred_file)
 
             self.gc_params = cosmo_params.copy()
             self.gc_params += self.conf["analysis"]["params"]["bg"]["linear"]
             if self.conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
                 self.gc_params += self.conf["analysis"]["params"]["bg"]["quadratic"]
 
-    def _load_grid(self, model_dir, model_steps):
-        """Load grid data from the specified model directory."""
-        _, s_grid, theta_grid, file_dict = preprocessing.get_reshaped_network_preds(
-            model_dir,
-            n_steps=model_steps,
-            with_fidu=False,
-        )
-        return s_grid, theta_grid, file_dict
-
     def setup_flow(
-        self, rep_probe, obs_probe, independent_cross=False, train_flow=False, flow_label="ppc", fit_kwargs={}
+        self, rep_probe, obs_probe, independent_cross=False, train_flow=False, flow_label="", fit_kwargs={}
     ):
         """
         Set up the normalizing flow for the posterior predictive checks.
@@ -114,7 +104,7 @@ class PosteriorPredictiveChecks:
 
         if self.is_cross_probe:
             if self.rep_probe == "lensing":
-                flow_dir = self.wl_model_dir
+                flow_dir = self.wl_network_dir
                 features_grid = self.s_wl_grid
                 if independent_cross:
                     self.flow_dist = "p(s_wl | theta_gc)"
@@ -124,7 +114,7 @@ class PosteriorPredictiveChecks:
                     context_grid = np.concatenate([self.theta_gc_grid, self.s_gc_grid], axis=-1)
 
             elif self.rep_probe == "clustering":
-                flow_dir = self.gc_model_dir
+                flow_dir = self.gc_network_dir
                 features_grid = self.s_gc_grid
                 if independent_cross:
                     self.flow_dist = "p(s_gc | theta_wl)"
@@ -136,13 +126,13 @@ class PosteriorPredictiveChecks:
         else:
             if self.rep_probe == "lensing":
                 self.flow_dist = "p(s_wl | theta_wl)"
-                flow_dir = self.wl_model_dir
+                flow_dir = self.wl_network_dir
                 features_grid = self.s_wl_grid
                 context_grid = self.theta_wl_grid
 
             elif self.rep_probe == "clustering":
                 self.flow_dist = "p(s_gc | theta_gc)"
-                flow_dir = self.gc_model_dir
+                flow_dir = self.gc_network_dir
                 features_grid = self.s_gc_grid
                 context_grid = self.theta_gc_grid
 
@@ -150,10 +140,12 @@ class PosteriorPredictiveChecks:
         self.context_grid = context_grid
 
         if self.is_cross_probe:
-            flow_label += "_cross"
+            flow_label += "ppc/cross"
+            flow_label += f"_{self.obs_abbrv}_to_{self.rep_abbrv}"
             flow_label += independent_cross * "_independent"
         else:
-            flow_label += "_auto"
+            flow_label += "ppc/auto_"
+            flow_label += self.obs_abbrv
 
         self.flow = LikelihoodFlow(
             params=[],
@@ -190,7 +182,7 @@ class PosteriorPredictiveChecks:
         n_samples_grid=1_000,
         k_highest_grid=None,
         # select checks
-        plot_param_posterior=True,
+        plot_param_posterior=False,
         check_data_marginals=True,
         check_mmd=True,
         check_log_probs=True,
@@ -219,7 +211,8 @@ class PosteriorPredictiveChecks:
             self._plot_param_posterior()
 
         self._sample_neural_posterior_predictive(n_samples=n_samples_neural)
-        self._sample_grid_posterior_predictive(n_importance_samples=n_samples_grid, k_highest=k_highest_grid)
+        if not self.is_cross_probe:
+            self._sample_grid_posterior_predictive(n_importance_samples=n_samples_grid, k_highest=k_highest_grid)
 
         if check_data_marginals:
             self._check_data_marginals()
@@ -238,60 +231,49 @@ class PosteriorPredictiveChecks:
         if self.obs_probe == "lensing":
             self.post_dist = "p(theta_wl | s_wl)"
 
+            obs_model_dir = self.wl_flow_dir
+            obs_dict = self.wl_obs_dict
+
             if self.is_cross_probe:
                 self.s_prior = self.s_gc_grid
+                rep_flow_dir = self.gc_flow_dir
+                rep_obs_dict = self.gc_obs_dict
             else:
                 self.s_prior = self.s_wl_grid
 
-            obs_model_dir = self.wl_model_dir
-            obs_model_steps = self.wl_model_steps
-            obs_data_dict = self.wl_data_dict
 
-            rep_model_dir = self.gc_model_dir
-            rep_model_steps = self.gc_model_steps
-            rep_data_dict = self.gc_data_dict
 
         elif self.obs_probe == "clustering":
             self.post_dist = "p(theta_gc | s_gc)"
 
+            obs_model_dir = self.gc_flow_dir
+            obs_dict = self.gc_obs_dict
+
             if self.is_cross_probe:
                 self.s_prior = self.s_wl_grid
+                rep_flow_dir = self.wl_flow_dir
+                rep_obs_dict = self.wl_obs_dict
             else:
                 self.s_prior = self.s_gc_grid
 
-            obs_model_dir = self.gc_model_dir
-            obs_model_steps = self.gc_model_steps
-            obs_data_dict = self.gc_data_dict
-
-            rep_model_dir = self.wl_model_dir
-            rep_model_steps = self.wl_model_steps
-            rep_data_dict = self.wl_data_dict
-
         LOGGER.info(f"post = {self.post_dist}")
-
-        def _load_chain(model_dir, model_steps, obs_label):
-            # TODO remove hardcoded path
-            chain_dir = os.path.join(
-                model_dir, f"{model_steps}_steps_likelihood_sigmoid/likelihood_flow/chain_{obs_label}.npy"
-            )
-            return np.load(chain_dir)
 
         # obs_probe
         if s_obs is None:
-            s_obs = obs_data_dict[f"mocks/pred/{obs_label}"]
+            s_obs = obs_dict[obs_label]
         self.s_obs = s_obs
 
         if theta_post is None:
-            theta_post = _load_chain(obs_model_dir, obs_model_steps, obs_label)
+            theta_post = np.load(os.path.join(obs_model_dir, f"chain_{obs_label}.npy"))
         self.theta_post = theta_post
 
         # rep_probe
         if self.is_cross_probe:
             if s_obs_rep is None:
-                s_obs_rep = rep_data_dict[f"mocks/pred/{obs_label}"]
+                s_obs_rep = rep_obs_dict[obs_label]
 
             if theta_post_rep is None:
-                theta_post_rep = _load_chain(rep_model_dir, rep_model_steps, obs_label)
+                theta_post_rep = np.load(os.path.join(rep_flow_dir, f"chain_{obs_label}.npy"))
         else:
             s_obs_rep = s_obs
             theta_post_rep = theta_post
@@ -356,6 +338,10 @@ class PosteriorPredictiveChecks:
 
     def _sample_grid_posterior_predictive(self, n_importance_samples=None, k_highest=None):
         """Sample from the grid posterior predictive using importance sampling or top-k selection."""
+        # TODO for the cross-probe check, this is currently wrong: https://gemini.google.com/share/1e7a829ec98b
+        # The weights should be proportional to p(theta|s_obs) ~ p(s_obs|theta) and not p(s_rep|theta, s_obs).
+        # For the single probe, it doesn't make a difference as s_rep = s_obs.
+        assert not self.is_cross_probe, "Grid PPC not implemented for cross-probe checks yet."
 
         log_probs_grid = self.flow.log_likelihood(
             np.repeat(np.atleast_2d(self.s_obs_rep), self.context_grid.shape[0], axis=0),
@@ -392,7 +378,7 @@ class PosteriorPredictiveChecks:
         """Check and plot the marginal distributions of the data."""
 
         prior_label = r"$p(s_{" + self.rep_abbrv + r"})$"
-        post_label = r"$p(s_{" + self.rep_abbrv + r"}|s_{" + self.obs_abbrv + r"}^{obs})$ (neural)"
+        post_label = r"$p(s_{" + self.rep_abbrv + r"}|s_{" + self.obs_abbrv + r"}^{obs})$"
         post_label_sim = r"$p(s_{" + self.rep_abbrv + r"}|s_{" + self.obs_abbrv + r"}^{obs})$ (sims)"
         obs_label = r"$s_{" + self.rep_abbrv + r"}^{obs}$"
 
@@ -402,7 +388,7 @@ class PosteriorPredictiveChecks:
             size=2,
             line_kwargs={"zorder": 0, "linewidths": 2},
             hist_kwargs={"zorder": 0, "lw": 2},
-            scatter_kwargs={"s": 10, "marker": "o"},
+            scatter_kwargs={"s": 1, "marker": "o"},
         )
 
         def contour_or_scatter(tri, data, color, label):
@@ -413,7 +399,8 @@ class PosteriorPredictiveChecks:
 
         contour_or_scatter(tri, self.s_prior, color="tab:blue", label=prior_label)
         contour_or_scatter(tri, self.s_rep, color="tab:orange", label=post_label)
-        contour_or_scatter(tri, self.s_rep_grid, color="tab:green", label=post_label_sim)
+        if not self.is_cross_probe:
+            contour_or_scatter(tri, self.s_rep_grid, color="tab:green", label=post_label_sim)
 
         tri.scatter(
             np.atleast_2d(self.s_obs_rep),
