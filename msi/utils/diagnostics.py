@@ -45,7 +45,7 @@ def _assert_and_return_grid_pred_shapes(grid_preds_true, grid_preds_sample):
     return n_cosmos, n_summaries, n_examples, n_samples
 
 
-def plot_histogram_check(grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=None):
+def plot_histogram_check(grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=None, prefix=""):
     """Plot histograms to compare samples from the true distribution and from the (normalizing flow) model.
 
     Args:
@@ -93,10 +93,10 @@ def plot_histogram_check(grid_preds_true, grid_preds_sample, n_random_indices=10
                 ax[i, j].legend(loc="upper left")
 
     if out_dir is not None:
-        fig.savefig(os.path.join(out_dir, "diagnostic_histogram.png"), bbox_inches="tight", dpi=100)
+        fig.savefig(os.path.join(out_dir, prefix + "histogram.png"), bbox_inches="tight", dpi=100)
 
 
-def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_hist=True, out_dir=None):
+def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_hist=True, out_dir=None, prefix=""):
     """Plot the diagnostics presented in Appendix C and Fig. 9 of https://arxiv.org/pdf/2203.09616. These are
     relative statisticsfor mean and std, and per summary dimension histograms.
 
@@ -152,7 +152,9 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
     ax[1].grid(True)
 
     if out_dir is not None:
-        fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_relative_stat.png"), bbox_inches="tight", dpi=100)
+        fig.savefig(
+            os.path.join(out_dir, prefix + "diagnostic_deeplss_relative_stat.png"), bbox_inches="tight", dpi=100
+        )
 
     if plot_per_summary_dim_hist and n_summaries < 20 and n_examples != 1:
         fig, ax = plt.subplots(figsize=(15, 5), ncols=n_summaries, nrows=2)
@@ -191,11 +193,20 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
         fig.tight_layout()
 
         if out_dir is not None:
-            fig.savefig(os.path.join(out_dir, "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=100)
+            fig.savefig(
+                os.path.join(out_dir, prefix + "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=100
+            )
 
 
 def plot_eecp_check(
-    grid_preds_true, grid_preds_sample, grid_cosmos, model, n_confidence_levels=100, out_dir=None, do_plot=True
+    grid_preds_true,
+    grid_preds_sample,
+    grid_cosmos,
+    model,
+    n_confidence_levels=100,
+    out_dir=None,
+    prefix="",
+    do_plot=True,
 ):
     """Plot the Expected Empirical Coverage Probability (EECP) developed in https://joerihermans.com/papers/crisissbi.pdf
     for a given model. Note that this test was also performed in Appendix A.3 of https://arxiv.org/pdf/2211.12346.
@@ -209,6 +220,7 @@ def plot_eecp_check(
             msi.flow_conductor.likelihood_flow.FlowLikelihood
         n_confidence_levels (int, optional): Number of confidence levels to plot. Defaults to 100.
         out_dir (str, optional): The output directory to save the plot to. Defaults to None, then it isn't saved.
+        prefix (str, optional): A prefix to add to the output file name. Defaults to "".
     """
 
     n_cosmos, _, n_examples, n_samples = _assert_and_return_grid_pred_shapes(grid_preds_true, grid_preds_sample)
@@ -297,7 +309,7 @@ def plot_eecp_check(
         ax.grid(True)
 
         if out_dir is not None:
-            fig.savefig(os.path.join(out_dir, "diagnostic_eecp.png"), bbox_inches="tight", dpi=100)
+            fig.savefig(os.path.join(out_dir, prefix + "hpd.png"), bbox_inches="tight", dpi=100)
     else:
         return true_coverage, eecp
 
@@ -318,6 +330,7 @@ def plot_tarp_check(
     n_sigma=2,
     out_dir=None,
     eps=1e-10,
+    prefix="",
 ):
     """Plot the Tests of Accuracy with Random Points (TARP) diagnostic introduced in https://arxiv.org/pdf/2302.03026
     from https://github.com/Ciela-Institute/tarp.
@@ -469,9 +482,35 @@ def plot_tarp_check(
         ax.grid(True)
 
         if out_dir is not None:
-            fig.savefig(os.path.join(out_dir, "diagnostic_tarp.png"), bbox_inches="tight", dpi=100)
+            fig.savefig(os.path.join(out_dir, prefix + "tarp.png"), bbox_inches="tight", dpi=100)
     else:
         return alpha, ecp_mean, ecp_std
+
+
+def run_sbc_precomputed(theta_true, theta_sample):
+    """
+    Runs Simulation-Based Calibration (SBC) using pre-computed samples.
+
+    Args:
+        theta_true (np.ndarray): True parameters of shape (n_sims, n_dim).
+        theta_sample (np.ndarray): Posterior samples of shape (n_samples, n_sims, n_dim).
+
+    Returns:
+        ranks (np.ndarray): Ranks of shape (n_sims, n_dim).
+        dap (np.ndarray): Data Averaged Posterior samples of shape (n_sims, n_dim).
+    """
+    n_samples, n_sims, n_dim = theta_sample.shape
+
+    assert theta_true.shape[0] == n_sims, f"Number of simulations do not match: {theta_true.shape[0]} vs {n_sims}"
+    assert theta_true.shape[1] == n_dim, f"Number of dimensions do not match: {theta_true.shape[1]} vs {n_dim}"
+
+    ranks = np.sum(theta_sample < theta_true[None, :, :], axis=0)
+
+    # data Averaged Posterior (DAP)
+    idx = np.random.randint(0, n_samples, size=n_sims)
+    dap_samples = theta_sample[idx, np.arange(n_sims), :]
+
+    return ranks, dap_samples
 
 
 def plot_sbc_checks():
@@ -548,3 +587,11 @@ def posterior_tarp_check(
     ecp_std = np.std(ecp, axis=0)
 
     return alpha, ecp_mean, ecp_std
+
+
+def FoM_from_chain(chain1, chain2):
+    # eq. (17) in https://arxiv.org/pdf/2405.10881
+    cov = np.cov(np.stack([chain1, chain2], axis=-1), rowvar=False)
+    det = np.linalg.det(cov)
+    fom = det ** (-0.5)
+    return fom

@@ -148,6 +148,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         min_delta=1e-4,
         save_model=True,
         seed=None,
+        run_c2st=False,
+        c2st_hidden_dim=64,
+        c2st_n_epochs=50,
     ):
         """
         Fits the likelihood flow model to the given data and saves the resulting model.
@@ -172,6 +175,12 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 early stopping. Defaults to 0.05.
             save_model (bool, optional): Whether to save the model after training. Defaults to True.
             seed (int, optional): The seed for the random data split. Defaults to None, then self.torch_seed is used.
+            run_c2st (bool, optional): Whether to run a Classifier Two-Sample Test on the validation set after
+                training. Trains a small MLP to distinguish real validation pairs (x, theta) from flow-generated
+                pairs (x_gen, theta). An accuracy close to 0.5 indicates the flow has learned the conditional
+                distribution well. Defaults to False.
+            c2st_hidden_dim (int, optional): Hidden layer size for the C2ST classifier MLP. Defaults to 64.
+            c2st_n_epochs (int, optional): Number of epochs to train the C2ST classifier. Defaults to 50.
         """
 
         n_examples = x.shape[0]
@@ -241,6 +250,111 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         self._plot_epochs(train_losses, vali_losses)
         if save_model:
             self.save()
+
+        if run_c2st:
+            c2st_acc = self._run_c2st(hidden_dim=c2st_hidden_dim, n_epochs=c2st_n_epochs)
+            LOGGER.info(f"C2ST accuracy: {c2st_acc:.4f} (ideal: 0.5, worst: 1.0)")
+            return {"train_loss": train_losses, "vali_loss": vali_losses, "c2st_accuracy": c2st_acc}
+
+        return {"train_loss": train_losses, "vali_loss": vali_losses}
+
+    def _run_c2st(self, n_epochs=50, hidden_dim=64, batch_size=256, test_fraction=0.3):
+        """
+        Conditional Classifier Two-Sample Test (C2ST).
+
+        Trains a small binary MLP classifier to distinguish real validation pairs
+        (x, theta) from flow-generated pairs (x_gen ~ p(x|theta), theta). The
+        classifier receives the concatenation [x, theta] as input, enabling it
+        to detect conditional distribution mismatches.
+
+        An accuracy close to 0.5 indicates the flow has learned the conditional
+        distribution well; an accuracy close to 1.0 indicates a poor fit.
+
+        Requires that _prepare_data has been called (i.e. fit has been called
+        at least once), so that self.vali_loader is available.
+
+        Args:
+            n_epochs (int, optional): Epochs to train the classifier. Defaults to 50.
+            hidden_dim (int, optional): Hidden layer size of the classifier MLP. Defaults to 64.
+            batch_size (int, optional): Batch size for classifier training. Defaults to 256.
+            test_fraction (float, optional): Fraction held out as classifier test set.
+                Defaults to 0.3.
+
+        Returns:
+            float: Classifier test-set accuracy (ideal: 0.5, worst: 1.0).
+        """
+        # Collect full validation set
+        x_real_list, theta_list = [], []
+        for x_batch, theta_batch in self.vali_loader:
+            x_real_list.append(x_batch)
+            theta_list.append(theta_batch)
+        x_real = torch.cat(x_real_list, dim=0)   # (n, x_dim)
+        theta_vali = torch.cat(theta_list, dim=0) # (n, theta_dim)
+
+        n_real = len(x_real)
+        LOGGER.info(f"Running conditional C2ST with {n_real} real vs {n_real} flow samples ...")
+
+        # Generate samples from the flow: sample(1, context=theta) -> (n, 1, x_dim) -> (n, x_dim)
+        self.eval()
+        with torch.no_grad():
+            x_gen = self.sample(1, context=theta_vali).squeeze(1)  # (n, x_dim)
+
+        # Labels: 1 = real, 0 = generated
+        labels_real = torch.ones(n_real, 1, dtype=self.floatx, device=self.device)
+        labels_gen  = torch.zeros(n_real, 1, dtype=self.floatx, device=self.device)
+
+        # Classifier input: concat [x, theta] so context-dependent mismatches are detectable
+        inp_real = torch.cat([x_real, theta_vali], dim=1)
+        inp_gen  = torch.cat([x_gen,  theta_vali], dim=1)
+
+        x_all = torch.cat([inp_real, inp_gen], dim=0)
+        y_all = torch.cat([labels_real, labels_gen], dim=0)
+
+        # Shuffle
+        perm = torch.randperm(len(x_all), generator=torch.Generator().manual_seed(self.torch_seed))
+        x_all = x_all[perm]
+        y_all = y_all[perm]
+
+        # Train / test split for the classifier
+        n_test = int(len(x_all) * test_fraction)
+        n_clf_train = len(x_all) - n_test
+        x_clf_train, x_clf_test = x_all[:n_clf_train], x_all[n_clf_train:]
+        y_clf_train, y_clf_test = y_all[:n_clf_train], y_all[n_clf_train:]
+
+        # 2-hidden-layer MLP classifier
+        input_dim = x_all.shape[1]
+        classifier = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_dim, hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_dim, 1),
+            torch.nn.Sigmoid(),
+        ).to(self.device)
+
+        clf_optimizer = optim.Adam(classifier.parameters(), lr=1e-3)
+        criterion = torch.nn.BCELoss()
+
+        clf_loader = DataLoader(
+            TensorDataset(x_clf_train, y_clf_train), batch_size=batch_size, shuffle=True
+        )
+
+        classifier.train()
+        for _ in range(n_epochs):
+            for x_batch, y_batch in clf_loader:
+                pred = classifier(x_batch)
+                loss = criterion(pred, y_batch)
+                clf_optimizer.zero_grad()
+                loss.backward()
+                clf_optimizer.step()
+
+        # Evaluate on held-out classifier test set
+        classifier.eval()
+        with torch.no_grad():
+            pred_test = classifier(x_clf_test)
+            accuracy = ((pred_test > 0.5).float() == y_clf_test).float().mean().item()
+
+        return accuracy
 
     def _prepare_data(self, x, theta, batch_size, vali_split, seed=None):
         """

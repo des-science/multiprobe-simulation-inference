@@ -122,6 +122,9 @@ class LikelihoodBase(ABC):
         do_eecp=False,
         do_tarp=False,
         tarp_kwargs={},
+        # output
+        out_dir=None,
+        prefix="",
     ):
         """
         Plot diagnostics of how well the likelihood p(x|theta) has been learned from the (samples of the) true
@@ -144,6 +147,10 @@ class LikelihoodBase(ABC):
 
         assert grid_preds_true.shape[0] == grid_cosmos.shape[0], "n_cosmos must be the same for both arrays"
         assert grid_cosmos.ndim == 2, "grid_cosmos must have 2 dims containing (n_cosmos, n_params)"
+
+        if out_dir is None:
+            out_dir = self.model_dir
+        os.makedirs(out_dir, exist_ok=True)
 
         if grid_preds_true.ndim == 2:
             LOGGER.warning(
@@ -172,15 +179,15 @@ class LikelihoodBase(ABC):
                 grid_preds_true.ndim == 3
             ), "grid_preds_true must have 3 dims containing (n_cosmos, n_samples, n_summaries)"
             diagnostics.plot_histogram_check(
-                grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=self.model_dir
+                grid_preds_true, grid_preds_sample, n_random_indices=10, out_dir=out_dir, prefix=prefix
             )
         if do_dlss:
-            diagnostics.plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=self.model_dir)
+            diagnostics.plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=out_dir, prefix=prefix)
         if do_eecp:
-            diagnostics.plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=self.model_dir)
+            diagnostics.plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=out_dir, prefix=prefix)
         if do_tarp:
             diagnostics.plot_tarp_check(
-                grid_preds_true, grid_preds_sample, grid_cosmos, out_dir=self.model_dir, **tarp_kwargs
+                grid_preds_true, grid_preds_sample, grid_cosmos, out_dir=out_dir, prefix=prefix, **tarp_kwargs
             )
 
         # (n_cosmos, n_samples, n_summary)

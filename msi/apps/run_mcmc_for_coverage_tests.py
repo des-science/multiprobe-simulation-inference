@@ -58,7 +58,7 @@ def resources(args):
     if args.cluster == "perlmutter":
         # because of hyperthreading, there's a total of 256 threads per node
         resources = {
-            "main_time_per_index": 0.2,
+            "main_time_per_index": 0.4,
             "main_n_cores": 2,
             "main_memory": 1952,
             "main_scratch": 0,
@@ -139,13 +139,13 @@ def main(indices, args):
     n_sims = args.n_sims
     n_walkers = 1024
     n_burnin_steps = 1_000
-    n_samples_mcmc = n_walkers * 100
+    n_steps = 1_000
     n_samples_out = 10_000
 
     if args.debug:
         args.max_sleep = 0
         n_burnin_steps = 10
-        n_samples_mcmc = n_walkers * 100
+        n_steps = n_walkers * 100
         LOGGER.warning("!!! debug mode !!!")
     sleep_sec = np.random.uniform(0, args.max_sleep) if args.max_sleep > 0 else 0
     LOGGER.info(f"Waiting for {sleep_sec:.2f}s to prevent overloading IO")
@@ -166,7 +166,7 @@ def main(indices, args):
             x_true,
             n_walkers=n_walkers,
             n_burnin_steps=n_burnin_steps,
-            n_samples=n_samples_mcmc,
+            n_steps=n_steps,
             dont_save=True,
         )
         # too many samples make the test slow and are not needed
@@ -217,40 +217,41 @@ def _set_up_flow(args):
         with_fidu=False,
     )
 
-    # input dimensions
-    x_dim = grid_preds.shape[-1]
-    theta_dim = grid_cosmos.shape[-1]
 
     # NOTE this is hacky, the parameters entered here have to match the ones in the weights file
 
-    # shared hyperparameters
-    context_embedding_dim = 32
+    # # shared hyperparameters
+    # context_embedding_dim = 32
 
-    embedding_net = architecture.get_context_embedding_net(
-        context_dim=theta_dim,
-        context_embedding_dim=context_embedding_dim,
-        hidden_dim=64,
-        n_blocks=3,
-        dropout_probability=0.1,
-        use_batch_norm=False,
-    )
+    # # input dimensions
+    # x_dim = grid_preds.shape[-1]
+    # theta_dim = grid_cosmos.shape[-1]
 
-    base_dist = architecture.get_normal_dist(
-        feature_dim=x_dim,
-    )
+    # embedding_net = architecture.get_context_embedding_net(
+    #     context_dim=theta_dim,
+    #     context_embedding_dim=context_embedding_dim,
+    #     hidden_dim=64,
+    #     n_blocks=3,
+    #     dropout_probability=0.1,
+    #     use_batch_norm=False,
+    # )
 
-    transform = architecture.get_sigmoids_transform(
-        feature_dim=x_dim,
-        context_embedding_dim=context_embedding_dim,
-        n_layers=4,
-        hidden_dim=256,
-        svd_kwargs={},
-        sigmoids_kwargs={
-            "n_sigmoids": 16,
-            "num_blocks": 3,
-            "dropout_probability": 0.1,
-        },
-    )
+    # base_dist = architecture.get_normal_dist(
+    #     feature_dim=x_dim,
+    # )
+
+    # transform = architecture.get_sigmoids_transform(
+    #     feature_dim=x_dim,
+    #     context_embedding_dim=context_embedding_dim,
+    #     n_layers=4,
+    #     hidden_dim=256,
+    #     svd_kwargs={},
+    #     sigmoids_kwargs={
+    #         "n_sigmoids": 16,
+    #         "num_blocks": 3,
+    #         "dropout_probability": 0.1,
+    #     },
+    # )
 
     # transform = architecture.get_lipschitz_transform(
     #     feature_dim=x_dim,
@@ -260,13 +261,23 @@ def _set_up_flow(args):
     #     # hidden_dim=512,
     # )
 
+    # model = LikelihoodFlow(
+    #     params,
+    #     msfm_conf,
+    #     embedding_net=embedding_net,
+    #     base_dist=base_dist,
+    #     transform=transform,
+    #     model_dir=args.flow_dir,
+    #     load_existing=True,
+    #     device="cpu",
+    #     torch_seed=args.torch_seed,
+    # )
+
     model = LikelihoodFlow(
-        params,
-        msfm_conf,
-        embedding_net=embedding_net,
-        base_dist=base_dist,
-        transform=transform,
-        model_dir=args.flow_dir,
+        params, 
+        msfm_conf, 
+        feature_dim=grid_preds.shape[-1],    
+        model_dir=args.flow_dir, 
         load_existing=True,
         device="cpu",
         torch_seed=args.torch_seed,
@@ -328,9 +339,9 @@ def merge(indices, args):
                 pass
     LOGGER.info(f"Merged all files into {out_file}")
 
-    # # only remove the files after the above loop has terminated successfully
-    # for index in indices:
-    #     in_file = os.path.join(args.flow_dir, f"mcmc_samples_{index}.h5")
-    #     if os.path.exists(in_file):
-    #         os.remove(in_file)
-    # LOGGER.info(f"Removed temporary files")
+    # only remove the files after the above loop has terminated successfully
+    for index in indices:
+        in_file = os.path.join(args.flow_dir, f"mcmc_samples_{index}.h5")
+        if os.path.exists(in_file):
+            os.remove(in_file)
+    LOGGER.info(f"Removed temporary files")
