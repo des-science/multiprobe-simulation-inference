@@ -64,6 +64,7 @@ class PosteriorPredictiveChecks:
             self.wl_params += self.conf["analysis"]["params"]["ia"]["nla"]
             if self.conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
                 self.wl_params += self.conf["analysis"]["params"]["ia"]["tatt"]
+            self.wl_cosmo_idx = [self.wl_params.index(p) for p in cosmo_params]
 
         if self.gc_pred_file:
             LOGGER.info("Loading galaxy clustering data")
@@ -73,6 +74,7 @@ class PosteriorPredictiveChecks:
             self.gc_params += self.conf["analysis"]["params"]["bg"]["linear"]
             if self.conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
                 self.gc_params += self.conf["analysis"]["params"]["bg"]["quadratic"]
+            self.gc_cosmo_idx = [self.gc_params.index(p) for p in cosmo_params]
 
     def setup_flow(
         self, rep_probe, obs_probe, independent_cross=False, train_flow=False, flow_label="", fit_kwargs={}
@@ -107,8 +109,9 @@ class PosteriorPredictiveChecks:
                 flow_dir = self.wl_network_dir
                 features_grid = self.s_wl_grid
                 if independent_cross:
-                    self.flow_dist = "p(s_wl | theta_gc)"
-                    context_grid = self.theta_gc_grid
+                    self.flow_dist = "p(s_wl | theta_cosmo)"
+                    # only shared cosmo params: WL is insensitive to GC bias parameters
+                    context_grid = self.theta_gc_grid[:, self.gc_cosmo_idx]
                 else:
                     self.flow_dist = "p(s_wl | theta_gc, s_gc)"
                     context_grid = np.concatenate([self.theta_gc_grid, self.s_gc_grid], axis=-1)
@@ -117,8 +120,9 @@ class PosteriorPredictiveChecks:
                 flow_dir = self.gc_network_dir
                 features_grid = self.s_gc_grid
                 if independent_cross:
-                    self.flow_dist = "p(s_gc | theta_wl)"
-                    context_grid = self.theta_wl_grid
+                    self.flow_dist = "p(s_gc | theta_cosmo)"
+                    # only shared cosmo params: GC is insensitive to WL IA parameters
+                    context_grid = self.theta_wl_grid[:, self.wl_cosmo_idx]
                 else:
                     self.flow_dist = "p(s_gc | theta_wl, s_wl)"
                     context_grid = np.concatenate([self.theta_wl_grid, self.s_wl_grid], axis=-1)
@@ -141,7 +145,7 @@ class PosteriorPredictiveChecks:
 
         if self.is_cross_probe:
             flow_label += "ppc/cross"
-            flow_label += f"_{self.obs_abbrv}_to_{self.rep_abbrv}"
+            flow_label += f"_{self.rep_abbrv}_given_{self.obs_abbrv}"
             flow_label += independent_cross * "_independent"
         else:
             flow_label += "ppc/auto_"
@@ -320,6 +324,10 @@ class PosteriorPredictiveChecks:
         if self.is_cross_probe and not self.independent_cross:
             s_obs_star = np.repeat(np.atleast_2d(self.s_obs), n_samples, axis=0)
             context_star = np.concatenate([theta_star, s_obs_star], axis=-1)
+        elif self.is_cross_probe and self.independent_cross:
+            # marginalise over probe-specific nuisances by using only the shared cosmo columns
+            obs_cosmo_idx = self.wl_cosmo_idx if self.obs_probe == "lensing" else self.gc_cosmo_idx
+            context_star = theta_star[:, obs_cosmo_idx]
         else:
             context_star = theta_star
 
@@ -418,6 +426,8 @@ class PosteriorPredictiveChecks:
         except AttributeError:
             pass
 
+        tri.fig.suptitle(self.obs_label, fontsize=24, y=0.9)
+
         tri.fig.savefig(
             os.path.join(self.out_dir, f"{self.obs_label}_data_marginals.png"), bbox_inches="tight", dpi=100
         )
@@ -439,7 +449,7 @@ class PosteriorPredictiveChecks:
         ax.hist(mmds_baseline.numpy(), bins=100, alpha=0.5, label="baseline")
         ax.axvline(mmd.item(), color="k", label=mmd_label)
 
-        ax.set(xlabel="MMD", ylabel="Count", title=f"Maximum Mean Discrepancy Check: p = {p_val:.4f}")
+        ax.set(xlabel="MMD", ylabel="Count", title=f"{self.obs_label}: Maximum Mean Discrepancy Check: p = {p_val:.4f}")
         ax.legend()
 
         fig.savefig(os.path.join(self.out_dir, f"{self.obs_label}_mmd_check.png"), bbox_inches="tight", dpi=100)
@@ -456,7 +466,7 @@ class PosteriorPredictiveChecks:
             self.context_star,
             return_numpy=True,
         )
-        p_val = np.mean(log_prob_obs < log_prob_rep)
+        p_val = np.mean(log_prob_rep < log_prob_obs)
 
         fig, ax = plt.subplots(figsize=(12, 6), ncols=2, sharex=True)
 
@@ -472,6 +482,6 @@ class PosteriorPredictiveChecks:
         ax[1].set(xlabel="log prob obs", ylabel="log prob rep")
         ax[1].set_aspect("equal")
 
-        fig.suptitle(f"Log Probability Check: p = {p_val:.4f}")
+        fig.suptitle(f"{self.obs_label}: Log Probability Check: p = {p_val:.4f}")
 
         fig.savefig(os.path.join(self.out_dir, f"{self.obs_label}_log_prob_check.png"), bbox_inches="tight", dpi=100)
