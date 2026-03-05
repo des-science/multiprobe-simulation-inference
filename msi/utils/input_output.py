@@ -48,11 +48,11 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
         "fiducial/vali/pred",
         "fiducial/vali/i_example",
         "fiducial/vali/i_noise",
-        "grid/pred",
-        "grid/cosmo",
-        "grid/i_example",
-        "grid/i_noise",
-        "grid/i_sobol",
+        "grid/preds/test",
+        "grid/cosmos/test",
+        "grid/i_example/test",
+        "grid/i_noise/test",
+        "grid/i_sobol/test",
     ]
 
     if return_training:
@@ -160,8 +160,27 @@ def load_human_summaries(
 
 
 def load_cl_white_noise(base_dir):
+    # TODO
     noise_file = os.path.join(base_dir, "cls/white_noise.h5")
+    # noise_file = os.path.join(base_dir, "cls/white_noise_old.h5")
     with h5py.File(noise_file, "r") as f:
         noise_cls = f["cls/binned"][:]
 
     return noise_cls
+
+def load_network_preds_simple(pred_file):
+    with h5py.File(pred_file, "r") as f:
+        grid_preds = f["grid/preds/test"][:]
+        grid_cosmos = f["grid/cosmos/test"][:]
+
+        LOGGER.info(f"grid_preds.shape = {grid_preds.shape}")
+        LOGGER.info(f"grid_cosmos.shape = {grid_cosmos.shape}")
+
+        all_obs_preds = {}
+        for key, value in f["obs/preds"].items():
+            value = value[:]
+            
+            LOGGER.info(f"{key} with shape {value.shape}")
+            all_obs_preds[key] = value
+
+    return grid_preds, grid_cosmos, all_obs_preds

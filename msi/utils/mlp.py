@@ -194,16 +194,16 @@ class MLP(nn.Module):
 
                 optimizer.zero_grad()
                 outputs = self(batch_X)
-                loss_fn = loss_fn(outputs, batch_y)
+                loss = loss_fn(outputs, batch_y)
 
-                loss_fn.backward()
+                loss.backward()
 
                 if clip_grad_norm is not None:
                     torch.nn.utils.clip_grad_norm_(self.parameters(), clip_grad_norm)
 
                 optimizer.step()
 
-                train_losses.append(loss_fn.item())
+                train_losses.append(loss.item())
 
             # validation
             self.eval()

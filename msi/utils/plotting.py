@@ -5,7 +5,7 @@ Author: Arne Thomsen
 Utils to plot the 1D and 2D marginals of samples from a posterior distribution.
 """
 
-import os
+import os, copy
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -114,6 +114,9 @@ def plot_chains(
     """
     conf = files.load_config(conf)
 
+    chains = copy.deepcopy(chains)
+    params = copy.deepcopy(params)
+
     use_S8 = use_S8 or ("S8" in params_plot if params_plot is not None else False)
     is_params_list_of_lists = any(isinstance(element, list) for element in params)
     multi_chain = isinstance(chains, list)
@@ -145,9 +148,6 @@ def plot_chains(
     # shared parameters
     else:
         all_params = params
-
-    def sigma8_to_S8(sigma8, Om):
-        return sigma8 * np.sqrt(Om / 0.3)
 
     if use_S8:
         all_params = [param if param != "s8" else "S8" for param in all_params]
@@ -567,3 +567,26 @@ def plot_human_summary(
 
         fig.savefig(out_file, bbox_inches="tight", dpi=100)
         LOGGER.info(f"Saved the summary plot to {out_file}")
+
+def find_MAP(chain, log_probs, params, params_select, percentile=1):
+    params_indices = np.array([params.index(param) for param in params_select])
+
+    # Find samples with highest log probabilities (e.g., top 1%)
+    prob_threshold = np.percentile(log_probs, 100-percentile)
+    high_prob_indices = log_probs >= prob_threshold
+
+    chain = chain[high_prob_indices]
+    chain = chain[:, params_indices]
+
+    weights = np.exp(log_probs[high_prob_indices] - np.max(log_probs[high_prob_indices]))
+
+    high_prob_mean = np.average(
+        chain,
+        weights=weights,
+        axis=0
+    )
+
+    return high_prob_mean
+
+def sigma8_to_S8(sigma8, Om):
+        return sigma8 * np.sqrt(Om / 0.3)

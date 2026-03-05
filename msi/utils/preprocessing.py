@@ -38,6 +38,8 @@ def get_reshaped_network_preds(
         base_dir, model_dir, n_steps=n_steps, file_label=file_label, preds_file=preds_file
     )
 
+    LOGGER.info(f"file_dict.keys = {file_dict.keys()}")
+
     print("\n")
     LOGGER.info(f"Shapes after concatenation and selection:")
 
@@ -52,8 +54,8 @@ def get_reshaped_network_preds(
         fidu_preds = None
 
     if with_grid:
-        grid_preds = file_dict["grid/pred"]
-        grid_cosmos = file_dict["grid/cosmo"]
+        grid_preds = file_dict["grid/preds/test"]
+        grid_cosmos = file_dict["grid/cosmos/test"]
 
         # only relevant for the likelihood loss
         grid_preds = grid_preds[..., :n_params]
@@ -67,8 +69,9 @@ def get_reshaped_network_preds(
             grid_preds = grid_preds[:, : (n_perms_per_cosmo * n_patches * n_noise), :]
 
         # combine the example and cosmology axes
-        grid_preds = np.concatenate(grid_preds, axis=0)
-        grid_cosmos = np.concatenate(grid_cosmos, axis=0)
+        if grid_preds.ndim == 3:
+            grid_preds = np.concatenate(grid_preds, axis=0)
+            grid_cosmos = np.concatenate(grid_cosmos, axis=0)
 
         LOGGER.info(f"grid_preds  = {grid_preds.shape}")
         LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
@@ -139,6 +142,8 @@ def get_reshaped_human_summaries(
                 + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
             )
             LOGGER.info(f"Using white_noise_sigma = {white_noise_sigmas} from the dlss config")
+        # this l_max here and the theta_fwhm are fully equivalent. This is not to be confused with the l_max resulting
+        # from the white noise
         if l_maxs is None and scales_from_conf:
             theta_fwhms = (
                 dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
@@ -236,11 +241,8 @@ def get_reshaped_human_summaries(
                 with_noise = False
                 LOGGER.warning(f"No white noise Cls found, continuing without")
 
-            n_z = 0
-            if with_lensing:
-                n_z += len(msfm_conf["survey"]["metacal"]["z_bins"])
-            if with_clustering:
-                n_z += len(msfm_conf["survey"]["maglim"]["z_bins"])
+            # apply the smoothing to all (cross) bins, the selection only happens later
+            n_z = len(msfm_conf["survey"]["metacal"]["z_bins"]) + len(msfm_conf["survey"]["maglim"]["z_bins"])
 
             k = 0
             for i in range(n_z):

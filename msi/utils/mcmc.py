@@ -18,7 +18,16 @@ np.random.seed(12)
 
 
 def run_emcee(
-    log_prob_fn, params, conf=None, out_dir=None, label=None, n_walkers=1024, n_steps=1000, n_burnin_steps=100, moves=None
+    log_prob_fn,
+    params,
+    conf=None,
+    out_dir=None,
+    label=None,
+    n_walkers=1024,
+    n_steps=1000,
+    n_burnin_steps=100,
+    moves=None,
+    print_MAP=False,
 ):
     """Run the emcee EnsembleSampler to get a Markov Chain of samples from the distribution.
 
@@ -67,8 +76,9 @@ def run_emcee(
     chain = chain[:n_samples]
 
     # get MAP
-    MAP_params = chain[np.argmax(log_probs)]
-    LOGGER.info(f"MAP parameters: " + str({p: np.round(v, 3) for p, v in zip(params, MAP_params)}))
+    if print_MAP:
+        MAP_params = chain[np.argmax(log_probs)]
+        LOGGER.info(f"MAP parameters: " + str({p: np.round(v, 3) for p, v in zip(params, MAP_params)}))
 
     # save the result
     if out_dir is not None:
