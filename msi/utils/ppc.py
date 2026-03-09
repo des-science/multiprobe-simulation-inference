@@ -50,15 +50,15 @@ class PosteriorPredictiveChecks:
 
         self.wl_pred_file = wl_pred_file
         self.gc_pred_file = gc_pred_file
-        self.wl_network_dir = os.path.dirname(wl_pred_file) if wl_pred_file is not None else None
-        self.gc_network_dir = os.path.dirname(gc_pred_file) if gc_pred_file is not None else None
 
         self.wl_flow_dir = wl_flow_dir
         self.gc_flow_dir = gc_flow_dir
 
         if self.wl_pred_file:
             LOGGER.info("Loading weak lensing data")
-            self.s_wl_grid, self.theta_wl_grid, self.wl_obs_dict = input_output.load_network_preds_simple(self.wl_pred_file)
+            self.s_wl_grid, self.theta_wl_grid, self.wl_obs_dict = input_output.load_network_preds_simple(
+                self.wl_pred_file
+            )
 
             self.wl_params = cosmo_params.copy()
             self.wl_params += self.conf["analysis"]["params"]["ia"]["nla"]
@@ -68,7 +68,9 @@ class PosteriorPredictiveChecks:
 
         if self.gc_pred_file:
             LOGGER.info("Loading galaxy clustering data")
-            self.s_gc_grid, self.theta_gc_grid, self.gc_obs_dict = input_output.load_network_preds_simple(self.gc_pred_file)
+            self.s_gc_grid, self.theta_gc_grid, self.gc_obs_dict = input_output.load_network_preds_simple(
+                self.gc_pred_file
+            )
 
             self.gc_params = cosmo_params.copy()
             self.gc_params += self.conf["analysis"]["params"]["bg"]["linear"]
@@ -106,7 +108,8 @@ class PosteriorPredictiveChecks:
 
         if self.is_cross_probe:
             if self.rep_probe == "lensing":
-                flow_dir = self.wl_network_dir
+                flow_dir = self.gc_flow_dir
+
                 features_grid = self.s_wl_grid
                 if independent_cross:
                     self.flow_dist = "p(s_wl | theta_cosmo)"
@@ -117,7 +120,8 @@ class PosteriorPredictiveChecks:
                     context_grid = np.concatenate([self.theta_gc_grid, self.s_gc_grid], axis=-1)
 
             elif self.rep_probe == "clustering":
-                flow_dir = self.gc_network_dir
+                flow_dir = self.wl_flow_dir
+
                 features_grid = self.s_gc_grid
                 if independent_cross:
                     self.flow_dist = "p(s_gc | theta_cosmo)"
@@ -130,13 +134,13 @@ class PosteriorPredictiveChecks:
         else:
             if self.rep_probe == "lensing":
                 self.flow_dist = "p(s_wl | theta_wl)"
-                flow_dir = self.wl_network_dir
+                flow_dir = self.wl_flow_dir
                 features_grid = self.s_wl_grid
                 context_grid = self.theta_wl_grid
 
             elif self.rep_probe == "clustering":
                 self.flow_dist = "p(s_gc | theta_gc)"
-                flow_dir = self.gc_network_dir
+                flow_dir = self.gc_flow_dir
                 features_grid = self.s_gc_grid
                 context_grid = self.theta_gc_grid
 
@@ -244,8 +248,6 @@ class PosteriorPredictiveChecks:
                 rep_obs_dict = self.gc_obs_dict
             else:
                 self.s_prior = self.s_wl_grid
-
-
 
         elif self.obs_probe == "clustering":
             self.post_dist = "p(theta_gc | s_gc)"
@@ -428,9 +430,9 @@ class PosteriorPredictiveChecks:
 
         tri.fig.suptitle(self.obs_label, fontsize=24, y=0.9)
 
-        tri.fig.savefig(
-            os.path.join(self.out_dir, f"{self.obs_label}_data_marginals.png"), bbox_inches="tight", dpi=100
-        )
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_data_marginals.png")
+        LOGGER.info(f"Saving data marginals plot to {plot_file}")
+        tri.fig.savefig(plot_file, bbox_inches="tight", dpi=100)
 
     def _check_mmd(self):
         """Perform the Maximum Mean Discrepancy (MMD) check."""
@@ -449,10 +451,14 @@ class PosteriorPredictiveChecks:
         ax.hist(mmds_baseline.numpy(), bins=100, alpha=0.5, label="baseline")
         ax.axvline(mmd.item(), color="k", label=mmd_label)
 
-        ax.set(xlabel="MMD", ylabel="Count", title=f"{self.obs_label}: Maximum Mean Discrepancy Check: p = {p_val:.4f}")
+        ax.set(
+            xlabel="MMD", ylabel="Count", title=f"{self.obs_label}: Maximum Mean Discrepancy Check: p = {p_val:.4f}"
+        )
         ax.legend()
 
-        fig.savefig(os.path.join(self.out_dir, f"{self.obs_label}_mmd_check.png"), bbox_inches="tight", dpi=100)
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_mmd_check.png")
+        LOGGER.info(f"Saving MMD check plot to {plot_file}")
+        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
 
     def _check_log_probs(self):
         """Check the log probabilities of the observed and replicated summaries."""
@@ -484,4 +490,6 @@ class PosteriorPredictiveChecks:
 
         fig.suptitle(f"{self.obs_label}: Log Probability Check: p = {p_val:.4f}")
 
-        fig.savefig(os.path.join(self.out_dir, f"{self.obs_label}_log_prob_check.png"), bbox_inches="tight", dpi=100)
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_log_prob_check.png")
+        LOGGER.info(f"Saving log probability check plot to {plot_file}")
+        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
