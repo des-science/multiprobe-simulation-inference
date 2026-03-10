@@ -3,9 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from trianglechain import TriangleChain
 
-import torch
-from sbi.diagnostics.misspecification import calc_misspecification_mmd
-
 from msfm.utils import files, logger
 from msi.utils import input_output, plotting
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow
@@ -192,8 +189,11 @@ class PosteriorPredictiveChecks:
         # select checks
         plot_param_posterior=False,
         check_data_marginals=True,
-        check_mmd=True,
-        check_log_probs=True,
+        check_kernel=True,
+        check_log_prob=True,
+        check_mahalanobis=True,
+        check_energy_score=True,
+        check_crps=True,
     ):
         """
         Run the requested posterior predictive checks.
@@ -209,8 +209,11 @@ class PosteriorPredictiveChecks:
             k_highest_grid (int): Number of highest probability samples to select from the grid.
             plot_param_posterior (bool): Whether to plot the parameter posterior.
             check_data_marginals (bool): Whether to check data marginals.
-            check_mmd (bool): Whether to check Maximum Mean Discrepancy (MMD).
-            check_log_probs (bool): Whether to check log probabilities.
+            check_kernel (bool): Whether to run the kernel similarity outlier test.
+            check_log_prob (bool): Whether to run the log-probability posterior predictive check.
+            check_mahalanobis (bool): Whether to check the Mahalanobis distance.
+            check_energy_score (bool): Whether to check the energy score (mean L2 distance to PPD).
+            check_crps (bool): Whether to check the CRPS (mean L1 distance to PPD).
         """
 
         self._set_observation(obs_label, s_obs, theta_post, s_obs_rep, theta_post_rep)
@@ -225,11 +228,20 @@ class PosteriorPredictiveChecks:
         if check_data_marginals:
             self._check_data_marginals()
 
-        if check_mmd:
-            self._check_mmd()
+        if check_log_prob:
+            self._check_one_sample(stat="log_prob")
 
-        if check_log_probs:
-            self._check_log_probs()
+        if check_kernel:
+            self._check_one_sample(stat="kernel")
+
+        if check_mahalanobis:
+            self._check_one_sample(stat="mahalanobis")
+
+        if check_energy_score:
+            self._check_one_sample(stat="energy")
+
+        if check_crps:
+            self._check_one_sample(stat="crps")
 
     def _set_observation(self, obs_label=None, s_obs=None, theta_post=None, s_obs_rep=None, theta_post_rep=None):
         """Set up the observation data and configuration for the PPC."""
@@ -338,7 +350,7 @@ class PosteriorPredictiveChecks:
         s_rep = self.flow.sample_likelihood(
             context_star,
             n_samples=1,
-            batch_size=context_star.shape[0] // 10,
+            batch_size=min(context_star.shape[0], 10_000),
         )
         s_rep = np.squeeze(s_rep)
         LOGGER.info(f"Done sampling after {LOGGER.timer.elapsed('sampling')}")
@@ -434,62 +446,123 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Saving data marginals plot to {plot_file}")
         tri.fig.savefig(plot_file, bbox_inches="tight", dpi=100)
 
-    def _check_mmd(self):
-        """Perform the Maximum Mean Discrepancy (MMD) check."""
+    def _check_one_sample(self, stat, n_bootstrap=10_000, n_kernel_ref=5_000):
+        """Generic one-sample test: is s_obs an outlier relative to the PPD?
 
-        mmd_label = r"MMD($s_{" + self.rep_abbrv + r"}^{rep}$, $s_{" + self.rep_abbrv + r"}^{obs}$)"
+        Null distribution: evaluate the same statistic on bootstrap draws from
+        the PPD samples s_rep.  A small p-value means s_obs is extreme.
 
-        s_obs_rep = np.atleast_2d(self.s_obs_rep)
+        Args:
+            stat: 'mahalanobis', 'energy', 'crps', 'log_prob', or 'kernel'.
+            n_bootstrap: Number of bootstrap draws for the null.
+            n_kernel_ref: Size of the reference subsample (kernel only).
+        """
+        s_rep = self.s_rep  # (N, dim)
+        s_obs = np.atleast_2d(self.s_obs_rep)  # (1, dim)
 
-        p_val, (mmds_baseline, mmd) = calc_misspecification_mmd(
-            x_obs=torch.from_numpy(s_obs_rep).float(),
-            x=torch.from_numpy(self.s_rep).float(),
-        )
+        if stat == "mahalanobis":
+            mu = np.mean(s_rep, axis=0)
+            cov = np.cov(s_rep, rowvar=False)
+            cov_inv = np.linalg.pinv(cov)
+
+            def compute_stat(x):
+                diff = x - mu  # (M, dim)
+                return np.einsum("...i,ij,...j->...", diff, cov_inv, diff)  # (M,)
+
+            xlabel = "Mahalanobis distance²"
+            file_tag = "mahalanobis_check"
+            title_tag = "Mahalanobis Distance Check"
+            stat_label = r"$D_M^2(s_{" + self.rep_abbrv + r"}^{obs})$"
+            outlier_if_low = False
+
+        elif stat in ("energy", "crps"):
+            from scipy.spatial.distance import cdist
+
+            # Energy statistic at a single point: mean ||x - s_i||_p
+            # (The cross-term 1/N^2 * sum_ij ||s_i - s_j|| is constant across all evaluations
+            # and cancels in the bootstrap ranking, so it is omitted.)
+            # stat="crps" uses L1 norm, which equals the sum of per-dimension CRPS scores.
+            # stat="energy" uses L2 norm (standard energy distance).
+            cdist_metric = "cityblock" if stat == "crps" else "euclidean"
+            norm_ord = 1 if stat == "crps" else 2
+
+            def compute_stat(x):
+                return np.mean(cdist(x, s_rep, metric=cdist_metric), axis=-1)  # (M,)
+
+            xlabel = f"Mean L{norm_ord} distance to PPD"
+            file_tag = f"{stat}_check"
+            title_tag = "CRPS Check" if stat == "crps" else "Energy Score Check"
+            stat_label = r"$\bar{d}(s_{" + self.rep_abbrv + r"}^{obs},\, s_{" + self.rep_abbrv + r"}^{rep})$"
+            outlier_if_low = False
+
+        elif stat == "log_prob":
+
+            def compute_stat(x, context):
+                return self.flow.log_likelihood(x, context, return_numpy=True)
+
+            file_tag = "log_prob_check"
+            title_tag = "Log-Prob PPC"
+
+        elif stat == "kernel":
+            from scipy.spatial.distance import cdist
+
+            n_ref = min(n_kernel_ref, s_rep.shape[0])
+            i_ref = self.rng.integers(0, s_rep.shape[0], n_ref)
+            s_ref = s_rep[i_ref]
+
+            n_bw = min(2_000, n_ref)
+            i_bw = self.rng.integers(0, n_ref, n_bw)
+            sq_dists_bw = cdist(s_ref[i_bw], s_ref[i_bw], metric="sqeuclidean")
+            bw2 = np.median(sq_dists_bw[np.triu_indices(n_bw, k=1)])
+            if bw2 == 0:
+                bw2 = 1.0
+            LOGGER.info(f"Kernel bandwidth (squared): {bw2:.4f}")
+
+            def compute_stat(x):
+                sq_d = cdist(x, s_ref, metric="sqeuclidean")  # (M, n_ref)
+                return np.mean(np.exp(-sq_d / bw2), axis=-1)  # high = similar = not outlier
+
+            xlabel = "Mean kernel similarity"
+            file_tag = "kernel_check"
+            title_tag = "Kernel Similarity Check"
+            stat_label = r"$\bar{k}(s_{" + self.rep_abbrv + r"}^{obs},\, s_{" + self.rep_abbrv + r"}^{rep})$"
+            outlier_if_low = True
+
+        else:
+            raise ValueError(f"Unknown stat: {stat}")
+
+        i_boot = self.rng.integers(0, s_rep.shape[0], n_bootstrap)
+
+        if stat == "log_prob":
+            # for each posterior draw theta_i, compare log p(s_obs | theta_i) with log p(s_rep_i | theta_i).
+            # The p-value is the fraction of draws where the replicated data is more likely than the observed data
+            # (element-wise).
+            t_obs_array = compute_stat(np.repeat(s_obs, n_bootstrap, axis=0), self.context_star[i_boot])
+            t_boot = compute_stat(s_rep[i_boot], self.context_star[i_boot])
+            t_diff = t_boot - t_obs_array  # positive: rep more likely than obs
+            p_val = np.mean(t_diff <= 0)  # fraction where obs is at least as likely as rep
+        else:
+            t_obs = compute_stat(s_obs)[0]
+            t_boot = compute_stat(s_rep[i_boot])
+            # p-value: fraction of null draws at least as extreme as t_obs
+            p_val = np.mean(t_boot <= t_obs) if outlier_if_low else np.mean(t_boot >= t_obs)
 
         fig, ax = plt.subplots(figsize=(12, 6))
-
-        ax.hist(mmds_baseline.numpy(), bins=100, alpha=0.5, label="baseline")
-        ax.axvline(mmd.item(), color="k", label=mmd_label)
-
-        ax.set(
-            xlabel="MMD", ylabel="Count", title=f"{self.obs_label}: Maximum Mean Discrepancy Check: p = {p_val:.4f}"
-        )
+        if stat == "log_prob":
+            # plot per-draw differences: rep vs obs log-prob. p-value = fraction left of 0.
+            ax.hist(t_diff, bins=100, alpha=0.5, label=r"$\log p(s^{rep}|\theta_i) - \log p(s^{obs}|\theta_i)$")
+            ax.axvline(0, color="k", linestyle="--", label=f"p = {p_val:.4f}")
+            ax.set(
+                xlabel=r"$\log p(s^{rep}|\theta) - \log p(s^{obs}|\theta)$",
+                ylabel="Count",
+                title=f"{self.obs_label}: {title_tag}: p = {p_val:.4f}",
+            )
+        else:
+            ax.hist(t_boot, bins=100, alpha=0.5, label="null (PPD samples)")
+            ax.axvline(t_obs, color="k", label=f"{stat_label} = {t_obs:.4f}")
+            ax.set(xlabel=xlabel, ylabel="Count", title=f"{self.obs_label}: {title_tag}: p = {p_val:.4f}")
         ax.legend()
 
-        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_mmd_check.png")
-        LOGGER.info(f"Saving MMD check plot to {plot_file}")
-        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
-
-    def _check_log_probs(self):
-        """Check the log probabilities of the observed and replicated summaries."""
-
-        rep_label = r"$p(s_{" + self.rep_abbrv + r"}^{rep} | \theta^{\star}, s_{" + self.obs_abbrv + r"}^{obs})$"
-        obs_label = r"$p(s_{" + self.rep_abbrv + r"}^{obs} | \theta^{\star}, s_{" + self.obs_abbrv + r"}^{obs})$"
-
-        log_prob_rep = self.flow.log_likelihood(self.s_rep, self.context_star, return_numpy=True)
-        log_prob_obs = self.flow.log_likelihood(
-            np.repeat(np.atleast_2d(self.s_obs_rep), self.context_star.shape[0], axis=0),
-            self.context_star,
-            return_numpy=True,
-        )
-        p_val = np.mean(log_prob_rep < log_prob_obs)
-
-        fig, ax = plt.subplots(figsize=(12, 6), ncols=2, sharex=True)
-
-        ax[0].hist(log_prob_rep, bins=100, label=rep_label, alpha=0.5)
-        ax[0].hist(log_prob_obs, bins=100, label=obs_label, alpha=0.5)
-        ax[0].set(xlabel="log prob", ylabel="Count")
-        ax[0].legend()
-
-        ax[1].scatter(log_prob_obs, log_prob_rep, s=0.1, alpha=0.5)
-        log_min = np.min([log_prob_obs, log_prob_rep])
-        log_max = np.max([log_prob_obs, log_prob_rep])
-        ax[1].plot([log_min, log_max], [log_min, log_max], color="k", linestyle="--")
-        ax[1].set(xlabel="log prob obs", ylabel="log prob rep")
-        ax[1].set_aspect("equal")
-
-        fig.suptitle(f"{self.obs_label}: Log Probability Check: p = {p_val:.4f}")
-
-        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_log_prob_check.png")
-        LOGGER.info(f"Saving log probability check plot to {plot_file}")
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{file_tag}.png")
+        LOGGER.info(f"Saving {title_tag} plot to {plot_file}")
         fig.savefig(plot_file, bbox_inches="tight", dpi=100)
