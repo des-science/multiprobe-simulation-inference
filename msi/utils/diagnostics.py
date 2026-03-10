@@ -589,9 +589,12 @@ def posterior_tarp_check(
     return alpha, ecp_mean, ecp_std
 
 
-def FoM_from_chain(chain1, chain2):
+def FoM_from_chain(chain, params, param1, param2):
+    params_idx = [params.index(param1), params.index(param2)]
+    chain = chain[:, params_idx]
+
     # eq. (17) in https://arxiv.org/pdf/2405.10881
-    cov = np.cov(np.stack([chain1, chain2], axis=-1), rowvar=False)
+    cov = np.cov(np.stack([chain[:, 0], chain[:, 1]], axis=-1), rowvar=False)
     det = np.linalg.det(cov)
     fom = det ** (-0.5)
     return fom

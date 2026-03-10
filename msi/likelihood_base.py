@@ -184,7 +184,9 @@ class LikelihoodBase(ABC):
         if do_dlss:
             diagnostics.plot_deeplss_check(grid_preds_true, grid_preds_sample, out_dir=out_dir, prefix=prefix)
         if do_eecp:
-            diagnostics.plot_eecp_check(grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=out_dir, prefix=prefix)
+            diagnostics.plot_eecp_check(
+                grid_preds_true, grid_preds_sample, grid_cosmos, self, out_dir=out_dir, prefix=prefix
+            )
         if do_tarp:
             diagnostics.plot_tarp_check(
                 grid_preds_true, grid_preds_sample, grid_cosmos, out_dir=out_dir, prefix=prefix, **tarp_kwargs
@@ -217,7 +219,10 @@ class LikelihoodBase(ABC):
         if self.model_dir is not None:
             self.model_file = os.path.join(self.model_dir, self.model_name + file_type)
         elif self.out_dir is not None and self.model_dir is None:
-            self.model_dir = os.path.join(self.out_dir, self.label, self.model_name)
+            if self.label is None:
+                self.model_dir = os.path.join(self.out_dir, self.prefix + self.model_name + self.suffix)
+            else:
+                self.model_dir = os.path.join(self.out_dir, self.label, self.prefix + self.model_name + self.suffix)
             os.makedirs(self.model_dir, exist_ok=True)
             LOGGER.info(f"Set up the model directory {self.model_dir}")
             self.model_file = os.path.join(self.model_dir, self.model_name + file_type)

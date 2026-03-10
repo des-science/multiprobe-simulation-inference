@@ -168,7 +168,10 @@ def load_cl_white_noise(base_dir):
 
     return noise_cls
 
+
 def load_network_preds_simple(pred_file):
+    LOGGER.info(f"Loading predictions from {pred_file}")
+
     with h5py.File(pred_file, "r") as f:
         grid_preds = f["grid/preds/test"][:]
         grid_cosmos = f["grid/cosmos/test"][:]
@@ -179,7 +182,7 @@ def load_network_preds_simple(pred_file):
         all_obs_preds = {}
         for key, value in f["obs/preds"].items():
             value = value[:]
-            
+
             LOGGER.info(f"{key} with shape {value.shape}")
             all_obs_preds[key] = value
 

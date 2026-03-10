@@ -50,9 +50,17 @@ def get_binned_power_spectra_dset(
     elif probe == "clustering":
         with_lensing = False
         with_cross_probe = False
+    elif probe == "cross":
+        with_lensing = False
+        with_clustering = False
+        with_cross_probe = True
     elif probe == "combined":
         with_lensing = True
         with_clustering = True
+        if with_cross_z is None:
+            with_cross_z = True
+        if with_cross_probe is None:
+            with_cross_probe = True
 
     out_dict = preprocessing.get_binned_power_spectra(
         base_dir=base_dir,

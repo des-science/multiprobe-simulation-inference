@@ -44,6 +44,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         # output
         out_dir=None,
         model_dir=None,
+        prefix="",
+        suffix="",
         label=None,
         load_existing=True,
         # architecture
@@ -83,6 +85,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         self.out_dir = out_dir
         self.model_dir = model_dir
+        self.prefix = prefix
+        self.suffix = suffix
         self.label = label
         self._setup_dirs(".pt")
 
@@ -288,8 +292,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         for x_batch, theta_batch in self.vali_loader:
             x_real_list.append(x_batch)
             theta_list.append(theta_batch)
-        x_real = torch.cat(x_real_list, dim=0)   # (n, x_dim)
-        theta_vali = torch.cat(theta_list, dim=0) # (n, theta_dim)
+        x_real = torch.cat(x_real_list, dim=0)  # (n, x_dim)
+        theta_vali = torch.cat(theta_list, dim=0)  # (n, theta_dim)
 
         n_real = len(x_real)
         LOGGER.info(f"Running conditional C2ST with {n_real} real vs {n_real} flow samples ...")
@@ -301,11 +305,11 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         # Labels: 1 = real, 0 = generated
         labels_real = torch.ones(n_real, 1, dtype=self.floatx, device=self.device)
-        labels_gen  = torch.zeros(n_real, 1, dtype=self.floatx, device=self.device)
+        labels_gen = torch.zeros(n_real, 1, dtype=self.floatx, device=self.device)
 
         # Classifier input: concat [x, theta] so context-dependent mismatches are detectable
         inp_real = torch.cat([x_real, theta_vali], dim=1)
-        inp_gen  = torch.cat([x_gen,  theta_vali], dim=1)
+        inp_gen = torch.cat([x_gen, theta_vali], dim=1)
 
         x_all = torch.cat([inp_real, inp_gen], dim=0)
         y_all = torch.cat([labels_real, labels_gen], dim=0)
@@ -335,9 +339,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         clf_optimizer = optim.Adam(classifier.parameters(), lr=1e-3)
         criterion = torch.nn.BCELoss()
 
-        clf_loader = DataLoader(
-            TensorDataset(x_clf_train, y_clf_train), batch_size=batch_size, shuffle=True
-        )
+        clf_loader = DataLoader(TensorDataset(x_clf_train, y_clf_train), batch_size=batch_size, shuffle=True)
 
         classifier.train()
         for _ in range(n_epochs):
