@@ -11,6 +11,13 @@ from msi.flow_conductor import architecture
 
 LOGGER = logger.get_logger(__file__)
 
+_PROBE_ABBREVIATIONS = {
+    "lensing": "wl",
+    "clustering": "gc",
+    "cross": "x",
+    "combined": "wl+gc",
+}
+
 
 class PosteriorPredictiveChecks:
     """
@@ -18,6 +25,8 @@ class PosteriorPredictiveChecks:
 
     This class handles loading data, setting up normalizing flows, and running various checks to validate
     the posterior distribution obtained from inference.
+
+    Probes are referred to generically as 'probe1' and 'probe2' (e.g. weak lensing and galaxy clustering).
     """
 
     def __init__(
@@ -25,11 +34,14 @@ class PosteriorPredictiveChecks:
         conf,
         cosmo_params=["Om", "s8", "w0"],
         seed=111,
+        # probe names
+        probe1_name=None,
+        probe2_name=None,
         # data loading
-        wl_pred_file=None,
-        gc_pred_file=None,
-        wl_flow_dir=None,
-        gc_flow_dir=None,
+        probe1_pred_file=None,
+        probe2_pred_file=None,
+        probe1_flow_dir=None,
+        probe2_flow_dir=None,
     ):
         """
         Initialize the PosteriorPredictiveChecks object.
@@ -38,6 +50,13 @@ class PosteriorPredictiveChecks:
             conf: Path to the configuration file or dictionary.
             cosmo_params: List of cosmological parameters.
             seed: Random seed for reproducibility.
+            probe1_name: Name of probe 1. One of 'lensing', 'clustering', 'cross', 'combined'.
+                Used for plot labels; shorthand abbreviations are taken from _PROBE_ABBREVIATIONS.
+            probe2_name: Name of probe 2. Same options as probe1_name.
+            probe1_pred_file: Path to the probe 1 predictions file.
+            probe2_pred_file: Path to the probe 2 predictions file.
+            probe1_flow_dir: Directory for the probe 1 flow model.
+            probe2_flow_dir: Directory for the probe 2 flow model.
         """
 
         self.conf = files.load_config(conf)
@@ -45,35 +64,47 @@ class PosteriorPredictiveChecks:
         self.seed = seed
         self.rng = np.random.default_rng(self.seed)
 
-        self.wl_pred_file = wl_pred_file
-        self.gc_pred_file = gc_pred_file
+        self.probe1_name = probe1_name
+        self.probe2_name = probe2_name
+        self.probe1_abbrv = _PROBE_ABBREVIATIONS[probe1_name] if probe1_name else None
+        self.probe2_abbrv = _PROBE_ABBREVIATIONS[probe2_name] if probe2_name else None
 
-        self.wl_flow_dir = wl_flow_dir
-        self.gc_flow_dir = gc_flow_dir
+        self.probe1_pred_file = probe1_pred_file
+        self.probe2_pred_file = probe2_pred_file
 
-        if self.wl_pred_file:
-            LOGGER.info("Loading weak lensing data")
-            self.s_wl_grid, self.theta_wl_grid, self.wl_obs_dict = input_output.load_network_preds_simple(
-                self.wl_pred_file
+        self.probe1_flow_dir = probe1_flow_dir
+        self.probe2_flow_dir = probe2_flow_dir
+
+        if self.probe1_pred_file:
+            LOGGER.info(f"Loading {probe1_name} data")
+            self.s_probe1_grid, self.theta_probe1_grid, self.probe1_obs_dict = input_output.load_network_preds_simple(
+                self.probe1_pred_file
             )
+            self.probe1_params = self._get_probe_params(probe1_name)
+            self.probe1_cosmo_idx = [self.probe1_params.index(p) for p in cosmo_params]
 
-            self.wl_params = cosmo_params.copy()
-            self.wl_params += self.conf["analysis"]["params"]["ia"]["nla"]
+        if self.probe2_pred_file:
+            LOGGER.info(f"Loading {probe2_name} data")
+            self.s_probe2_grid, self.theta_probe2_grid, self.probe2_obs_dict = input_output.load_network_preds_simple(
+                self.probe2_pred_file
+            )
+            self.probe2_params = self._get_probe_params(probe2_name)
+            self.probe2_cosmo_idx = [self.probe2_params.index(p) for p in cosmo_params]
+
+    def _get_probe_params(self, probe_name):
+        """Return the full parameter list for a probe: cosmo params + probe-specific nuisances."""
+        params = self.cosmo_params.copy()
+        if probe_name in ("lensing", "combined", "cross"):
+            params += self.conf["analysis"]["params"]["ia"]["nla"]
             if self.conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
-                self.wl_params += self.conf["analysis"]["params"]["ia"]["tatt"]
-            self.wl_cosmo_idx = [self.wl_params.index(p) for p in cosmo_params]
-
-        if self.gc_pred_file:
-            LOGGER.info("Loading galaxy clustering data")
-            self.s_gc_grid, self.theta_gc_grid, self.gc_obs_dict = input_output.load_network_preds_simple(
-                self.gc_pred_file
-            )
-
-            self.gc_params = cosmo_params.copy()
-            self.gc_params += self.conf["analysis"]["params"]["bg"]["linear"]
+                params += self.conf["analysis"]["params"]["ia"]["tatt"]
+        if probe_name in ("clustering", "combined", "cross"):
+            params += self.conf["analysis"]["params"]["bg"]["linear"]
             if self.conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
-                self.gc_params += self.conf["analysis"]["params"]["bg"]["quadratic"]
-            self.gc_cosmo_idx = [self.gc_params.index(p) for p in cosmo_params]
+                params += self.conf["analysis"]["params"]["bg"]["quadratic"]
+
+        LOGGER.info(f"Probe '{probe_name}' parameters: {params}")
+        return params
 
     def setup_flow(
         self, rep_probe, obs_probe, independent_cross=False, train_flow=False, flow_label="", fit_kwargs={}
@@ -82,64 +113,56 @@ class PosteriorPredictiveChecks:
         Set up the normalizing flow for the posterior predictive checks.
 
         Args:
-            rep_probe (str): The probe to be replicated (predicted), either 'lensing' or 'clustering'.
-            obs_probe (str): The probe used for observation (conditioning), either 'lensing' or 'clustering'.
+            rep_probe (str): The probe to be replicated (predicted). Must be one of the names
+                passed as probe1_name or probe2_name at construction time.
+            obs_probe (str): The probe used for observation (conditioning). Same options.
             independent_cross (bool): If True, treats cross-probe correlations as independent.
             train_flow (bool): If True, trains the flow from scratch.
             flow_label (str): Label for the flow model.
             fit_kwargs (dict): Additional keyword arguments for fitting the flow.
         """
 
-        assert rep_probe in ["lensing", "clustering"]
-        assert obs_probe in ["lensing", "clustering"]
+        assert rep_probe in [
+            self.probe1_name,
+            self.probe2_name,
+        ], f"rep_probe must be one of {[self.probe1_name, self.probe2_name]}, got '{rep_probe}'"
+        assert obs_probe in [
+            self.probe1_name,
+            self.probe2_name,
+        ], f"obs_probe must be one of {[self.probe1_name, self.probe2_name]}, got '{obs_probe}'"
 
-        self.rep_probe = rep_probe
-        self.obs_probe = obs_probe
-        self.is_cross_probe = self.obs_probe != rep_probe
+        self.rep_probe = "probe1" if rep_probe == self.probe1_name else "probe2"
+        self.obs_probe = "probe1" if obs_probe == self.probe1_name else "probe2"
+
+        self.is_cross_probe = self.obs_probe != self.rep_probe
         self.independent_cross = independent_cross
 
-        self.rep_abbrv = "wl" if rep_probe == "lensing" else "gc"
-        self.obs_abbrv = "wl" if obs_probe == "lensing" else "gc"
+        self.rep_abbrv = self.probe1_abbrv if self.rep_probe == "probe1" else self.probe2_abbrv
+        self.obs_abbrv = self.probe1_abbrv if self.obs_probe == "probe1" else self.probe2_abbrv
+        self.rep_probe_name = self.probe1_name if self.rep_probe == "probe1" else self.probe2_name
+        self.obs_probe_name = self.probe1_name if self.obs_probe == "probe1" else self.probe2_name
 
-        LOGGER.info(f"Conditioning on {self.obs_probe} and sampling in {self.rep_probe} summary space")
+        LOGGER.info(f"Conditioning on {self.obs_probe_name} and sampling in {self.rep_probe_name} summary space")
 
         if self.is_cross_probe:
-            if self.rep_probe == "lensing":
-                flow_dir = self.gc_flow_dir
-
-                features_grid = self.s_wl_grid
-                if independent_cross:
-                    self.flow_dist = "p(s_wl | theta_cosmo)"
-                    # only shared cosmo params: WL is insensitive to GC bias parameters
-                    context_grid = self.theta_gc_grid[:, self.gc_cosmo_idx]
-                else:
-                    self.flow_dist = "p(s_wl | theta_gc, s_gc)"
-                    context_grid = np.concatenate([self.theta_gc_grid, self.s_gc_grid], axis=-1)
-
-            elif self.rep_probe == "clustering":
-                flow_dir = self.wl_flow_dir
-
-                features_grid = self.s_gc_grid
-                if independent_cross:
-                    self.flow_dist = "p(s_gc | theta_cosmo)"
-                    # only shared cosmo params: GC is insensitive to WL IA parameters
-                    context_grid = self.theta_wl_grid[:, self.wl_cosmo_idx]
-                else:
-                    self.flow_dist = "p(s_gc | theta_wl, s_wl)"
-                    context_grid = np.concatenate([self.theta_wl_grid, self.s_wl_grid], axis=-1)
-
+            flow_dir = getattr(self, f"{self.obs_probe}_flow_dir")
+            features_grid = getattr(self, f"s_{self.rep_probe}_grid")
+            if independent_cross:
+                self.flow_dist = f"p(s_{self.rep_abbrv} | theta_cosmo)"
+                # only shared cosmo params: rep probe is insensitive to obs probe nuisance parameters
+                context_grid = getattr(self, f"theta_{self.obs_probe}_grid")[
+                    :, getattr(self, f"{self.obs_probe}_cosmo_idx")
+                ]
+            else:
+                self.flow_dist = f"p(s_{self.rep_abbrv} | theta_{self.obs_abbrv}, s_{self.obs_abbrv})"
+                context_grid = np.concatenate(
+                    [getattr(self, f"theta_{self.obs_probe}_grid"), getattr(self, f"s_{self.obs_probe}_grid")], axis=-1
+                )
         else:
-            if self.rep_probe == "lensing":
-                self.flow_dist = "p(s_wl | theta_wl)"
-                flow_dir = self.wl_flow_dir
-                features_grid = self.s_wl_grid
-                context_grid = self.theta_wl_grid
-
-            elif self.rep_probe == "clustering":
-                self.flow_dist = "p(s_gc | theta_gc)"
-                flow_dir = self.gc_flow_dir
-                features_grid = self.s_gc_grid
-                context_grid = self.theta_gc_grid
+            self.flow_dist = f"p(s_{self.rep_abbrv} | theta_{self.rep_abbrv})"
+            flow_dir = getattr(self, f"{self.rep_probe}_flow_dir")
+            features_grid = getattr(self, f"s_{self.rep_probe}_grid")
+            context_grid = getattr(self, f"theta_{self.rep_probe}_grid")
 
         LOGGER.info(f"flow = {self.flow_dist}")
         self.context_grid = context_grid
@@ -147,7 +170,7 @@ class PosteriorPredictiveChecks:
         if self.is_cross_probe:
             flow_label += "ppc/cross"
             flow_label += f"_{self.rep_abbrv}_given_{self.obs_abbrv}"
-            flow_label += independent_cross * "_independent"
+            flow_label += "_independent" if independent_cross else ""
         else:
             flow_label += "ppc/auto_"
             flow_label += self.obs_abbrv
@@ -192,8 +215,8 @@ class PosteriorPredictiveChecks:
         check_kernel=True,
         check_log_prob=True,
         check_mahalanobis=True,
-        check_energy_score=True,
-        check_crps=True,
+        check_l2=True,
+        check_l1=True,
     ):
         """
         Run the requested posterior predictive checks.
@@ -212,8 +235,8 @@ class PosteriorPredictiveChecks:
             check_kernel (bool): Whether to run the kernel similarity outlier test.
             check_log_prob (bool): Whether to run the log-probability posterior predictive check.
             check_mahalanobis (bool): Whether to check the Mahalanobis distance.
-            check_energy_score (bool): Whether to check the energy score (mean L2 distance to PPD).
-            check_crps (bool): Whether to check the CRPS (mean L1 distance to PPD).
+            check_l2 (bool): Whether to check the mean L2 distance to the PPD.
+            check_l1 (bool): Whether to check the mean L1 distance to the PPD.
         """
 
         self._set_observation(obs_label, s_obs, theta_post, s_obs_rep, theta_post_rep)
@@ -237,44 +260,29 @@ class PosteriorPredictiveChecks:
         if check_mahalanobis:
             self._check_one_sample(stat="mahalanobis")
 
-        if check_energy_score:
-            self._check_one_sample(stat="energy")
+        if check_l2:
+            self._check_one_sample(stat="l2")
 
-        if check_crps:
-            self._check_one_sample(stat="crps")
+        if check_l1:
+            self._check_one_sample(stat="l1")
 
     def _set_observation(self, obs_label=None, s_obs=None, theta_post=None, s_obs_rep=None, theta_post_rep=None):
         """Set up the observation data and configuration for the PPC."""
 
         self.obs_label = obs_label
 
-        if self.obs_probe == "lensing":
-            self.post_dist = "p(theta_wl | s_wl)"
-
-            obs_model_dir = self.wl_flow_dir
-            obs_dict = self.wl_obs_dict
-
-            if self.is_cross_probe:
-                self.s_prior = self.s_gc_grid
-                rep_flow_dir = self.gc_flow_dir
-                rep_obs_dict = self.gc_obs_dict
-            else:
-                self.s_prior = self.s_wl_grid
-
-        elif self.obs_probe == "clustering":
-            self.post_dist = "p(theta_gc | s_gc)"
-
-            obs_model_dir = self.gc_flow_dir
-            obs_dict = self.gc_obs_dict
-
-            if self.is_cross_probe:
-                self.s_prior = self.s_wl_grid
-                rep_flow_dir = self.wl_flow_dir
-                rep_obs_dict = self.wl_obs_dict
-            else:
-                self.s_prior = self.s_gc_grid
-
+        self.post_dist = f"p(theta_{self.obs_abbrv} | s_{self.obs_abbrv})"
         LOGGER.info(f"post = {self.post_dist}")
+
+        obs_flow_dir = getattr(self, f"{self.obs_probe}_flow_dir")
+        obs_dict = getattr(self, f"{self.obs_probe}_obs_dict")
+
+        if self.is_cross_probe:
+            self.s_prior = getattr(self, f"s_{self.rep_probe}_grid")
+            rep_flow_dir = getattr(self, f"{self.rep_probe}_flow_dir")
+            rep_obs_dict = getattr(self, f"{self.rep_probe}_obs_dict")
+        else:
+            self.s_prior = getattr(self, f"s_{self.obs_probe}_grid")
 
         # obs_probe
         if s_obs is None:
@@ -282,7 +290,7 @@ class PosteriorPredictiveChecks:
         self.s_obs = s_obs
 
         if theta_post is None:
-            theta_post = np.load(os.path.join(obs_model_dir, f"chain_{obs_label}.npy"))
+            theta_post = np.load(os.path.join(obs_flow_dir, f"chain_{obs_label}.npy"))
         self.theta_post = theta_post
 
         # rep_probe
@@ -297,25 +305,20 @@ class PosteriorPredictiveChecks:
             theta_post_rep = theta_post
 
         self.s_obs_rep = s_obs_rep
+        # only for plotting the parameter posterior
         self.theta_post_rep = theta_post_rep
 
     def _plot_param_posterior(self):
         """Plot the parameter posteriors for the observation and replicated probe."""
 
         chains = [self.theta_post]
-        labels = [self.obs_probe]
-        if self.obs_probe == "lensing":
-            params = [self.wl_params]
-        elif self.obs_probe == "clustering":
-            params = [self.gc_params]
+        labels = [self.obs_probe_name]
+        params = [getattr(self, f"{self.obs_probe}_params")]
 
         if self.is_cross_probe:
             chains.append(self.theta_post_rep)
-            labels.append(self.rep_probe)
-            if self.rep_probe == "lensing":
-                params.append(self.wl_params)
-            elif self.rep_probe == "clustering":
-                params.append(self.gc_params)
+            labels.append(self.rep_probe_name)
+            params.append(getattr(self, f"{self.rep_probe}_params"))
 
         plotting.plot_chains(
             chains=chains,
@@ -340,7 +343,7 @@ class PosteriorPredictiveChecks:
             context_star = np.concatenate([theta_star, s_obs_star], axis=-1)
         elif self.is_cross_probe and self.independent_cross:
             # marginalise over probe-specific nuisances by using only the shared cosmo columns
-            obs_cosmo_idx = self.wl_cosmo_idx if self.obs_probe == "lensing" else self.gc_cosmo_idx
+            obs_cosmo_idx = getattr(self, f"{self.obs_probe}_cosmo_idx")
             context_star = theta_star[:, obs_cosmo_idx]
         else:
             context_star = theta_star
@@ -453,7 +456,7 @@ class PosteriorPredictiveChecks:
         the PPD samples s_rep.  A small p-value means s_obs is extreme.
 
         Args:
-            stat: 'mahalanobis', 'energy', 'crps', 'log_prob', or 'kernel'.
+            stat: 'mahalanobis', 'l1', 'l2', 'log_prob', or 'kernel'.
             n_bootstrap: Number of bootstrap draws for the null.
             n_kernel_ref: Size of the reference subsample (kernel only).
         """
@@ -475,24 +478,27 @@ class PosteriorPredictiveChecks:
             stat_label = r"$D_M^2(s_{" + self.rep_abbrv + r"}^{obs})$"
             outlier_if_low = False
 
-        elif stat in ("energy", "crps"):
+        elif stat in ("l1", "l2"):
             from scipy.spatial.distance import cdist
 
-            # Energy statistic at a single point: mean ||x - s_i||_p
-            # (The cross-term 1/N^2 * sum_ij ||s_i - s_j|| is constant across all evaluations
-            # and cancels in the bootstrap ranking, so it is omitted.)
-            # stat="crps" uses L1 norm, which equals the sum of per-dimension CRPS scores.
-            # stat="energy" uses L2 norm (standard energy distance).
-            cdist_metric = "cityblock" if stat == "crps" else "euclidean"
-            norm_ord = 1 if stat == "crps" else 2
+            cdist_metric = "cityblock" if stat == "l1" else "euclidean"
+            norm_ord = 1 if stat == "l1" else 2
 
             def compute_stat(x):
                 return np.mean(cdist(x, s_rep, metric=cdist_metric), axis=-1)  # (M,)
 
             xlabel = f"Mean L{norm_ord} distance to PPD"
             file_tag = f"{stat}_check"
-            title_tag = "CRPS Check" if stat == "crps" else "Energy Score Check"
-            stat_label = r"$\bar{d}(s_{" + self.rep_abbrv + r"}^{obs},\, s_{" + self.rep_abbrv + r"}^{rep})$"
+            title_tag = f"L{norm_ord} Distance Check"
+            stat_label = (
+                r"$\bar{d}_{L"
+                + str(norm_ord)
+                + r"}(s_{"
+                + self.rep_abbrv
+                + r"}^{obs},\, s_{"
+                + self.rep_abbrv
+                + r"}^{rep})$"
+            )
             outlier_if_low = False
 
         elif stat == "log_prob":
