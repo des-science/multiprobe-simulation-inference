@@ -217,6 +217,7 @@ class PosteriorPredictiveChecks:
         check_mahalanobis=True,
         check_l2=True,
         check_l1=True,
+        check_linf=True,
     ):
         """
         Run the requested posterior predictive checks.
@@ -237,6 +238,7 @@ class PosteriorPredictiveChecks:
             check_mahalanobis (bool): Whether to check the Mahalanobis distance.
             check_l2 (bool): Whether to check the mean L2 distance to the PPD.
             check_l1 (bool): Whether to check the mean L1 distance to the PPD.
+            check_linf (bool): Whether to check the max standardised deviation (L∞ norm).
         """
 
         self._set_observation(obs_label, s_obs, theta_post, s_obs_rep, theta_post_rep)
@@ -252,7 +254,7 @@ class PosteriorPredictiveChecks:
             self._check_data_marginals()
 
         if check_log_prob:
-            self._check_one_sample(stat="log_prob")
+            self._check_log_prob()
 
         if check_kernel:
             self._check_one_sample(stat="kernel")
@@ -265,6 +267,9 @@ class PosteriorPredictiveChecks:
 
         if check_l1:
             self._check_one_sample(stat="l1")
+
+        if check_linf:
+            self._check_one_sample(stat="linf")
 
     def _set_observation(self, obs_label=None, s_obs=None, theta_post=None, s_obs_rep=None, theta_post_rep=None):
         """Set up the observation data and configuration for the PPC."""
@@ -399,8 +404,10 @@ class PosteriorPredictiveChecks:
 
         self.s_rep_grid = s_rep
 
-    def _check_data_marginals(self, n_scatter=1_000):
+    def _check_data_marginals(self, n_scatter=1_000, outlier_quantile=1e-3):
         """Check and plot the marginal distributions of the data."""
+
+        n_s = self.s_prior.shape[1]
 
         prior_label = r"$p(s_{" + self.rep_abbrv + r"})$"
         post_label = r"$p(s_{" + self.rep_abbrv + r"}|s_{" + self.obs_abbrv + r"}^{obs})$"
@@ -414,6 +421,15 @@ class PosteriorPredictiveChecks:
             line_kwargs={"zorder": 0, "linewidths": 2},
             hist_kwargs={"zorder": 0, "lw": 2},
             scatter_kwargs={"s": 1, "marker": "o"},
+            params=[str(i) for i in range(n_s)],
+            labels=[rf"$s^{{{i}}}_{{{self.rep_abbrv}}}$" for i in range(n_s)],
+            ranges={
+                str(i): (
+                    np.quantile(self.s_prior[:, i], outlier_quantile),
+                    np.quantile(self.s_prior[:, i], (1 - outlier_quantile)),
+                )
+                for i in range(n_s)
+            },
         )
 
         def contour_or_scatter(tri, data, color, label):
@@ -443,50 +459,122 @@ class PosteriorPredictiveChecks:
         except AttributeError:
             pass
 
+        # to fix the ugly tick labels
+        import matplotlib.ticker as mticker
+
+        _fmt = mticker.FuncFormatter(lambda x, _: f"{x:.4g}")
+        for ax in tri.fig.axes:
+            try:
+                ss = ax.get_subplotspec()
+                row = ss.rowspan.start
+                col = ss.colspan.start
+            except (AttributeError, TypeError):
+                continue
+            ax.xaxis.set_major_formatter(_fmt)
+            ax.yaxis.set_major_formatter(_fmt)
+            if row < n_s - 1:
+                ax.tick_params(axis="x", labelbottom=False)
+            if col > 0:
+                ax.tick_params(axis="y", labelleft=False)
+
         tri.fig.suptitle(self.obs_label, fontsize=24, y=0.9)
 
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_data_marginals.png")
         LOGGER.info(f"Saving data marginals plot to {plot_file}")
         tri.fig.savefig(plot_file, bbox_inches="tight", dpi=100)
 
-    def _check_one_sample(self, stat, n_bootstrap=10_000, n_kernel_ref=5_000):
+    def _check_log_prob(self, n_bootstrap=10_000):
+        """Bayesian posterior predictive p-value via paired log-likelihood comparison.
+
+        For each bootstrap draw i, computes
+            delta_i = log p(s_rep_i | theta_i) - log p(s_obs | theta_i)
+        where theta_i ~ p(theta | s_obs) and s_rep_i ~ p(s | theta_i).
+        p-value = fraction of draws where delta_i <= 0 (obs at least as likely as rep).
+        Values near 0 or 1 indicate misfit; values near 0.5 indicate good fit.
+        Note: this p-value is not uniform under the null (known property of Bayesian PPD p-values).
+
+        Args:
+            n_bootstrap: Number of paired draws for the p-value estimate.
+        """
+        s_rep = self.s_rep
+        s_obs = np.atleast_2d(self.s_obs_rep)
+        i_boot = self.rng.integers(0, s_rep.shape[0], n_bootstrap)
+
+        log_lik = lambda x, ctx: self.flow.log_likelihood(x, ctx, return_numpy=True)  # noqa: E731
+        t_diff = log_lik(s_rep[i_boot], self.context_star[i_boot]) - log_lik(
+            np.repeat(s_obs, n_bootstrap, axis=0), self.context_star[i_boot]
+        )  # positive: rep more likely than obs
+        p_val = np.mean(t_diff <= 0)
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.hist(t_diff, bins=100, alpha=0.5, label=r"$\log p(s^{rep}|\theta_i) - \log p(s^{obs}|\theta_i)$")
+        ax.axvline(0, color="k", linestyle="--", label=f"p = {p_val:.4f}")
+        ax.set(
+            xlabel=r"$\log p(s^{rep}|\theta) - \log p(s^{obs}|\theta)$",
+            ylabel="Count",
+            title=f"{self.obs_label}: Log-Prob PPC: p = {p_val:.4f}",
+        )
+        ax.legend()
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_log_prob_check.png")
+        LOGGER.info(f"Saving Log-Prob PPC plot to {plot_file}")
+        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+
+    def _check_one_sample(self, stat, n_bootstrap=10_000, n_ref=5_000):
         """Generic one-sample test: is s_obs an outlier relative to the PPD?
 
         Null distribution: evaluate the same statistic on bootstrap draws from
         the PPD samples s_rep.  A small p-value means s_obs is extreme.
 
+        For distance-based stats (kernel, L1, L2) the data are standardised by
+        the per-dimension mean/std of s_rep (scale-invariant).  s_rep is split
+        into non-overlapping halves so the reference cloud (defines the
+        statistic) and the bootstrap pool (builds the null) are independent.
+
         Args:
-            stat: 'mahalanobis', 'l1', 'l2', 'log_prob', or 'kernel'.
+            stat: 'mahalanobis', 'l1', 'l2', 'linf', or 'kernel'.
             n_bootstrap: Number of bootstrap draws for the null.
-            n_kernel_ref: Size of the reference subsample (kernel only).
+            n_ref: Reference subsample size for distance-based stats (kernel, L1, L2).
         """
+        from scipy.spatial.distance import cdist
+
         s_rep = self.s_rep  # (N, dim)
         s_obs = np.atleast_2d(self.s_obs_rep)  # (1, dim)
+        n_rep = s_rep.shape[0]
+
+        # Per-dimension standardisation shared by all distance-based stats.
+        s_mu = np.mean(s_rep, axis=0)
+        s_std = np.std(s_rep, axis=0)
+        s_std[s_std == 0] = 1.0
+        s_rep_n = (s_rep - s_mu) / s_std
+        s_obs_n = (s_obs - s_mu) / s_std
+
+        # Non-overlapping split: ref pool defines the statistic; boot pool builds the null.
+        perm = self.rng.permutation(n_rep)
+        i_ref_pool, i_boot_pool = perm[: n_rep // 2], perm[n_rep // 2 :]
+        s_ref_n = s_rep_n[i_ref_pool[: min(n_ref, len(i_ref_pool))]]
 
         if stat == "mahalanobis":
-            mu = np.mean(s_rep, axis=0)
-            cov = np.cov(s_rep, rowvar=False)
-            cov_inv = np.linalg.pinv(cov)
+            cov_inv = np.linalg.pinv(np.cov(s_rep, rowvar=False))
 
             def compute_stat(x):
-                diff = x - mu  # (M, dim)
-                return np.einsum("...i,ij,...j->...", diff, cov_inv, diff)  # (M,)
+                diff = x - s_mu
+                return np.einsum("...i,ij,...j->...", diff, cov_inv, diff)
 
+            s_obs_eval, s_rep_eval = s_obs, s_rep
+            outlier_if_high = True
             xlabel = "Mahalanobis distance²"
             file_tag = "mahalanobis_check"
             title_tag = "Mahalanobis Distance Check"
             stat_label = r"$D_M^2(s_{" + self.rep_abbrv + r"}^{obs})$"
-            outlier_if_low = False
 
         elif stat in ("l1", "l2"):
-            from scipy.spatial.distance import cdist
-
-            cdist_metric = "cityblock" if stat == "l1" else "euclidean"
-            norm_ord = 1 if stat == "l1" else 2
+            metric, norm_ord = ("cityblock", 1) if stat == "l1" else ("euclidean", 2)
 
             def compute_stat(x):
-                return np.mean(cdist(x, s_rep, metric=cdist_metric), axis=-1)  # (M,)
+                return np.mean(cdist(x, s_ref_n, metric=metric), axis=-1)
 
+            s_obs_eval, s_rep_eval = s_obs_n, s_rep_n
+            outlier_if_high = True
             xlabel = f"Mean L{norm_ord} distance to PPD"
             file_tag = f"{stat}_check"
             title_tag = f"L{norm_ord} Distance Check"
@@ -499,74 +587,47 @@ class PosteriorPredictiveChecks:
                 + self.rep_abbrv
                 + r"}^{rep})$"
             )
-            outlier_if_low = False
 
-        elif stat == "log_prob":
-
-            def compute_stat(x, context):
-                return self.flow.log_likelihood(x, context, return_numpy=True)
-
-            file_tag = "log_prob_check"
-            title_tag = "Log-Prob PPC"
-
-        elif stat == "kernel":
-            from scipy.spatial.distance import cdist
-
-            n_ref = min(n_kernel_ref, s_rep.shape[0])
-            i_ref = self.rng.integers(0, s_rep.shape[0], n_ref)
-            s_ref = s_rep[i_ref]
-
-            n_bw = min(2_000, n_ref)
-            i_bw = self.rng.integers(0, n_ref, n_bw)
-            sq_dists_bw = cdist(s_ref[i_bw], s_ref[i_bw], metric="sqeuclidean")
-            bw2 = np.median(sq_dists_bw[np.triu_indices(n_bw, k=1)])
-            if bw2 == 0:
-                bw2 = 1.0
-            LOGGER.info(f"Kernel bandwidth (squared): {bw2:.4f}")
+        elif stat == "linf":
 
             def compute_stat(x):
-                sq_d = cdist(x, s_ref, metric="sqeuclidean")  # (M, n_ref)
-                return np.mean(np.exp(-sq_d / bw2), axis=-1)  # high = similar = not outlier
+                return np.max(np.abs(x), axis=-1)  # max standardised deviation across dims
 
+            s_obs_eval, s_rep_eval = s_obs_n, s_rep_n
+            outlier_if_high = True
+            xlabel = r"$\max_j |s_j^{std}|$  (L∞ norm)"
+            file_tag = "linf_check"
+            title_tag = "L∞ Distance Check"
+            stat_label = r"$\|s_{" + self.rep_abbrv + r"}^{obs}\|_\infty$"
+
+        elif stat == "kernel":
+            n_bw = min(2_000, s_ref_n.shape[0])
+            sq_dists_bw = cdist(s_ref_n[:n_bw], s_ref_n[:n_bw], metric="sqeuclidean")
+            bw2 = np.median(sq_dists_bw[np.triu_indices(n_bw, k=1)]) or 1.0
+            LOGGER.info(f"Kernel bandwidth (squared, normalised): {bw2:.4f}")
+
+            def compute_stat(x):
+                return np.mean(np.exp(-cdist(x, s_ref_n, metric="sqeuclidean") / bw2), axis=-1)
+
+            s_obs_eval, s_rep_eval = s_obs_n, s_rep_n
+            outlier_if_high = False
             xlabel = "Mean kernel similarity"
             file_tag = "kernel_check"
             title_tag = "Kernel Similarity Check"
             stat_label = r"$\bar{k}(s_{" + self.rep_abbrv + r"}^{obs},\, s_{" + self.rep_abbrv + r"}^{rep})$"
-            outlier_if_low = True
 
         else:
             raise ValueError(f"Unknown stat: {stat}")
 
-        i_boot = self.rng.integers(0, s_rep.shape[0], n_bootstrap)
-
-        if stat == "log_prob":
-            # for each posterior draw theta_i, compare log p(s_obs | theta_i) with log p(s_rep_i | theta_i).
-            # The p-value is the fraction of draws where the replicated data is more likely than the observed data
-            # (element-wise).
-            t_obs_array = compute_stat(np.repeat(s_obs, n_bootstrap, axis=0), self.context_star[i_boot])
-            t_boot = compute_stat(s_rep[i_boot], self.context_star[i_boot])
-            t_diff = t_boot - t_obs_array  # positive: rep more likely than obs
-            p_val = np.mean(t_diff <= 0)  # fraction where obs is at least as likely as rep
-        else:
-            t_obs = compute_stat(s_obs)[0]
-            t_boot = compute_stat(s_rep[i_boot])
-            # p-value: fraction of null draws at least as extreme as t_obs
-            p_val = np.mean(t_boot <= t_obs) if outlier_if_low else np.mean(t_boot >= t_obs)
+        i_boot = i_boot_pool[self.rng.integers(0, len(i_boot_pool), n_bootstrap)]
+        t_obs = compute_stat(s_obs_eval)[0]
+        t_boot = compute_stat(s_rep_eval[i_boot])
+        p_val = np.mean(t_boot >= t_obs) if outlier_if_high else np.mean(t_boot <= t_obs)
 
         fig, ax = plt.subplots(figsize=(12, 6))
-        if stat == "log_prob":
-            # plot per-draw differences: rep vs obs log-prob. p-value = fraction left of 0.
-            ax.hist(t_diff, bins=100, alpha=0.5, label=r"$\log p(s^{rep}|\theta_i) - \log p(s^{obs}|\theta_i)$")
-            ax.axvline(0, color="k", linestyle="--", label=f"p = {p_val:.4f}")
-            ax.set(
-                xlabel=r"$\log p(s^{rep}|\theta) - \log p(s^{obs}|\theta)$",
-                ylabel="Count",
-                title=f"{self.obs_label}: {title_tag}: p = {p_val:.4f}",
-            )
-        else:
-            ax.hist(t_boot, bins=100, alpha=0.5, label="null (PPD samples)")
-            ax.axvline(t_obs, color="k", label=f"{stat_label} = {t_obs:.4f}")
-            ax.set(xlabel=xlabel, ylabel="Count", title=f"{self.obs_label}: {title_tag}: p = {p_val:.4f}")
+        ax.hist(t_boot, bins=100, alpha=0.5, label="null (PPD samples)")
+        ax.axvline(t_obs, color="k", label=f"{stat_label} = {t_obs:.4f}")
+        ax.set(xlabel=xlabel, ylabel="Count", title=f"{self.obs_label}: {title_tag}: p = {p_val:.4f}")
         ax.legend()
 
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{file_tag}.png")

@@ -321,9 +321,7 @@ class MarginalFlow(Flow):
         clf_optimizer = optim.Adam(classifier.parameters(), lr=1e-3)
         criterion = torch.nn.BCELoss()
 
-        clf_loader = DataLoader(
-            TensorDataset(x_clf_train, y_clf_train), batch_size=batch_size, shuffle=True
-        )
+        clf_loader = DataLoader(TensorDataset(x_clf_train, y_clf_train), batch_size=batch_size, shuffle=True)
 
         classifier.train()
         for _ in range(n_epochs):
@@ -385,8 +383,8 @@ class MarginalFlow(Flow):
         emulator_wl,
         emulator_gc,
         conf,
-        n_samples=1_024_000,
         n_walkers=1_024,
+        n_steps=1_000,
         n_burnin_steps=1_000,
         device=None,
         out_dir=None,
@@ -463,6 +461,8 @@ class MarginalFlow(Flow):
 
             return log_prob_total
 
+        n_samples = n_steps * n_walkers
+
         chain = mcmc.run_emcee(
             _log_posterior,
             combined_params,
@@ -470,7 +470,7 @@ class MarginalFlow(Flow):
             out_dir=out_dir,
             label=label,
             n_walkers=n_walkers,
-            n_steps=int(np.ceil(n_samples / n_walkers)),
+            n_steps=n_steps,
             n_burnin_steps=n_burnin_steps,
         )
 

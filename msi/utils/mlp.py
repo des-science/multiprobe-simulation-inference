@@ -102,6 +102,7 @@ class MLP(nn.Module):
         plot_history: bool = False,
         device: str = "cpu",
         standardize_labels: bool = True,
+        random_state: Optional[int] = None,
     ) -> dict:
         """
         Train the MLP on the provided data.
@@ -134,6 +135,9 @@ class MLP(nn.Module):
             Device to train on ('cpu' or 'cuda')
         standardize_labels : bool
             Whether to standardize the labels (y) before training
+        random_state : int, optional
+            Seed for the random number generator used to split train/validation data.
+            If None, results are not reproducible across calls.
 
         Returns
         -------
@@ -151,7 +155,8 @@ class MLP(nn.Module):
         n_val = int(n_samples * validation_split)
         n_train = n_samples - n_val
 
-        indices = np.random.permutation(n_samples)
+        rng = np.random.default_rng(random_state)
+        indices = rng.permutation(n_samples)
         train_idx = indices[:n_train]
         val_idx = indices[n_train:]
 
@@ -237,7 +242,7 @@ class MLP(nn.Module):
         if plot_history:
             self._plot_history(history)
 
-        return history
+        return history, val_idx
 
     def _plot_history(self, history: dict) -> None:
         """
