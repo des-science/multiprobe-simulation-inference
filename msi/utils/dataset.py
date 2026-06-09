@@ -194,6 +194,7 @@ def get_binned_power_spectra_dset_hard_cut(
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq"
+    n_extra_bins=0,      # 0 → hard cut; 1 → hard_conservative
 ):
     """Hard scale cut variant of get_binned_power_spectra_dset.
 
@@ -241,6 +242,7 @@ def get_binned_power_spectra_dset_hard_cut(
         apply_log=apply_log,
         standardize=standardize,
         ell_weighting=ell_weighting,
+        n_extra_bins=n_extra_bins,
     )
 
     for key in out_dict:
@@ -294,8 +296,10 @@ def get_binned_power_spectra_dset_hard_cut(
 def get_binned_power_spectra_dset_for_scale_cut(scale_cut, **kwargs):
     """Unified entry point that dispatches to the appropriate scale-cut variant.
 
-    scale_cut: "hard" | "soft_pruned" | "soft"
+    scale_cut: "hard" | "hard_conservative" | "none" | "soft_pruned" | "soft"
     """
-    if scale_cut == "hard":
-        return get_binned_power_spectra_dset_hard_cut(**kwargs)
+    if scale_cut in ("hard", "none"):
+        return get_binned_power_spectra_dset_hard_cut(n_extra_bins=0, **kwargs)
+    if scale_cut == "hard_conservative":
+        return get_binned_power_spectra_dset_hard_cut(n_extra_bins=1, **kwargs)
     return get_binned_power_spectra_dset(scale_cut=scale_cut, **kwargs)

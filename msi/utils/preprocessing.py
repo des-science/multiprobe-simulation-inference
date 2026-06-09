@@ -142,14 +142,14 @@ def get_reshaped_human_summaries(
     with_noise = False  # set True inside the smoothing block if a noise file is found
 
     if summary_type == "cls":
-        if theta_fwhms is None and scales_from_conf:
+        if theta_fwhms is None and scales_from_conf and not skip_smoothing:
             theta_fwhms = []
             if store_lensing:
                 theta_fwhms.extend(dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"])
             if store_clustering:
                 theta_fwhms.extend(dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"])
             LOGGER.info(f"Using theta_fwhm = {theta_fwhms} from the dlss config")
-        if white_noise_sigmas is None and scales_from_conf:
+        if white_noise_sigmas is None and scales_from_conf and not skip_smoothing:
             white_noise_sigmas = []
             if store_lensing:
                 white_noise_sigmas.extend(dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"])
@@ -158,7 +158,7 @@ def get_reshaped_human_summaries(
             LOGGER.info(f"Using white_noise_sigma = {white_noise_sigmas} from the dlss config")
         # this l_max here and the theta_fwhm are fully equivalent. This is not to be confused with the l_max resulting
         # from the white noise
-        if l_maxs is None and scales_from_conf:
+        if l_maxs is None and scales_from_conf and not skip_smoothing:
             theta_fwhms = []
             if store_lensing:
                 theta_fwhms.extend(dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"])
@@ -166,10 +166,10 @@ def get_reshaped_human_summaries(
                 theta_fwhms.extend(dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"])
             l_maxs = scales.angle_to_ell(np.array(theta_fwhms), arcmin=dlss_conf["scale_cuts"]["arcmin"])
             LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
-        if l_mins is None and scales_from_conf:
+        if l_mins is None and scales_from_conf and not skip_smoothing:
             l_mins = np.zeros_like(l_maxs)
             LOGGER.info(f"Using l_mins = {l_mins} by default (no smoothing)")
-        if n_bins is None and scales_from_conf:
+        if n_bins is None and scales_from_conf and not skip_smoothing:
             n_bins = msfm_conf["analysis"]["power_spectra"]["n_bins"]
             LOGGER.info(f"Using n_bins = {n_bins} from the msfm config")
 
@@ -672,6 +672,11 @@ def get_binned_power_spectra(
     grid_cosmos_train = _concat_example_axis(grid_cosmos_train)
     grid_cosmos_test = _concat_example_axis(grid_cosmos_test)
 
+    # row identity for the test set, so downstream consumers can align it against other predictions
+    grid_i_sobol_test = _concat_example_axis(grid_i_sobols_sorted[:, eval_mask])
+    grid_i_signal_test = _concat_example_axis(grid_i_signals[:, eval_mask])
+    grid_i_noise_test = _concat_example_axis(grid_i_noises[:, eval_mask])
+
     rng = np.random.default_rng()
 
     ell_weights = None
@@ -735,6 +740,9 @@ def get_binned_power_spectra(
             "grid/cls/test": grid_cls_test,
             "grid/cosmos/train": grid_cosmos_train,
             "grid/cosmos/test": grid_cosmos_test,
+            "grid/i_sobol/test": grid_i_sobol_test,
+            "grid/i_signal/test": grid_i_signal_test,
+            "grid/i_noise/test": grid_i_noise_test,
             "noise/cls": noise_cls,
             "grid/i_sobols": grid_i_sobols,
             "ell_weights": ell_weights,  # None or (n_cls,) float32 array; read by dataset.py
@@ -816,16 +824,17 @@ def _hard_cut_per_spectrum_lmax(n_z_lensing, n_z_clustering, bin_indices, dlss_c
     return np.array([min(l_maxs_z[all_pairs[b][0]], l_maxs_z[all_pairs[b][1]]) for b in bin_indices])
 
 
-def _log_hard_cut_info(ell_right_edges, l_max_per_selected):
+def _log_hard_cut_info(ell_right_edges, l_max_per_selected, n_extra_bins=0):
     """Log per-spectrum bin counts and ell ranges after the hard l_max cut."""
     n_bins_total = len(ell_right_edges)
     kept_counts = []
     for k, lmax_k in enumerate(l_max_per_selected):
-        mask = ell_right_edges <= lmax_k
-        n_kept = int(mask.sum())
+        hard_indices = np.where(ell_right_edges <= lmax_k)[0]
+        last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
+        keep_to = min(last_idx + n_extra_bins, n_bins_total - 1)
+        n_kept = keep_to + 1
         kept_counts.append(n_kept)
-        ell_kept = ell_right_edges[mask]
-        ell_range = f"[{ell_kept[0]:.1f}, {ell_kept[-1]:.1f}]" if n_kept > 0 else "[]"
+        ell_range = f"[{ell_right_edges[0]:.1f}, {ell_right_edges[keep_to]:.1f}]" if n_kept > 0 else "[]"
         LOGGER.info(
             f"  spectrum {k:>3d}: l_max={lmax_k:>5.0f}  kept {n_kept:>3d}/{n_bins_total} bins  ell {ell_range}"
         )
@@ -898,6 +907,7 @@ def get_binned_power_spectra_hard_cut(
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq"
+    n_extra_bins=0,      # 0 → hard cut at right edge ≤ l_max; 1 → "hard_conservative" (one extra bin)
 ):
     """Like get_binned_power_spectra but applies a hard scale cut: drops all ℓ bins above
     min(l_max[i], l_max[j]) for each cross-pair (from the explicit config l_max field) rather
@@ -967,13 +977,15 @@ def get_binned_power_spectra_hard_cut(
     )
     ell_centers = np.sqrt(bins_ell[:-1] * bins_ell[1:])
     ell_right_edges = bins_ell[1:]
-    _log_hard_cut_info(ell_right_edges, l_max_per_selected)
+    _log_hard_cut_info(ell_right_edges, l_max_per_selected, n_extra_bins=n_extra_bins)
 
     def _apply_hard_cut(cls_array):
         segments = []
         for k, lmax_k in enumerate(l_max_per_selected):
-            mask = ell_right_edges <= lmax_k
-            segments.append(cls_array[..., mask, k])
+            hard_indices = np.where(ell_right_edges <= lmax_k)[0]
+            last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
+            keep_to = min(last_idx + n_extra_bins, len(ell_right_edges) - 1)
+            segments.append(cls_array[..., :keep_to + 1, k])
         return np.concatenate(segments, axis=-1)
 
     grid_cls = _apply_hard_cut(grid_cls)
@@ -985,8 +997,10 @@ def get_binned_power_spectra_hard_cut(
     if ell_weighting is not None:
         w_segments = []
         for lmax_k in l_max_per_selected:
-            mask = ell_right_edges <= lmax_k
-            ell_k = ell_centers[mask]
+            hard_indices = np.where(ell_right_edges <= lmax_k)[0]
+            last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
+            keep_to = min(last_idx + n_extra_bins, len(ell_right_edges) - 1)
+            ell_k = ell_centers[:keep_to + 1]
             w_k = ell_k if ell_weighting == "ell" else ell_k**2
             w_segments.append(w_k)
         ell_weights = np.concatenate(w_segments).astype(np.float32)
@@ -1031,6 +1045,11 @@ def get_binned_power_spectra_hard_cut(
     grid_cosmos_train = _concat(grid_cosmos_train)
     grid_cosmos_test = _concat(grid_cosmos_test)
 
+    # row identity for the test set, so downstream consumers can align it against other predictions
+    grid_i_sobol_test = _concat(grid_i_sobols_sorted[:, eval_mask])
+    grid_i_signal_test = _concat(grid_i_signals[:, eval_mask])
+    grid_i_noise_test = _concat(grid_i_noises[:, eval_mask])
+
     def _log_transform(cls):
         if ell_weights is not None:
             cls = cls * ell_weights
@@ -1066,6 +1085,9 @@ def get_binned_power_spectra_hard_cut(
             "grid/cls/test": grid_cls_test,
             "grid/cosmos/train": grid_cosmos_train,
             "grid/cosmos/test": grid_cosmos_test,
+            "grid/i_sobol/test": grid_i_sobol_test,
+            "grid/i_signal/test": grid_i_signal_test,
+            "grid/i_noise/test": grid_i_noise_test,
             "noise/cls": None,
             "grid/i_sobols": grid_i_sobols,
             "ell_weights": ell_weights,
@@ -1382,6 +1404,7 @@ def get_preprocessed_cl_observation_hard_cut(
     apply_log=False,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq" — must match training pipeline
+    n_extra_bins=0,      # 0 → hard cut; 1 → "hard_conservative" (one extra bin past l_max right edge)
     # plotting
     make_plot=True,
     obs_label=None,
@@ -1475,15 +1498,17 @@ def get_preprocessed_cl_observation_hard_cut(
     )
     ell_centers = np.sqrt(bins_ell[:-1] * bins_ell[1:])
     ell_right_edges = bins_ell[1:]
-    _log_hard_cut_info(ell_right_edges, l_max_per_selected)
+    _log_hard_cut_info(ell_right_edges, l_max_per_selected, n_extra_bins=n_extra_bins)
 
     segments = []
     ew_segments = []
     for k, lmax_k in enumerate(l_max_per_selected):
-        mask = ell_right_edges <= lmax_k
-        segments.append(obs_cl[..., mask, k])
+        hard_indices = np.where(ell_right_edges <= lmax_k)[0]
+        last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
+        keep_to = min(last_idx + n_extra_bins, len(ell_right_edges) - 1)
+        segments.append(obs_cl[..., :keep_to + 1, k])
         if ell_weighting is not None:
-            ell_k = ell_centers[mask]
+            ell_k = ell_centers[:keep_to + 1]
             ew_segments.append(ell_k if ell_weighting == "ell" else ell_k**2)
     obs_cl = np.concatenate(segments, axis=-1)
 
