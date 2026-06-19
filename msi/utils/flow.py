@@ -4,10 +4,11 @@ import re
 
 import h5py
 import numpy as np
+import torch
 
 from msfm.utils.input_output import read_yaml
 from msi.flow_conductor import architecture
-from msi.flow_conductor.likelihood_flow import LikelihoodFlow
+from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 from msi.utils import input_output
 
 
@@ -84,17 +85,19 @@ def load_grid_summaries(pred_file, pred_file_2=None):
     grid_preds/grid_cosmos identically -- same content, same row order -- which the latter relies on
     to faithfully reproduce the split.
 
-    Also returns i_signal, row-aligned with grid_preds/grid_cosmos, so callers can group rows by
-    signal realization -- e.g. to build a deterministic, signal-id-grouped flow train/vali split
-    that never places different noise realizations of the same signal in both sets (see
-    LikelihoodFlow._prepare_data's group_ids argument).
+    Also returns i_signal and i_sobol, both row-aligned with grid_preds/grid_cosmos. i_signal lets
+    callers group rows by signal realization -- e.g. to build a deterministic, signal-id-grouped flow
+    train/vali split that never places different noise realizations of the same signal in both sets
+    (see LikelihoodFlow._prepare_data's group_ids argument). i_sobol identifies the CosmoGrid cosmology
+    per row, used to select the wide-grid (analysis-prior) cosmologies for posterior coverage (see
+    msi.utils.coverage.wide_prior_sobol_indices).
 
     Returns:
-        tuple: (grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal)
+        tuple: (grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal, i_sobol)
     """
     print(f"Loading predictions from: {pred_file}")
     grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict = input_output.load_network_preds_simple(pred_file)
-    _, i_signal, _ = _load_grid_indices(pred_file)
+    i_sobol, i_signal, _ = _load_grid_indices(pred_file)
 
     if pred_file_2:
         print(f"Loading second predictions from: {pred_file_2}")
@@ -111,9 +114,10 @@ def load_grid_summaries(pred_file, pred_file_2=None):
         grid_preds, grid_cosmos = grid_preds[order], grid_cosmos[order]
         grid_preds_2, grid_cosmos_2 = grid_preds_2[order_2], grid_cosmos_2[order_2]
         i_signal = i_signal[order]
+        i_sobol = i_sobol[order]
 
         aligned = (
-            np.array_equal(i_sobol[order], i_sobol_2[order_2])
+            np.array_equal(i_sobol, i_sobol_2[order_2])
             and np.array_equal(i_signal, i_signal_2[order_2])
             and np.array_equal(i_noise[order], i_noise_2[order_2])
         )
@@ -131,7 +135,7 @@ def load_grid_summaries(pred_file, pred_file_2=None):
             for label in obs_pred_dict.keys() & obs_pred_dict_2.keys()
         }
 
-    return grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal
+    return grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal, i_sobol
 
 
 def load_grid_summaries_multi(pred_files, pca_compress=False):
@@ -146,7 +150,7 @@ def load_grid_summaries_multi(pred_files, pca_compress=False):
             and obs_pred_dict down to the same dimensionality as a single file's summaries.
 
     Returns:
-        tuple: (grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal) — same
+        tuple: (grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal, i_sobol) — same
             signature as load_grid_summaries.
     """
     all_grid_preds, all_grid_cosmos, all_obs_pred_dicts, all_obs_cosmo_dicts, all_indices = [], [], [], [], []
@@ -185,6 +189,7 @@ def load_grid_summaries_multi(pred_files, pca_compress=False):
     grid_preds = np.concatenate(sorted_preds, axis=-1)
     grid_cosmos = ref_cosmos
     i_signal = ref_signal
+    i_sobol = ref_sobol
 
     common_keys = set.intersection(*[set(opd.keys()) for opd in all_obs_pred_dicts])
     obs_pred_dict = {
@@ -199,7 +204,7 @@ def load_grid_summaries_multi(pred_files, pca_compress=False):
         grid_preds = (grid_preds - mean) @ components.T
         obs_pred_dict = {key: (val - mean) @ components.T for key, val in obs_pred_dict.items()}
 
-    return grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal
+    return grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal, i_sobol
 
 
 def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
@@ -223,6 +228,9 @@ def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
         context_dim=theta_dim,
         context_embedding_dim=ctx_emb_dim,
         hidden_dim=emb_conf.get("hidden_dim", 64),
+        n_blocks=emb_conf.get("n_blocks", 3),
+        dropout_probability=emb_conf.get("dropout_probability", 0.0),
+        use_batch_norm=emb_conf.get("use_batch_norm", False),
     )
 
     tr_conf = flow_conf.get("transform", {})
@@ -251,16 +259,62 @@ def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
             hidden_dim=tr_conf.get("hidden_dim", 128),
             lipschitz_coeff=lip_conf.get("lipschitz_coeff", 0.97),
         )
+    elif transform_type == "spline":
+        sp_conf = tr_conf.get("spline", {})
+        transform = architecture.get_spline_transform(
+            feature_dim=x_dim,
+            context_embedding_dim=ctx_emb_dim,
+            n_layers=tr_conf.get("n_layers", 8),
+            hidden_dim=tr_conf.get("hidden_dim", 128),
+            num_bins=sp_conf.get("num_bins", 8),
+            tail_bound=sp_conf.get("tail_bound", 5.0),
+            mask_type=sp_conf.get("mask_type", "coupling"),
+            num_blocks=sp_conf.get("num_blocks", 2),
+            dropout_probability=sp_conf.get("dropout_probability", 0.0),
+            use_linear=sp_conf.get("use_linear", True),
+        )
+    elif transform_type == "maf":
+        maf_conf = tr_conf.get("maf", {})
+        transform = architecture.get_maf_transform(
+            feature_dim=x_dim,
+            context_embedding_dim=ctx_emb_dim,
+            n_layers=tr_conf.get("n_layers", 8),
+            hidden_dim=tr_conf.get("hidden_dim", 128),
+            num_blocks=maf_conf.get("num_blocks", 2),
+            dropout_probability=maf_conf.get("dropout_probability", 0.0),
+            use_linear=maf_conf.get("use_linear", True),
+        )
     else:
-        raise ValueError(f"Unknown transform type: {transform_type!r}. Choose 'sigmoids' or 'lipschitz'.")
+        raise ValueError(
+            f"Unknown transform type: {transform_type!r}. Choose 'sigmoids', 'lipschitz', 'spline', or 'maf'."
+        )
 
     return embedding_net, transform
 
 
+def _extract_train_kwargs(flow_conf: dict) -> dict:
+    """Pull the LikelihoodFlow.fit training arguments out of a flow config's ``training`` block,
+    applying the same defaults as the single-flow path."""
+    train_conf = flow_conf.get("training", {})
+    return dict(
+        n_epochs=train_conf.get("n_epochs", 100),
+        batch_size=train_conf.get("batch_size", 10_000),
+        vali_split=train_conf.get("vali_split", 0.1),
+        learning_rate=train_conf.get("learning_rate", 1e-3),
+        weight_decay=train_conf.get("weight_decay", 0.0),
+        scheduler_type=train_conf.get("scheduler_type", "cosine"),
+        scheduler_kwargs=train_conf.get("scheduler_kwargs", None),
+        n_patience_epochs=train_conf.get("n_patience_epochs", None),
+        min_delta=train_conf.get("min_delta", 1e-4),
+        run_c2st=train_conf.get("run_c2st", True),
+    )
+
+
 def build_flow(
-    params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, flow_conf: dict, prefix: str = "", i_signal=None
+    params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, flow_conf: dict,
+    prefix: str = "", i_signal=None, seed=None, n_flows=1, flow_confs=None,
 ):
-    """Build, train, plot diagnostics, and return a LikelihoodFlow.
+    """Build, train, plot diagnostics, and return a LikelihoodFlow or LikelihoodFlowEnsemble.
 
     Args:
         params: List of cosmological parameter names.
@@ -270,7 +324,8 @@ def build_flow(
         grid_preds: Array of shape (N, x_dim) — network summary statistics.
         grid_cosmos: Array of shape (N, theta_dim) — cosmological parameters.
         flow_conf: Flow config dict (keys: context_embedding, transform, training,
-            diagnostics). Use {} or read_yaml(path) to populate.
+            diagnostics). Use {} or read_yaml(path) to populate. Ignored when ``flow_confs``
+            is given (heterogeneous mode), except its ``seed`` is used as the base seed.
         prefix: Prepended to the saved model directory name, e.g. ``"larger_"`` →
             ``pred_dir/larger_likelihood_flow_{n_steps}/``. Useful when comparing
             multiple flow configs on the same prediction file.
@@ -279,50 +334,102 @@ def build_flow(
             made deterministic and grouped by signal realization, so that no signal
             realization (regardless of its noise realizations) appears in both sets --
             see LikelihoodFlow._prepare_data's group_ids argument.
+        seed: Optional torch seed for weight init and the (group-aware) train/vali split.
+            Defaults to None, then flow_conf.get("seed", 7) is used.
+        n_flows: If 1 (default), build a single LikelihoodFlow (current behavior). If >1,
+            build a homogeneous LikelihoodFlowEnsemble of n_flows independently-initialized
+            flows. When ``flow_confs`` is given, ``n_flows`` is instead a per-config
+            replication factor (see below).
+        flow_confs: Optional list of flow config dicts for a *heterogeneous* ensemble. When
+            given, build one ensemble member per (config, replica) pair: total members =
+            ``len(flow_confs) * n_flows``, member i uses ``flow_confs[i % len(flow_confs)]``
+            (replicas of a config differ only by seed). Each member trains with its own
+            config's ``training`` block. Defaults to None (homogeneous behavior above).
 
     Returns:
-        LikelihoodFlow: Trained flow with saved checkpoint.
+        LikelihoodFlow or LikelihoodFlowEnsemble: Trained flow(s) with saved checkpoint(s).
     """
     x_dim = grid_preds.shape[-1]
     theta_dim = grid_cosmos.shape[-1]
 
-    embedding_net, transform = build_flow_architecture(x_dim, theta_dim, flow_conf)
+    base_conf = flow_confs[0] if flow_confs else flow_conf
+    if seed is None:
+        seed = base_conf.get("seed", 7)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     suffix = f"_{n_steps}" if n_steps is not None else ""
-    flow = LikelihoodFlow(
-        params,
-        msfm_conf,
-        feature_dim=x_dim,
-        embedding_net=embedding_net,
-        transform=transform,
-        out_dir=pred_dir,
-        prefix=prefix,
-        suffix=suffix,
-        load_existing=False,
-    )
 
-    train_conf = flow_conf.get("training", {})
-    print("Fitting flow...")
+    member_train_kwargs = None
+
+    if flow_confs:
+        # Heterogeneous ensemble: one member per (config, replica). Build per-member architecture
+        # factories and per-member training kwargs, so members differ in architecture and each trains
+        # with its own config. Default-arg binding (c=conf) captures the right config in each closure.
+        n_configs = len(flow_confs)
+        total = n_configs * n_flows
+        member_confs = [flow_confs[i % n_configs] for i in range(total)]
+        embedding_fns = [(lambda c=c: build_flow_architecture(x_dim, theta_dim, c)[0]) for c in member_confs]
+        transform_fns = [(lambda c=c: build_flow_architecture(x_dim, theta_dim, c)[1]) for c in member_confs]
+        member_train_kwargs = [_extract_train_kwargs(c) for c in member_confs]
+        flow = LikelihoodFlowEnsemble(
+            params,
+            msfm_conf,
+            n_flows=total,
+            feature_dim=x_dim,
+            embedding_net_fn=embedding_fns,
+            transform_fn=transform_fns,
+            out_dir=pred_dir,
+            prefix=prefix,
+            suffix=suffix,
+            load_existing=False,
+            torch_seed=seed,
+        )
+        print(f"Fitting heterogeneous ensemble of {total} flows ({n_configs} configs x {n_flows} replicas)...")
+    elif n_flows > 1:
+        flow = LikelihoodFlowEnsemble(
+            params,
+            msfm_conf,
+            n_flows=n_flows,
+            feature_dim=x_dim,
+            embedding_net_fn=lambda: build_flow_architecture(x_dim, theta_dim, flow_conf)[0],
+            transform_fn=lambda: build_flow_architecture(x_dim, theta_dim, flow_conf)[1],
+            out_dir=pred_dir,
+            prefix=prefix,
+            suffix=suffix,
+            load_existing=False,
+            torch_seed=seed,
+        )
+        print(f"Fitting ensemble of {n_flows} flows...")
+    else:
+        embedding_net, transform = build_flow_architecture(x_dim, theta_dim, flow_conf)
+        flow = LikelihoodFlow(
+            params,
+            msfm_conf,
+            feature_dim=x_dim,
+            embedding_net=embedding_net,
+            transform=transform,
+            out_dir=pred_dir,
+            prefix=prefix,
+            suffix=suffix,
+            load_existing=False,
+            torch_seed=seed,
+        )
+        print("Fitting flow...")
+
+    fit_kwargs = _extract_train_kwargs(base_conf)
+    if member_train_kwargs is not None:
+        fit_kwargs["member_train_kwargs"] = member_train_kwargs
     flow.fit(
         x=grid_preds,
         theta=grid_cosmos,
-        n_epochs=train_conf.get("n_epochs", 100),
-        batch_size=train_conf.get("batch_size", 10_000),
-        scheduler_type=train_conf.get("scheduler_type", "cosine"),
         save_model=True,
-        run_c2st=True,
         group_ids=i_signal,
+        **fit_kwargs,
     )
 
-    diag_conf = flow_conf.get("diagnostics", {})
-    print("Plotting diagnostics...")
-    try:
-        flow.plot_diagnostics(
-            grid_preds_true=grid_preds,
-            grid_cosmos=grid_cosmos,
-            n_cosmos=diag_conf.get("n_cosmos", 1000),
-        )
-    except Exception as e:
-        print(f"WARNING: plot_diagnostics failed ({type(e).__name__}: {e}), skipping.")
+    # likelihood-level coverage (HPD/EECP, TARP) is run as an explicit stage in run_inference.py
+    # (coverage.run_likelihood_coverage), parallel to the posterior-level stage, so it also covers the
+    # --load_flow path and shares the held-out split and plot helpers with the posterior tests.
 
     return flow

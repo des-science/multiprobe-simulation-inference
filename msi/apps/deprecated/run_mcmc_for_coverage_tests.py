@@ -4,8 +4,22 @@
 Created June 2025
 Author: Arne Thomsen
 
-Sample the MCMC posterior for N random observations from the CosmoGrid for posterior-level coverage testing. This is
-meant for CPU nodes.
+Sample the MCMC posterior for N random observations from the CosmoGrid for posterior-level coverage testing.
+
+Two execution paths are supported:
+
+1. Legacy esub job-array workflow on Perlmutter CPU nodes (one chain per task). See the examples below.
+
+2. Direct-SLURM GPU workflow on Clariden (GH200), where the flow runs on cuda and the in-house batched
+   ensemble sampler (msi.utils.torch_ensemble) evaluates many observations in a single forward pass. The
+   script is invoked directly with python (no esub): each process samples one contiguous shard of the
+   n_sims observations, then a final --merge process combines the per-index files. See
+   y3-deep-lss/submissions/clariden/mcmc_coverage.sh (analogously placed under msi/submissions). Example:
+
+   python run_mcmc_for_coverage_tests.py --preds_file=... --flow_dir=... \
+       --n_sims=1000 --device=cuda --obs_batch=64 --n_shards=4 --shard_id=0
+   # ... then once all shards finish:
+   python run_mcmc_for_coverage_tests.py --preds_file=... --flow_dir=... --n_sims=1000 --merge
 
 For a flow trained on combined maps+Cls summaries (run_inference.py --out_dir_2, see
 y3-deep-lss/submissions/clariden/combined_inference.sh), also pass --preds_file_2 pointing at the
@@ -16,7 +30,7 @@ example usage:
 esub run_mcmc_for_coverage_tests.py \
     --preds_file=/pscratch/sd/a/athomsen/run_files/v14/extended/combined/mutual_info/2025-04-30_02-27-42_deepsphere_default/preds_400000.h5 \
     --flow_dir=/pscratch/sd/a/athomsen/run_files/v14/extended/combined/mutual_info/2025-04-30_02-27-42_deepsphere_default/400000_steps_likelihood_sigmoid_test_v4/likelihood_flow \
-    --n_sims=1000 --n_jobs=1000 \
+    --n_sims=1000 --n_jobs=1000 --device=cpu \
     --mode=jobarray --function=all --keep_submit_files \
     --jobname=mcmc_test --log_dir=/pscratch/sd/a/athomsen/run_files/v14/esub_logs \
     --system=slurm --source_file=../../pipelines/v14/perlmutter_setup.sh \
@@ -26,7 +40,7 @@ esub run_mcmc_for_coverage_tests.py \
 esub run_mcmc_for_coverage_tests.py \
     --preds_file=/pscratch/sd/a/athomsen/run_files/v14/extended/combined/mutual_info/2025-04-30_02-27-42_deepsphere_default/preds_400000.h5 \
     --flow_dir=/pscratch/sd/a/athomsen/run_files/v14/extended/combined/mutual_info/2025-04-30_02-27-42_deepsphere_default/400000_steps_likelihood_sigmoid_test_v4/likelihood_flow \
-    --n_sims=1000 --n_jobs=1000 \
+    --n_sims=1000 --n_jobs=1000 --device=cpu \
     --mode=jobarray --function=rerun_missing --keep_submit_files \
     --jobname=mcmc_test --log_dir=/pscratch/sd/a/athomsen/run_files/v14/esub_logs \
     --system=slurm --source_file=../../pipelines/v14/perlmutter_setup.sh \
@@ -72,6 +86,9 @@ def resources(args):
         }
     elif args.cluster == "euler":
         resources = {"main_time": 4, "main_memory": 4096, "main_n_cores": 8, "merge_memory": 4096, "merge_n_cores": 16}
+    else:
+        # Clariden does not use esub; jobs are launched via the direct-SLURM __main__ entry point
+        resources = {}
 
     return resources
 
@@ -117,8 +134,39 @@ def setup(args):
         "--cluster",
         type=str,
         default="perlmutter",
-        choices=("perlmutter", "euler"),
+        choices=("perlmutter", "euler", "clariden"),
         help="the cluster to execute on",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="torch device for the flow and the batched sampler (e.g. 'cuda' on Clariden, 'cpu' "
+        "for the legacy esub/Perlmutter CPU workflow)",
+    )
+    parser.add_argument(
+        "--obs_batch",
+        type=int,
+        default=64,
+        help="number of observations sampled together in a single batched forward pass; size to fit "
+        "GPU memory (forward batch is obs_batch * n_walkers points)",
+    )
+    parser.add_argument(
+        "--n_shards",
+        type=int,
+        default=1,
+        help="number of shards the n_sims observations are split into for direct SLURM execution",
+    )
+    parser.add_argument(
+        "--shard_id",
+        type=int,
+        default=0,
+        help="which contiguous shard (0..n_shards-1) this process handles for direct SLURM execution",
+    )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="direct-execution merge mode: combine all per-index files into mcmc_samples.h5 and exit",
     )
     parser.add_argument(
         "--max_sleep",
@@ -141,7 +189,6 @@ def setup(args):
 def main(indices, args):
     args = setup(args)
 
-    n_sims = args.n_sims
     n_walkers = 1024
     n_burnin_steps = 1_000
     n_steps = 1_000
@@ -150,8 +197,10 @@ def main(indices, args):
     if args.debug:
         args.max_sleep = 0
         n_burnin_steps = 10
-        n_steps = n_walkers * 100
+        n_steps = 10
         LOGGER.warning("!!! debug mode !!!")
+    # the GPU-batched sampler returns n_steps * n_walkers samples per observation
+    n_samples_out = min(n_samples_out, n_steps * n_walkers)
     sleep_sec = np.random.uniform(0, args.max_sleep) if args.max_sleep > 0 else 0
     LOGGER.info(f"Waiting for {sleep_sec:.2f}s to prevent overloading IO")
     time.sleep(sleep_sec)
@@ -160,42 +209,54 @@ def main(indices, args):
 
     # deterministically subselect cosmologies
     n_cosmos = x_true_all.shape[0]
-    x_true_sub = x_true_all[:: n_cosmos // n_sims]
-    theta_true_sub = theta_true_all[:: n_cosmos // n_sims]
+    x_true_sub = x_true_all[:: n_cosmos // args.n_sims]
+    theta_true_sub = theta_true_all[:: n_cosmos // args.n_sims]
 
-    for index in indices:
-        x_true = x_true_sub[index]
-        theta_true = theta_true_sub[index]
+    # process the (possibly sharded) observation indices in batches that share one forward pass
+    indices = list(indices)
+    for chunk_start in range(0, len(indices), args.obs_batch):
+        chunk = indices[chunk_start : chunk_start + args.obs_batch]
 
-        theta_sample = model.sample_posterior(
-            x_true,
+        x_true_batch = x_true_sub[chunk]  # (n_chunk, n_features)
+        theta_true_batch = theta_true_sub[chunk]  # (n_chunk, n_params)
+
+        # GPU-batched sampling for the whole chunk at once
+        chain, _ = model.sample_posterior_batched(
+            x_true_batch,
             n_walkers=n_walkers,
             n_burnin_steps=n_burnin_steps,
             n_steps=n_steps,
-            dont_save=True,
-        )
-        # too many samples make the test slow and are not needed
-        theta_sample = theta_sample[np.random.choice(theta_sample.shape[0], n_samples_out, replace=False)]
+            device=args.device,
+        )  # chain: (n_chunk, n_steps * n_walkers, n_params)
 
-        log_prob_true = model.log_likelihood(
-            torch.unsqueeze(x_true, 0), torch.unsqueeze(theta_true, 0), return_numpy=True
-        )
-        log_prob_sample = model.log_likelihood(
-            torch.repeat_interleave(torch.unsqueeze(x_true, 0), repeats=theta_sample.shape[0], dim=0),
-            theta_sample,
-            return_numpy=True,
-        )
+        # raw flow log-likelihood of the true cosmology for each observation in the chunk (batched)
+        log_prob_true_batch = model.log_likelihood(x_true_batch, theta_true_batch, return_numpy=True)
 
-        out_file = os.path.join(args.flow_dir, f"mcmc_samples_{index}.h5")
-        with h5py.File(out_file, "w") as f:
-            f.create_dataset("x_true", data=x_true)
-            f.create_dataset("theta_true", data=theta_true)
-            f.create_dataset("log_prob_true", data=log_prob_true)
+        for j, index in enumerate(chunk):
+            x_true = np.asarray(x_true_batch[j].cpu() if hasattr(x_true_batch[j], "cpu") else x_true_batch[j])
+            theta_true = np.asarray(
+                theta_true_batch[j].cpu() if hasattr(theta_true_batch[j], "cpu") else theta_true_batch[j]
+            )
+            log_prob_true = np.atleast_1d(log_prob_true_batch[j])
 
-            f.create_dataset("theta_sample", data=theta_sample)
-            f.create_dataset("log_prob_sample", data=log_prob_sample)
+            theta_sample = chain[j]
+            # too many samples make the test slow and are not needed
+            theta_sample = theta_sample[np.random.choice(theta_sample.shape[0], n_samples_out, replace=False)]
 
-        yield index
+            # raw flow log-likelihood of the posterior samples (same observation repeated)
+            x_repeated = np.repeat(x_true[None, :], theta_sample.shape[0], axis=0)
+            log_prob_sample = model.log_likelihood(x_repeated, theta_sample, return_numpy=True)
+
+            out_file = os.path.join(args.flow_dir, f"mcmc_samples_{index}.h5")
+            with h5py.File(out_file, "w") as f:
+                f.create_dataset("x_true", data=x_true)
+                f.create_dataset("theta_true", data=theta_true)
+                f.create_dataset("log_prob_true", data=log_prob_true)
+
+                f.create_dataset("theta_sample", data=theta_sample)
+                f.create_dataset("log_prob_sample", data=log_prob_sample)
+
+            yield index
 
 
 def _set_up_flow(args):
@@ -210,9 +271,9 @@ def _set_up_flow(args):
     flow_utils.load_grid_summaries. This guarantees the mock observations drawn from the
     reconstructed validation set were seen neither by the compression network nor by the flow.
     """
-    grid_preds, grid_cosmos, _, _, i_signal = flow_utils.load_grid_summaries(args.preds_file, args.preds_file_2)
+    grid_preds, grid_cosmos, _, _, i_signal, _ = flow_utils.load_grid_summaries(args.preds_file, args.preds_file_2)
 
-    model = LikelihoodFlow.from_checkpoint(model_dir=args.flow_dir, device="cpu")
+    model = LikelihoodFlow.from_checkpoint(model_dir=args.flow_dir, device=args.device)
 
     # get the correct signal-grouped split of the validation data
     model._prepare_data(
@@ -278,3 +339,34 @@ def merge(indices, args):
         if os.path.exists(in_file):
             os.remove(in_file)
     LOGGER.info(f"Removed temporary files")
+
+
+def _run_direct(argv):
+    """Direct-SLURM entry point for Clariden (esub is not available there).
+
+    Each process either (a) handles one contiguous shard of the n_sims observations on a single GPU, or
+    (b) with --merge, combines all per-index files into the final mcmc_samples.h5. The per-index file
+    layout is identical to the esub workflow, so merge() is shared between the two paths.
+    """
+    parsed = setup(argv)
+
+    all_indices = list(range(parsed.n_sims))
+
+    if parsed.merge:
+        merge(all_indices, argv)
+        return
+
+    shard = [int(i) for i in np.array_split(all_indices, parsed.n_shards)[parsed.shard_id]]
+    LOGGER.info(
+        f"Shard {parsed.shard_id}/{parsed.n_shards}: sampling {len(shard)} observations "
+        f"(indices {shard[0]}..{shard[-1]}) on device {parsed.device}"
+    )
+    # main is a generator (esub contract); exhaust it to run the work
+    for _ in main(shard, argv):
+        pass
+
+
+if __name__ == "__main__":
+    import sys
+
+    _run_direct(sys.argv[1:])

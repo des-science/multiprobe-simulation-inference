@@ -61,12 +61,21 @@ def run_emcee(
     sampler = EnsembleSampler(n_walkers, n_params, log_prob_fn, vectorize=True, moves=moves)
 
     LOGGER.info(f"Starting the burn in MCMC chain ({n_burnin_steps} steps)")
+    LOGGER.timer.start("mcmc_burnin")
     state = sampler.run_mcmc(theta_0, n_burnin_steps, progress=True)
+    LOGGER.info(f"[timing] burn-in ({n_burnin_steps} steps): {LOGGER.timer.elapsed('mcmc_burnin')}")
     sampler.reset()
 
     # run the actual chain
     LOGGER.info(f"Starting the main MCMC chain ({n_steps} steps)")
+    # each vectorized step evaluates log_prob_fn on n_walkers points, so for fixed n_steps/n_walkers
+    # this elapsed time is directly comparable across flow architectures and dominates NLE cost
+    LOGGER.timer.start("mcmc_main")
     sampler.run_mcmc(state, n_steps, progress=True)
+    LOGGER.info(
+        f"[timing] main chain ({n_steps} steps x {n_walkers} walkers = "
+        f"{n_steps * n_walkers} log_prob evals): {LOGGER.timer.elapsed('mcmc_main')}"
+    )
 
     chain = sampler.get_chain(flat=True)
     log_probs = sampler.get_log_prob(flat=True)
