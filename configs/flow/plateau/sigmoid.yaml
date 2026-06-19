@@ -1,0 +1,51 @@
+seed: 7 # matches LikelihoodFlow's default torch_seed=7
+
+context_embedding:
+  dim: 16
+  hidden_dim: 32
+  n_blocks: 2
+  dropout_probability: 0.1
+
+transform:
+  type: sigmoids
+  n_layers: 4
+  hidden_dim: 128
+  sigmoids:
+    n_sigmoids: 8
+    num_blocks: 3
+    dropout_probability: 0.1
+
+training:
+  n_epochs: 500
+  batch_size: 10000
+  vali_split: 0.1
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  scheduler_type: plateau
+  scheduler_kwargs:
+    patience: 4
+    factor: 0.5
+    min_lr: 1.0e-5
+    threshold_mode: abs # rel is broken for negative NLL loss
+    threshold: 0.01
+  n_patience_epochs: 15
+  min_delta: 0.01
+  run_c2st: true
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: true
+  store_individual_chains: false
+
+diagnostics:
+  n_obs: 1000
+  n_likelihood_samples: 100
+  prior_selection: wide
+  tests:
+    hpd: true
+    tarp: true
+    sbc: true
+    lc2st: false

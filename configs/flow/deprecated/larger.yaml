@@ -14,7 +14,7 @@ transform:
   sigmoids:
     n_sigmoids: 32
     num_blocks: 4
-    dropout_probability: 0.0
+    dropout_probability: 0.1
 
 training:
   n_epochs: 200

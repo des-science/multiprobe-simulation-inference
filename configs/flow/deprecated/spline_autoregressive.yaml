@@ -1,0 +1,44 @@
+# Masked-autoregressive RQ spline flow (MAF-RQ).
+#
+# Same capacity as spline.yaml but with an autoregressive conditioner instead of coupling.
+# For NLE this is the most expressive option with a single-pass log_prob (the MCMC hot path):
+# each dimension conditions on all previous ones rather than on a fixed half. Sampling is
+# O(feature_dim) passes and therefore slower, but flow sampling is only used for the
+# likelihood-level diagnostics here, so that cost does not affect inference.
+
+seed: 7
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+
+transform:
+  type: spline
+  n_layers: 8
+  hidden_dim: 128
+  spline:
+    num_bins: 8
+    tail_bound: 5.0
+    mask_type: autoregressive
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_linear: true
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  scheduler_type: cosine
+  weight_decay: 1.0e-3
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: true
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4

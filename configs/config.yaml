@@ -15,6 +15,11 @@ files:
         1x2pt: "data/DESy3_chains/wCDM/tatt/chain_1x2pt_wcdm_SR_maglim.txt"
         2x2pt: "data/DESy3_chains/wCDM/tatt/chain_2x2pt_wcdm_SR_maglim.txt"
         3x2pt: "data/DESy3_chains/wCDM/tatt/chain_3x2pt_wcdm_SR_maglim.txt"
+    # DES Y3 2x2pt harmonic-space (Cl) chain from arXiv:2406.12675, maglim 4 lens bins (no bin5-6),
+    # CosmoLike covariance with the "improved" scale cuts (6 Mpc/h clustering, 8 Mpc/h galaxy-galaxy lensing)
+    harmonic_2x2pt:
+      LambdaCDM:
+        tatt: "data/DESy3_harmonic_chains/chain_2x2_maglim_4bins_3x2_cls_y3_maglim_metacal_tjpcov_cosmolike_2nd_cov_bf_4bins_improved_sc.fits_2x2_maglim_6mpch_8mpch_no_bin5-6.ini_lcdm_values.txt"
 
 abc:
   # for float32 this is close to the minimum logable value

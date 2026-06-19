@@ -1,0 +1,38 @@
+seed: 7
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+  n_blocks: 3
+  dropout_probability: 0.0
+
+transform:
+  type: maf
+  n_layers: 4
+  hidden_dim: 128
+  maf:
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_linear: false
+
+training:
+  n_epochs: 300
+  batch_size: 10000
+  vali_split: 0.1
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  scheduler_type: cosine
+  n_patience_epochs: null
+  run_c2st: true
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: false
+
+diagnostics:
+  n_obs: 1000
+  n_likelihood_samples: 100
+  prior_selection: wide

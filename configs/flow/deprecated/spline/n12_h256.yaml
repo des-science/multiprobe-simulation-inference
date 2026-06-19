@@ -1,0 +1,44 @@
+# RQ spline (autoregressive) hyperparameter search -- n_layers=12, hidden_dim=256 (deeper + wider).
+# Stable optimization: ReduceLROnPlateau + early stopping (restores best weights).
+
+seed: 7
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+  n_blocks: 3
+  dropout_probability: 0.0
+
+transform:
+  type: spline
+  n_layers: 12
+  hidden_dim: 256
+  spline:
+    num_bins: 8
+    tail_bound: 5.0
+    mask_type: autoregressive
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_linear: true
+
+training:
+  n_epochs: 300 # generous ceiling; early stopping decides the actual length
+  batch_size: 10000
+  vali_split: 0.1
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  scheduler_type: plateau # ReduceLROnPlateau: halves LR when val loss stalls (factor 0.5, patience 4, min_lr 1e-5)
+  n_patience_epochs: 10 # early stopping on val NLL; restores best weights
+  min_delta: 1.0e-4
+  run_c2st: true
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: true
+
+diagnostics:
+  n_obs: 1000
+  n_likelihood_samples: 100

@@ -1,0 +1,44 @@
+seed: 7
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+  n_blocks: 3
+  dropout_probability: 0.0
+
+transform:
+  type: maf
+  n_layers: 12
+  hidden_dim: 256
+  maf:
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_linear: true # learnable LU mixing (and re-ordering) between layers; false for fixed permutations
+
+training:
+  n_epochs: 500
+  batch_size: 10000
+  vali_split: 0.1
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  scheduler_type: plateau
+  scheduler_kwargs:
+    patience: 4
+    factor: 0.5
+    min_lr: 1.0e-5
+    threshold_mode: abs
+    threshold: 0.01
+  n_patience_epochs: 16
+  min_delta: 0.01
+  run_c2st: true
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: true
+
+diagnostics:
+  n_obs: 1000
+  n_likelihood_samples: 100

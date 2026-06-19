@@ -1,0 +1,36 @@
+seed: 7 # matches LikelihoodFlow's default torch_seed=7
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+
+transform:
+  type: spline # pure-PyTorch rational-quadratic neural spline (fast single-pass log_prob for NLE)
+  n_layers: 8
+  hidden_dim: 128
+  spline:
+    num_bins: 8
+    tail_bound: 5.0
+    mask_type: coupling # "coupling" (fast forward+inverse) or "autoregressive" (MAF-RQ, slow sampling)
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_linear: true # learnable LU mixing between layers; set false for fixed random permutations
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  scheduler_type: cosine
+  weight_decay: 1.0e-4 # L2 regularization -> smoother likelihood, less overconfident posteriors (raise toward 1e-3 if still too tight)
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble # only consulted when --n_flows > 1; no-op for the single-flow path
+  use_validation_weights: true
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4

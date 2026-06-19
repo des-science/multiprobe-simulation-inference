@@ -3,6 +3,7 @@
 *.pdf
 *.DS_store
 *.json
+*/DESy3_harmonic_chains
 
 !data/figures/*.png
 

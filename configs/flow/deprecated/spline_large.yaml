@@ -1,0 +1,43 @@
+# Large RQ spline coupling flow — the high-capacity end of the sweep.
+#
+# Deeper/wider with more bins and a small amount of dropout; the coupling spline counterpart
+# to larger.yaml. Tests whether the coupling architecture needs extra capacity to match the
+# sum-of-sigmoids posteriors. Still expected to evaluate log_prob faster than the sigmoids
+# flow at comparable accuracy, since each layer is a single forward pass.
+
+seed: 7
+
+context_embedding:
+  dim: 64
+  hidden_dim: 128
+
+transform:
+  type: spline
+  n_layers: 12
+  hidden_dim: 256
+  spline:
+    num_bins: 12
+    tail_bound: 5.0
+    mask_type: coupling
+    num_blocks: 3
+    dropout_probability: 0.1
+    use_linear: true
+
+training:
+  n_epochs: 150
+  batch_size: 10000
+  scheduler_type: cosine
+  weight_decay: 1.0e-4  # L2 regularization -> smoother likelihood, less overconfident posteriors (raise toward 1e-3 if still too tight)
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: true
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4

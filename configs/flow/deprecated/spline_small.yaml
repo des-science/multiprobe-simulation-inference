@@ -1,0 +1,42 @@
+# Small RQ spline coupling flow — the fast/cheap end of the sweep.
+#
+# Halves the depth and width vs spline.yaml and uses fewer bins. This is the cheapest
+# log_prob (fastest MCMC) and smallest checkpoint; use it to probe how little capacity the
+# spline needs before posteriors start to degrade relative to the larger variants.
+
+seed: 7
+
+context_embedding:
+  dim: 16
+  hidden_dim: 32
+
+transform:
+  type: spline
+  n_layers: 4
+  hidden_dim: 64
+  spline:
+    num_bins: 6
+    tail_bound: 5.0
+    mask_type: coupling
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_linear: true
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  scheduler_type: cosine
+  weight_decay: 1.0e-4  # L2 regularization -> smoother likelihood, less overconfident posteriors (raise toward 1e-3 if still too tight)
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: true
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4
