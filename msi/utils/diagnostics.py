@@ -528,16 +528,23 @@ def posterior_hpd_check(
     n_sims = log_probs_true.shape[0]
     n_samples = log_probs_sample.shape[0]
 
+    # the slice picks every (n_samples // n_alpha)-th sorted sample; derive the credibility levels and the
+    # array length from that same stride so alpha and ecp always align (also robust when n_samples is not a
+    # multiple of n_alpha)
+    step = max(1, n_samples // n_alpha)
+    cls_indices = np.arange(0, n_samples, step)
+    alpha = cls_indices / n_samples
+
     # empirical expected coverage probability
-    ecp = np.zeros((n_sims, n_alpha))
+    ecp = np.zeros((n_sims, len(cls_indices)))
 
     # cosmos
-    for i in LOGGER.progressbar(range(n_sims), at_level="info", desc="EECP: looping through cosmos"):
+    for i in LOGGER.progressbar(range(n_sims), at_level="info", desc="HPD: looping through cosmos"):
         log_prob_sample = log_probs_sample[:, i]
         log_prob_sample = np.sort(log_prob_sample)[::-1]
 
-        # shape (n_conficence_levels,)
-        log_prob_at_cls = log_prob_sample[:: n_samples // n_alpha]
+        # shape (n_confidence_levels,)
+        log_prob_at_cls = log_prob_sample[cls_indices]
         log_prob_true = log_probs_true[i]
 
         # per cosmology
@@ -545,8 +552,6 @@ def posterior_hpd_check(
 
     # mean over all cosmologies
     ecp_mean = np.mean(ecp, axis=0)
-
-    alpha = np.linspace(0, 1, n_alpha)
 
     return alpha, ecp_mean
 
@@ -556,7 +561,8 @@ def posterior_tarp_check(
     theta_sample,
     # tarp
     n_bootstrap=100,
-    n_alpha=20,
+    n_alpha=50,
+    norm=True,
     # random reference points
     x_true=None,
     randoms_dist=None,
@@ -565,7 +571,11 @@ def posterior_tarp_check(
     np_seed=17,
 ):
     """Test of Accuracy with Random Points (TARP) for the posterior samples, like algorithm 2 from
-    https://arxiv.org/pdf/2302.03026"""
+    https://arxiv.org/pdf/2302.03026
+
+    norm=True min-max rescales theta to [0, 1] inside tarp (the same rescaling plot_tarp_check does
+    manually) so the Euclidean DRP metric is not dominated by the widest-range parameter -- important for
+    the *joint* coverage; 1D marginals are unaffected by scaling."""
 
     assert (
         theta_sample.shape[1] == theta_true.shape[0]
@@ -580,7 +590,7 @@ def posterior_tarp_check(
         metric="euclidean",
         bootstrap=True,
         num_bootstrap=n_bootstrap,
-        norm=False,
+        norm=norm,
         num_alpha_bins=n_alpha,
     )
     ecp_mean = np.mean(ecp, axis=0)
