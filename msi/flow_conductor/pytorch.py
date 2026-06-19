@@ -36,21 +36,26 @@ class EarlyStopper:
         self.best_weights = None
 
     def early_stop(self, validation_loss):
-        # lowest validation loss so far
+        # An epoch counts as an improvement only if it beats the running best by at least min_delta;
+        # otherwise the patience counter advances. This is what makes min_delta a genuine "minimum
+        # improvement" threshold -- without it, a validation loss creeping down by negligible amounts
+        # keeps setting new minima, the counter never advances, and training never stops.
+        if validation_loss < self.min_validation_loss - self.min_delta:
+            self.counter = 0
+        else:
+            self.counter += 1
+
+        # always checkpoint the genuine best, so restoring "best weights" returns the lowest-loss model
         if validation_loss < self.min_validation_loss:
             self.min_validation_loss = validation_loss
-            self.counter = 0
-            self.best_weights = self.model.state_dict()
-        # larger validation loss than before
-        elif validation_loss > (self.min_validation_loss + self.min_delta):
-            self.counter += 1
-            if self.counter >= self.patience:
-                if self.model is not None:
-                    LOGGER.info(self.model.load_state_dict(self.best_weights))
-                    LOGGER.info(
-                        f"Restored the weights from the best epoch (vali_loss = {self.min_validation_loss:.2f})"
-                    )
-                return True
+            if self.model is not None:
+                self.best_weights = self.model.state_dict()
+
+        if self.counter >= self.patience:
+            if self.model is not None and self.best_weights is not None:
+                self.model.load_state_dict(self.best_weights)
+                LOGGER.info(f"Restored the weights from the best epoch (vali_loss = {self.min_validation_loss:.2f})")
+            return True
         return False
 
 

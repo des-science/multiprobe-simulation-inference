@@ -17,7 +17,12 @@ from enflows.transforms import (
     MaskedSumOfSigmoidsTransform,
     ConditionalSVDTransform,
 )
+from enflows.transforms.permutations import RandomPermutation
+from enflows.transforms.lu import LULinear
 from enflows.nn.nets import Sin, CSin, ResidualNet
+
+from msi.flow_conductor.spline import RQSplineCouplingTransform, RQSplineAutoregressiveTransform
+from msi.flow_conductor.maf import AffineAutoregressiveTransform
 
 default_context_embedding_dim = 16
 
@@ -141,8 +146,8 @@ def get_sigmoids_transform(
     context_embedding_dim=default_context_embedding_dim,
     n_layers=4,
     hidden_dim=256,
-    svd_kwargs={},
-    sigmoids_kwargs={},
+    svd_kwargs=None,
+    sigmoids_kwargs=None,
 ):
     """Returns a transform consisting of a sequence of SVD and MaskedSumOfSigmoidsTransform layers.
 
@@ -157,6 +162,9 @@ def get_sigmoids_transform(
     Returns:
         CompositeTransform: The composite transform consisting of SVD and MaskedSumOfSigmoidsTransform layers.
     """
+
+    svd_kwargs = {} if svd_kwargs is None else dict(svd_kwargs)
+    sigmoids_kwargs = {} if sigmoids_kwargs is None else dict(sigmoids_kwargs)
 
     svd_kwargs.setdefault("num_blocks", 2)
     svd_kwargs.setdefault("dropout_probability", 0.0)
@@ -189,6 +197,144 @@ def get_sigmoids_transform(
                 hidden_features=hidden_dim,
                 context_features=context_embedding_dim,
                 **sigmoids_kwargs,
+            )
+        )
+
+    transform = CompositeTransform(transforms)
+
+    return transform
+
+
+def get_spline_transform(
+    feature_dim,
+    context_embedding_dim=default_context_embedding_dim,
+    n_layers=8,
+    hidden_dim=128,
+    num_bins=8,
+    tail_bound=5.0,
+    mask_type="coupling",
+    num_blocks=2,
+    dropout_probability=0.0,
+    use_linear=True,
+):
+    """Returns a rational-quadratic neural spline transform implemented directly in PyTorch.
+
+    This is a faster, smaller alternative to ``get_sigmoids_transform`` for the NLE setting, where
+    the dominant cost is evaluating the flow's ``log_prob`` inside the MCMC posterior sampler -- the
+    spline transforms have a single-pass ``log_prob``. Each layer is ``ActNorm`` -> a linear mixing
+    layer (``LULinear`` if ``use_linear`` else ``RandomPermutation``) -> an RQ spline conditioner.
+
+    Args:
+        feature_dim (int): The dimension of the input features.
+        context_embedding_dim (int): The dimension of the context embedding. Defaults to 16.
+        n_layers (int, optional): The number of spline layers. Defaults to 8.
+        hidden_dim (int, optional): Hidden width of the conditioner network. Defaults to 128.
+        num_bins (int, optional): Number of spline bins. Defaults to 8.
+        tail_bound (float, optional): The spline acts on [-tail_bound, tail_bound] and is the
+            identity (linear tails) outside it. Defaults to 5.0.
+        mask_type (str, optional): "coupling" (fast forward and inverse) or "autoregressive"
+            (MAF-style: single-pass density, slow sampling). Defaults to "coupling".
+        num_blocks (int, optional): Residual/MADE blocks in the conditioner. Defaults to 2.
+        dropout_probability (float, optional): Conditioner dropout. Defaults to 0.0.
+        use_linear (bool, optional): Use a learnable LU linear mix between layers instead of a
+            fixed random permutation. Defaults to True.
+
+    Returns:
+        CompositeTransform: The composite RQ spline transform.
+    """
+
+    if mask_type not in ("coupling", "autoregressive"):
+        raise ValueError(f"Unknown spline mask_type {mask_type!r}. Choose 'coupling' or 'autoregressive'.")
+
+    transforms = []
+    for i in range(n_layers):
+        transforms.append(ActNorm(features=feature_dim))
+
+        # mix the flow's dimensions between spline layers
+        if use_linear:
+            transforms.append(LULinear(feature_dim, identity_init=True))
+        else:
+            transforms.append(RandomPermutation(features=feature_dim))
+
+        if mask_type == "coupling":
+            transforms.append(
+                RQSplineCouplingTransform(
+                    feature_dim=feature_dim,
+                    context_features=context_embedding_dim,
+                    hidden_features=hidden_dim,
+                    num_bins=num_bins,
+                    tail_bound=tail_bound,
+                    num_blocks=num_blocks,
+                    dropout_probability=dropout_probability,
+                    mask_even=(i % 2 == 0),  # alternate the identity/transform split each layer
+                )
+            )
+        else:
+            transforms.append(
+                RQSplineAutoregressiveTransform(
+                    feature_dim=feature_dim,
+                    context_features=context_embedding_dim,
+                    hidden_features=hidden_dim,
+                    num_bins=num_bins,
+                    tail_bound=tail_bound,
+                    num_blocks=num_blocks,
+                    dropout_probability=dropout_probability,
+                )
+            )
+
+    transform = CompositeTransform(transforms)
+
+    return transform
+
+
+def get_maf_transform(
+    feature_dim,
+    context_embedding_dim=default_context_embedding_dim,
+    n_layers=8,
+    hidden_dim=128,
+    num_blocks=2,
+    dropout_probability=0.0,
+    use_linear=True,
+):
+    """Returns a masked-affine autoregressive (MAF) transform implemented directly in PyTorch.
+
+    The fastest expressive option for NLE: each layer's density (``log_prob``) is a single MADE pass
+    plus an elementwise affine map -- no binning (no softmax / searchsorted) as in the RQ spline.
+    Each layer is ``ActNorm`` -> a linear mixing layer (``LULinear`` if ``use_linear`` else
+    ``RandomPermutation``, which also re-orders the autoregressive conditioning between layers) ->
+    an affine autoregressive conditioner.
+
+    Args:
+        feature_dim (int): The dimension of the input features.
+        context_embedding_dim (int): The dimension of the context embedding. Defaults to 16.
+        n_layers (int, optional): The number of MAF layers. Defaults to 8.
+        hidden_dim (int, optional): Hidden width of the MADE conditioner. Defaults to 128.
+        num_blocks (int, optional): Residual blocks in the MADE conditioner. Defaults to 2.
+        dropout_probability (float, optional): Conditioner dropout. Defaults to 0.0.
+        use_linear (bool, optional): Use a learnable LU linear mix between layers instead of a fixed
+            random permutation. Defaults to True.
+
+    Returns:
+        CompositeTransform: The composite MAF transform.
+    """
+
+    transforms = []
+    for _ in range(n_layers):
+        transforms.append(ActNorm(features=feature_dim))
+
+        # mix the flow's dimensions (and re-order the autoregressive conditioning) between layers
+        if use_linear:
+            transforms.append(LULinear(feature_dim, identity_init=True))
+        else:
+            transforms.append(RandomPermutation(features=feature_dim))
+
+        transforms.append(
+            AffineAutoregressiveTransform(
+                feature_dim=feature_dim,
+                context_features=context_embedding_dim,
+                hidden_features=hidden_dim,
+                num_blocks=num_blocks,
+                dropout_probability=dropout_probability,
             )
         )
 
