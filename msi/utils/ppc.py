@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 from trianglechain import TriangleChain
 
 from msfm.utils import files, logger
-from msi.utils import input_output, plotting
-from msi.flow_conductor.likelihood_flow import LikelihoodFlow
-from msi.flow_conductor import architecture
+from msi.utils import input_output, plotting, tensions
+from msi.utils import flow as flow_utils
+from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 
 LOGGER = logger.get_logger(__file__)
 
@@ -55,6 +55,9 @@ class PosteriorPredictiveChecks:
         probe1_flow_dir=None,
         probe2_flow_dir=None,
         shared_data=False,
+        # flow architecture (shared by every setup_flow call on this instance)
+        flow_conf=None,
+        n_flows=1,
     ):
         """
         Initialize the PosteriorPredictiveChecks object.
@@ -85,12 +88,22 @@ class PosteriorPredictiveChecks:
                 independence assumption underlying ``independent_cross=True`` does not hold (the
                 two summaries share cosmic variance and noise); ``setup_flow`` will refuse
                 ``independent_cross=True`` for cross-probe runs.
+            flow_conf: Flow config dict (``context_embedding`` / ``transform`` / ``training``
+                blocks, e.g. ``configs/flow/maf.yaml``) defining the PPC flow architecture and
+                training, consumed by ``flow_utils.build_flow_architecture`` /
+                ``_extract_train_kwargs`` -- the same builders ``run_inference`` uses. ``None`` ->
+                ``{}`` reproduces the library defaults.
+            n_flows: Number of flows in the PPC ensemble. 1 (default) builds a single
+                ``LikelihoodFlow``; >1 builds a ``LikelihoodFlowEnsemble`` of independently
+                initialized members with the same architecture.
         """
 
         self.conf = files.load_config(conf)
         self.cosmo_params = cosmo_params
         self.seed = seed
         self.rng = np.random.default_rng(self.seed)
+        self.flow_conf = flow_conf or {}
+        self.n_flows = n_flows
 
         self.probe1_name = probe1_name
         self.probe2_name = probe2_name
@@ -118,6 +131,10 @@ class PosteriorPredictiveChecks:
             self.s_probe1_grid, self.theta_probe1_grid, self.probe1_obs_dict, _ = (
                 input_output.load_network_preds_simple(self.probe1_pred_file)
             )
+            self.probe1_real_idx = self._load_realization_idx(self.probe1_pred_file)
+            self.s_probe1_grid, self.theta_probe1_grid, self.probe1_real_idx = tensions.align_rows(
+                self.s_probe1_grid, self.theta_probe1_grid, self.probe1_real_idx
+            )
             self.probe1_params = self._get_probe_params(probe1_name)
             self.probe1_cosmo_idx = [self.probe1_params.index(p) for p in cosmo_params]
 
@@ -126,35 +143,64 @@ class PosteriorPredictiveChecks:
             self.s_probe2_grid, self.theta_probe2_grid, self.probe2_obs_dict, _ = (
                 input_output.load_network_preds_simple(self.probe2_pred_file)
             )
+            self.probe2_real_idx = self._load_realization_idx(self.probe2_pred_file)
+            self.s_probe2_grid, self.theta_probe2_grid, self.probe2_real_idx = tensions.align_rows(
+                self.s_probe2_grid, self.theta_probe2_grid, self.probe2_real_idx
+            )
             self.probe2_params = self._get_probe_params(probe2_name)
             self.probe2_cosmo_idx = [self.probe2_params.index(p) for p in cosmo_params]
 
         if self.probe1_pred_file and self.probe2_pred_file:
-            self._assert_shared_cosmo_grid()
+            self._assert_aligned_grids()
 
-    def _assert_shared_cosmo_grid(self):
-        """Verify probe1 and probe2 sims share the same cosmology grid points, row by row.
+    @staticmethod
+    def _load_realization_idx(pred_file):
+        """Per-row ``(i_sobol, i_signal, i_noise)`` realization indices for the grid test set.
 
-        Cross-probe ``setup_flow`` uses the joint conditional ``p(s_rep | theta_obs, s_obs)``
-        (the Doux et al. 2020 mode), which pairs row ``i`` of ``theta_obs_grid`` /
-        ``s_obs_grid`` with row ``i`` of ``s_rep_grid``. For that pairing to be a valid joint,
-        the two sim banks must be drawn at the same cosmologies in the same row order.
-        ``independent_cross=True`` only needs the cosmo *set* to match, but row-aligned grids
-        cover both regimes. Failing this check means the cross-probe results would silently
-        train on mismatched (cosmology[i], summary[i]) pairs.
+        Read in the same row order as ``load_network_preds_simple``'s concatenated grid arrays
+        (the stored ``(n_cosmo, n_examples)`` index grids flatten C-order, matching the
+        ``concatenate`` of the ``(n_cosmo, n_examples, dim)`` predictions). Used to sort each
+        probe's grid into a canonical realization order so the two probes can be paired by row.
         """
+        import h5py
+
+        with h5py.File(pred_file, "r") as f:
+            return np.stack(
+                [f[f"grid/{k}/test"][:].reshape(-1) for k in ("i_sobol", "i_signal", "i_noise")],
+                axis=1,
+            )
+
+    def _assert_aligned_grids(self):
+        """Verify probe1 and probe2 grids are the SAME realizations in the same row order.
+
+        Both grids are sorted into canonical ``(i_sobol, i_signal, i_noise)`` order in
+        ``__init__`` (via ``tensions.align_rows``). Cross-probe ``setup_flow`` uses the joint
+        conditional ``p(s_rep | theta_obs, s_obs)`` (the Doux et al. 2020 mode) and pairs row
+        ``i`` of one probe with row ``i`` of the other. That joint only encodes the cross-probe
+        data-level correlation (cosmic variance, shared noise / footprint) if row ``i`` is the
+        *same sky realization* in both probes. ``evaluate_grid`` only sorts by ``i_sobol``, so two
+        separately-evaluated runs can differ in their within-cosmology signal/noise ordering --
+        checking cosmology alone would pass on mismatched realizations and silently train the flow
+        on independent draws (collapsing the correlation). See memory
+        ``project_tension_row_alignment_bug``.
+        """
+        idx1, idx2 = self.probe1_real_idx, self.probe2_real_idx
+        assert idx1.shape == idx2.shape, (
+            f"Probe grids have different shapes ({idx1.shape} vs {idx2.shape}); the two pred "
+            "files must come from the same simulation grid (same train/test split)."
+        )
+        assert np.array_equal(idx1, idx2), (
+            "Probe grids are not the same realizations after alignment: the (i_sobol, i_signal, "
+            "i_noise) index arrays differ row by row. Cross-probe checks pair the two grids by "
+            "row, so both pred files must contain the same set of realizations. Re-export them "
+            "from the same simulation grid."
+        )
+        # cosmology then agrees by construction; verify cheaply to catch cosmo_params mislabeling.
         c1 = np.asarray(self.theta_probe1_grid)[:, self.probe1_cosmo_idx]
         c2 = np.asarray(self.theta_probe2_grid)[:, self.probe2_cosmo_idx]
-        assert c1.shape == c2.shape, (
-            f"Probe cosmo grids have different shapes ({c1.shape} vs {c2.shape}); the two "
-            "pred files must come from the same simulation grid (same train/test split)."
-        )
         assert np.allclose(c1, c2), (
-            "Probe cosmo grids are not row-aligned: theta_probe1_grid[:, cosmo_idx] does not "
-            "match theta_probe2_grid[:, cosmo_idx] row by row. Cross-probe checks pair the two "
-            "grids by row index, so the two pred files must share the same train/test split "
-            "ordering. Re-export one of the pred files with the same shuffling, or pass "
-            "shared_data=False and only use the auto-probe path."
+            "Cosmology columns disagree despite aligned realization indices; check that "
+            "cosmo_params map to the correct columns in each probe's parameter list."
         )
 
     @staticmethod
@@ -232,7 +278,9 @@ class PosteriorPredictiveChecks:
 
             train_flow (bool): If True, trains the flow from scratch.
             flow_label (str): Label for the flow model.
-            fit_kwargs (dict): Additional keyword arguments for fitting the flow.
+            fit_kwargs (dict): Overrides for the training kwargs derived from ``self.flow_conf``
+                (``_extract_train_kwargs``); merged on top, so e.g. ``{"n_epochs": 50}`` shortens
+                training without changing the architecture.
         """
 
         assert rep_probe in [
@@ -308,27 +356,49 @@ class PosteriorPredictiveChecks:
             flow_label += "ppc/auto_"
             flow_label += self.obs_abbrv
 
-        self.flow = LikelihoodFlow(
-            params=[],
-            conf=self.conf,
-            embedding_net=architecture.get_context_embedding_net(context_grid.shape[-1]),
-            base_dist=architecture.get_normal_dist(features_grid.shape[-1]),
-            transform=architecture.get_sigmoids_transform(features_grid.shape[-1]),
-            out_dir=flow_dir,
-            label=flow_label,
-            load_existing=not train_flow,
-        )
+        # Build the flow from flow_conf using the same architecture/training builders as
+        # run_inference (msi.utils.flow), so PPC and inference share one flow definition. n_flows>1
+        # gives a LikelihoodFlowEnsemble of independently-initialized members (matching the ensemble
+        # used for fast GPU MCMC in run_inference).
+        feature_dim = features_grid.shape[-1]
+        context_dim = context_grid.shape[-1]
+
+        def _arch(which):
+            # fresh embedding/transform per ensemble member (which: 0=embedding_net, 1=transform)
+            return flow_utils.build_flow_architecture(feature_dim, context_dim, self.flow_conf)[which]
+
+        if self.n_flows > 1:
+            self.flow = LikelihoodFlowEnsemble(
+                params=[],
+                conf=self.conf,
+                n_flows=self.n_flows,
+                feature_dim=feature_dim,
+                embedding_net_fn=lambda: _arch(0),
+                transform_fn=lambda: _arch(1),
+                out_dir=flow_dir,
+                label=flow_label,
+                load_existing=not train_flow,
+                torch_seed=self.flow_conf.get("seed", 7),
+            )
+        else:
+            embedding_net, transform = flow_utils.build_flow_architecture(feature_dim, context_dim, self.flow_conf)
+            self.flow = LikelihoodFlow(
+                params=[],
+                conf=self.conf,
+                feature_dim=feature_dim,
+                embedding_net=embedding_net,
+                transform=transform,
+                out_dir=flow_dir,
+                label=flow_label,
+                load_existing=not train_flow,
+                torch_seed=self.flow_conf.get("seed", 7),
+            )
         self.out_dir = self.flow.model_dir
 
         if train_flow:
-            self.flow.fit(
-                x=features_grid,
-                theta=context_grid,
-                batch_size=10_000,
-                scheduler_type="cosine",
-                save_model=True,
-                **fit_kwargs,
-            )
+            train_kwargs = flow_utils._extract_train_kwargs(self.flow_conf)
+            train_kwargs.update(fit_kwargs)  # explicit per-call overrides win
+            self.flow.fit(x=features_grid, theta=context_grid, save_model=True, **train_kwargs)
 
     def run_checks(
         self,
@@ -595,6 +665,7 @@ class PosteriorPredictiveChecks:
         obs_label_str = r"$s_{" + rep_subs + r"}^{obs}$"
 
         tri = TriangleChain(
+            progress_bar=False,
             show_legend=True,
             legend_fontsize=24,
             size=2,
