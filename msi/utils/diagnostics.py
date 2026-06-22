@@ -7,14 +7,32 @@ Author: Arne Thomsen
 Utils to check the quality of the density estimation.
 """
 
+import contextlib
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import tarp.drp as _tarp_drp
 from tarp import get_tarp_coverage
 
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
+
+
+@contextlib.contextmanager
+def _quiet_tarp_progress():
+    """Silence tarp's hardcoded bootstrap tqdm bar (it has no off switch) unless logging at
+    debug level. The bootstrap loop's wall-time is already covered by the app-level coverage
+    [timing] lines, so the bar is pure clutter in non-interactive logs."""
+    if LOGGER.islevel("debug"):
+        yield
+        return
+    original = _tarp_drp.tqdm
+    _tarp_drp.tqdm = lambda iterable=None, *a, **k: iterable if iterable is not None else iter([])
+    try:
+        yield
+    finally:
+        _tarp_drp.tqdm = original
 
 
 def _assert_and_return_grid_pred_shapes(grid_preds_true, grid_preds_sample):
@@ -245,7 +263,7 @@ def plot_eecp_check(
         eecp = np.zeros((n_cosmos, n_examples, n_confidence_levels))
 
         # cosmos
-        for i in LOGGER.progressbar(range(n_cosmos), at_level="info", desc="EECP: looping through cosmos"):
+        for i in LOGGER.progressbar(range(n_cosmos), at_level="debug", desc="EECP: looping through cosmos"):
             sample_log_prob = log_probs_sample[i]
             sample_log_prob = np.sort(sample_log_prob)[::-1]
 
@@ -273,7 +291,7 @@ def plot_eecp_check(
         eecp = np.zeros((n_cosmos, n_confidence_levels))
 
         # cosmos
-        for i in LOGGER.progressbar(range(n_cosmos), at_level="info", desc="EECP: looping through cosmos"):
+        for i in LOGGER.progressbar(range(n_cosmos), at_level="debug", desc="EECP: looping through cosmos"):
             sample_log_prob = log_probs_sample[i]
             sample_log_prob = np.sort(sample_log_prob)[::-1]
 
@@ -417,7 +435,7 @@ def plot_tarp_check(
 
         # there's multiple truth samples for each cosmology in this case
         ecps, alphas = [], []
-        for i in LOGGER.progressbar(range(n_examples), at_level="info", desc="TARP: looping through examples"):
+        for i in LOGGER.progressbar(range(n_examples), at_level="debug", desc="TARP: looping through examples"):
             # shape (n_sims, n_dim), these are summaries x from the true distribution p(x|theta) in this case
             truth = grid_preds_true[:, i, :]
             randoms = get_randoms(truth.shape)
@@ -445,18 +463,19 @@ def plot_tarp_check(
     else:
         LOGGER.info(f"TARP uncertainty from {n_bootstrap} bootstrap samples")
 
-        ecp, alpha = get_tarp_coverage(
-            # shape (n_samples, n_sims, n_dim)
-            samples=grid_preds_sample,
-            # shape (n_sims, n_dim)
-            theta=grid_preds_true,
-            references=get_randoms(grid_preds_true.shape),
-            metric="euclidean",
-            bootstrap=True,
-            num_bootstrap=n_bootstrap,
-            norm=False,
-            num_alpha_bins=n_alpha_bins,
-        )
+        with _quiet_tarp_progress():
+            ecp, alpha = get_tarp_coverage(
+                # shape (n_samples, n_sims, n_dim)
+                samples=grid_preds_sample,
+                # shape (n_sims, n_dim)
+                theta=grid_preds_true,
+                references=get_randoms(grid_preds_true.shape),
+                metric="euclidean",
+                bootstrap=True,
+                num_bootstrap=n_bootstrap,
+                norm=False,
+                num_alpha_bins=n_alpha_bins,
+            )
         ecp_mean = np.mean(ecp, axis=0)
         ecp_std = np.std(ecp, axis=0)
 
@@ -539,7 +558,7 @@ def posterior_hpd_check(
     ecp = np.zeros((n_sims, len(cls_indices)))
 
     # cosmos
-    for i in LOGGER.progressbar(range(n_sims), at_level="info", desc="HPD: looping through cosmos"):
+    for i in LOGGER.progressbar(range(n_sims), at_level="debug", desc="HPD: looping through cosmos"):
         log_prob_sample = log_probs_sample[:, i]
         log_prob_sample = np.sort(log_prob_sample)[::-1]
 
@@ -581,18 +600,19 @@ def posterior_tarp_check(
         theta_sample.shape[1] == theta_true.shape[0]
     ), f"theta_samples must have shape (n_samples, n_sims, n_dim) but got {theta_sample.shape} and {theta_true.shape}"
 
-    ecp, alpha = get_tarp_coverage(
-        # shape (n_samples, n_sims, n_dim)
-        samples=theta_sample,
-        # shape (n_sims, n_dim)
-        theta=theta_true,
-        references="random",
-        metric="euclidean",
-        bootstrap=True,
-        num_bootstrap=n_bootstrap,
-        norm=norm,
-        num_alpha_bins=n_alpha,
-    )
+    with _quiet_tarp_progress():
+        ecp, alpha = get_tarp_coverage(
+            # shape (n_samples, n_sims, n_dim)
+            samples=theta_sample,
+            # shape (n_sims, n_dim)
+            theta=theta_true,
+            references="random",
+            metric="euclidean",
+            bootstrap=True,
+            num_bootstrap=n_bootstrap,
+            norm=norm,
+            num_alpha_bins=n_alpha,
+        )
     ecp_mean = np.mean(ecp, axis=0)
     ecp_std = np.std(ecp, axis=0)
 
@@ -608,3 +628,14 @@ def FoM_from_chain(chain, params, param1, param2):
     det = np.linalg.det(cov)
     fom = det ** (-0.5)
     return fom
+
+
+def FoM_from_chain_nd(chain, params, param_set):
+    """N-dimensional figure of merit over ``param_set``: ``det(cov)**(-0.5)``.
+
+    Generalizes :func:`FoM_from_chain` (eq. (17) in https://arxiv.org/pdf/2405.10881) to an
+    arbitrary number of parameters; reduces to it for a pair.
+    """
+    idx = [params.index(p) for p in param_set]
+    cov = np.atleast_2d(np.cov(chain[:, idx], rowvar=False))
+    return np.linalg.det(cov) ** (-0.5)

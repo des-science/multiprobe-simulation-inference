@@ -109,7 +109,7 @@ def run_ensemble_torch(
         if store:
             chain = np.empty((n, n_obs, n_walkers, n_params), dtype=np.float32)
             chain_lp = np.empty((n, n_obs, n_walkers), dtype=np.float32)
-        steps = LOGGER.progressbar(range(n), desc=desc, at_level="info") if progress else range(n)
+        steps = LOGGER.progressbar(range(n), desc=desc, at_level="debug") if progress else range(n)
         for step in steps:
             # update each half against the (current) other half, exactly as emcee's RedBlueMove
             _stretch_update(theta, log_prob, first, second, log_prob_fn, a, generator)

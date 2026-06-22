@@ -387,8 +387,11 @@ def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0
     post_samples_star = torch.from_numpy(post_samples_star.astype(np.float32))
 
     lc2st = LC2ST(thetas=theta_cal, xs=x_cal, posterior_samples=post_samples_cal, classifier="mlp", num_ensemble=1)
-    lc2st.train_under_null_hypothesis()
-    lc2st.train_on_observed_data()
+    # sbi's LC2ST drives its classifier-training tqdm bars off `verbosity` (disable=verbosity<1);
+    # keep them only at debug level, consistent with the MCMC/diagnostics bars.
+    lc2st_verbosity = 1 if LOGGER.islevel("debug") else 0
+    lc2st.train_under_null_hypothesis(verbosity=lc2st_verbosity)
+    lc2st.train_on_observed_data(verbosity=lc2st_verbosity)
 
     probs_data, _ = lc2st.get_scores(
         theta_o=post_samples_star, x_o=xs_star, return_probs=True, trained_clfs=lc2st.trained_clfs

@@ -230,7 +230,10 @@ def plot_chains(
         "de_kwargs", {"levels": [0.68, 0.95], "smoothing_parameter1D": 0.2, "smoothing_parameter2D": 0.2}
     )
     tri_kwargs.setdefault("line_kwargs", {"linestyles": linestyles, "linewidths": 1})  # 2d
-    tri_kwargs.setdefault("hist_kwargs", {"linestyle": "-", "lw": 1})  # 1d
+    # trianglechain's 1D plot passes a hardcoded "-" fmt string to axc.plot, so a "linestyle"
+    # entry here would redundantly redefine it and trigger a matplotlib UserWarning. Omit it for
+    # the solid default and only add it below when a non-solid style is actually requested.
+    tri_kwargs.setdefault("hist_kwargs", {"lw": 1})  # 1d
     tri_kwargs.setdefault("axlines_kwargs", {"linestyle": "--", "lw": 1})  # 1d
 
     tri_kwargs.setdefault("tick_fontsize", 8)
@@ -245,6 +248,8 @@ def plot_chains(
     tri_kwargs.setdefault("grid", True)
 
     tri_kwargs.setdefault("scatter_kwargs", {"s": 500, "marker": "*", "zorder": 299})
+
+    tri_kwargs.setdefault("progress_bar", False)
 
     tri = TriangleChain(
         params=all_params,
@@ -268,13 +273,18 @@ def plot_chains(
         for chain, param, color, label, linestyle, fill, zorder in zip(
             chains, params, colors, plot_labels, linestyles, fills, zorders
         ):
+            # Only forward a 1D "linestyle" when it differs from the solid "-" fmt trianglechain
+            # already applies, otherwise matplotlib warns about a redundant linestyle definition.
+            hist_kwargs = {**tri_kwargs["hist_kwargs"], "zorder": zorder}
+            if linestyle != "-":
+                hist_kwargs["linestyle"] = linestyle
             tri.contour_cl(
                 chain,
                 names=param,
                 label=label,
                 color=color,
                 line_kwargs={**tri_kwargs["line_kwargs"], "linestyles": linestyle, "zorder": zorder},
-                hist_kwargs={**tri_kwargs["hist_kwargs"], "linestyle": linestyle, "zorder": zorder},
+                hist_kwargs=hist_kwargs,
                 fill=fill,
             )
 
@@ -426,6 +436,7 @@ def plot_method_comparison(
         show_values=False,
         bestfit_method="median",
         ranges=ranges,
+        progress_bar=False,
     )
 
     # plot contours
