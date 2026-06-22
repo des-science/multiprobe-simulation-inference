@@ -11,6 +11,8 @@ from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEns
 from msi.utils import flow as flow_utils
 from msi.utils import observations
 from msi.utils import coverage
+from msi.utils import prior_predictive
+from msi.utils import mock_contamination
 
 LOGGER = logger.get_logger(__file__)
 
@@ -260,6 +262,15 @@ def main():
     if hasattr(flow, "validation_weight_temperature"):
         flow.validation_weight_temperature = mcmc_conf.get("validation_weight_temperature", 1.0)
 
+    # prior-level visualization (cheap, no MCMC): corner plot of the held-out grid summaries colored by
+    # S8, i.e. the marginal distribution the likelihood flow has to learn the density of.
+    try:
+        LOGGER.timer.start("prior_predictive")
+        prior_predictive.run_prior_predictive(flow, grid_preds, grid_cosmos, params, flow_conf)
+        LOGGER.info(f"[timing] prior predictive: {LOGGER.timer.elapsed('prior_predictive')}")
+    except Exception as e:
+        print(f"ERROR: prior predictive stage failed ({type(e).__name__}: {e})")
+
     # likelihood-level coverage stage (cheap, no MCMC): HPD/TARP on x ~ p(x|theta) for the held-out mocks,
     try:
         LOGGER.timer.start("likelihood_coverage")
@@ -267,6 +278,11 @@ def main():
         LOGGER.info(f"[timing] likelihood coverage: {LOGGER.timer.elapsed('likelihood_coverage')}")
     except Exception as e:
         print(f"ERROR: likelihood coverage stage failed ({type(e).__name__}: {e})")
+
+    # mirror the eval-side default: no --mock_labels -> sample every mock in the prediction file
+    if args.include_mocks and args.mock_labels is None:
+        args.mock_labels = observations.discover_mock_labels(obs_pred_dict)
+        LOGGER.info(f"Auto-discovered {len(args.mock_labels)} mock(s): {args.mock_labels}")
 
     obs_dict = observations.collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
     try:
@@ -285,6 +301,15 @@ def main():
         LOGGER.info(f"[timing] all MCMC chains ({len(obs_dict)} observations): {LOGGER.timer.elapsed('mcmc_total')}")
     except Exception as e:
         print(f"ERROR: run_mcmc failed ({type(e).__name__}: {e})")
+
+    # mock-contamination comparison (uses the per-mock chains from run_mcmc; independent of --sample_posterior)
+    if flow_conf.get("diagnostics", {}).get("tests", {}).get("mock_contamination", False):
+        try:
+            LOGGER.timer.start("mock_contamination")
+            mock_contamination.run_mock_contamination(flow, params, msfm_conf, flow_conf)
+            LOGGER.info(f"[timing] mock contamination: {LOGGER.timer.elapsed('mock_contamination')}")
+        except Exception as e:
+            print(f"ERROR: mock contamination stage failed ({type(e).__name__}: {e})")
 
     if args.sample_posterior:
         if args.mcmc_backend != "torch_batched" or not hasattr(flow, "sample_posterior_batched"):

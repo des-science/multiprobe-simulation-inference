@@ -11,7 +11,35 @@ def add_obs_args(parser, mock_labels_default=None):
     parser.add_argument("--include_buzzard", action="store_true")
     parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
     parser.add_argument("--include_mocks", action="store_true")
-    parser.add_argument("--mock_labels", nargs="+", default=mock_labels_default or ["fiducial_bench"])
+    parser.add_argument(
+        "--mock_labels",
+        nargs="+",
+        default=mock_labels_default,
+        help="mock labels to sample; if omitted, every mock in the prediction file is used "
+        "(see discover_mock_labels)",
+    )
+    parser.add_argument(
+        "--mock_realizations",
+        action="store_true",
+        help="also sample each individual realization in {label}_stack as its OWN observation "
+        "(one chain per realization, not a product over likelihoods); default samples only "
+        "the {label}_mean summary (one chain per mock).",
+    )
+
+
+def discover_mock_labels(obs_pred_dict):
+    """All mock labels in a preds file: those with BOTH {L}_mean and {L}_stack.
+
+    That mean+stack pair is the structural signature written only by evaluate_obs_benchmark /
+    evaluate_mock_cls, so the three observation sources stay cleanly disjoint by structure (not by
+    name): grid (grid_*) and DES (DESy3*) have neither key; Buzzard writes only Buzzard_mean (no
+    _stack) and is excluded too. Only the {L}_mean summary is sampled (one chain per mock); the
+    _stack is the discovery signal, sampled only under --mock_realizations.
+    """
+    suf = "_stack"
+    return sorted(
+        k[: -len(suf)] for k in obs_pred_dict if k.endswith(suf) and f"{k[: -len(suf)]}_mean" in obs_pred_dict
+    )
 
 
 def _cosmo_dict(params, cosmo_arr):
@@ -44,7 +72,7 @@ def get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, labels):
     return obs_dict
 
 
-def get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels):
+def get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels, include_realizations=False):
     obs_dict = {}
     for label in obs_labels:
         full_label = f"{label}_mean"
@@ -53,6 +81,17 @@ def get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels):
             continue
         cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
         obs_dict[full_label] = {"pred": obs_pred_dict[full_label], "cosmo": cosmo}
+
+        # Optionally add each stack realization as its own single-row observation (separate chain,
+        # not a product likelihood). Keys are {label}_{i}, which do not end in "_mean" and so are
+        # excluded from the mock-contamination plot (which uses only the {label}_mean chains).
+        if include_realizations:
+            stack_label = f"{label}_stack"
+            if stack_label not in obs_pred_dict:
+                print(f"Warning: '{stack_label}' not found in predictions, skipping realizations.")
+                continue
+            for i, row in enumerate(obs_pred_dict[stack_label]):
+                obs_dict[f"{label}_{i}"] = {"pred": row, "cosmo": cosmo}
     return obs_dict
 
 
@@ -66,7 +105,15 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
     if args.include_buzzard:
         obs_dict.update(get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, args.buzzard_labels))
     if args.include_mocks:
-        obs_dict.update(get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, args.mock_labels))
+        obs_dict.update(
+            get_mock_observations(
+                obs_pred_dict,
+                obs_cosmo_dict,
+                params,
+                args.mock_labels,
+                include_realizations=getattr(args, "mock_realizations", False),
+            )
+        )
     return obs_dict
 
 
