@@ -1,0 +1,59 @@
+# Method hyperparameters for the posterior-tension analysis.
+#
+# Only method-related quantities live here; runs, comparisons and observations are defined in a
+# separate runs config passed via --runs_config (e.g. configs/runs/v17/baseline/t2_v3.yaml).
+
+# Both the sigma8 and the S8 = sigma8 * sqrt(Om / 0.3) parametrization of every difference chain are
+# always produced (S8 is a cheap post-hoc reparametrization of the shared emulators / flow / MCMC).
+
+# Per-probe mean emulators (msi.utils.mlp.MLP), stage A.
+emulator:
+  hidden_dims: [512, 512]
+  dropout: 0.1
+  use_layer_norm: true
+  num_epochs: 30
+  batch_size: 1000
+  learning_rate: 1.0e-3
+  clip_grad_norm: 1.0
+  validation_split: 0.5
+  random_state: 17 # shared between probes so the validation split (and residual rows) match
+
+# Residual normalizing flow (msi.flow_conductor.marginal_flow.MarginalFlow), stage A.
+residual_flow:
+  n_transforms: 5
+  hidden_features: 128
+  n_blocks: 2
+  n_epochs: 50
+  batch_size: 10000
+  vali_split: 0.1
+  learning_rate: 1.0e-3
+  clip_by_global_norm: 1.0
+  run_c2st: true
+
+# MCMC for the joint residual posterior -> correlated difference chain, stage A.
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+
+# Uncorrelated difference chain (tensiometer.parameter_diff_chain), stage A.
+# boost sets the saved chain length (n_walkers*n_steps*boost); kept large for plotting fidelity.
+# The flow does not train on all of these -- see tensiometer.flow.max_samples below.
+uncorrelated:
+  boost: 10
+
+# Tension significance estimation (tensiometer), stage B.
+tensiometer:
+  flow:
+    pop_size: 1
+    epochs: 12 # loss is converged by ~epoch 10 (see 2581152_values.log)
+    learning_rate: 1.0e-3
+    steps_per_epoch: 100
+    max_samples: 1000000 # cap samples the flow trains on (full chain still saved for plotting)
+    hidden_units: [64, 64, 64, 64]
+    feedback: 2
+  run_kde: false # optional KDE cross-check
+  kde:
+    thin_factor: 10
+    scale: MISE
+    method: neighbor_elimination

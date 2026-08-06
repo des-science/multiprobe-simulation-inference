@@ -76,6 +76,68 @@ param_correspondence = {
 }
 
 
+def _load_cosmosis_chain(chain_file, params):
+    """Parse a CosmoSIS multinest chain .txt file (shared format of the DES Y3 key project chains and the
+    DES Y3 2x2pt harmonic-space chains from arXiv:2406.12675) and return the requested params and weights.
+
+    Args:
+        chain_file (str): Absolute path to the chain .txt file.
+        params (list): msfm/msi parameter names (keys of param_correspondence) to extract.
+    """
+    with open(chain_file, "r") as f:
+        chain = []
+        weight = []
+        for i, line in enumerate(f):
+            # the column names are stored in the first line
+            if i == 0:
+                params_header = line
+                params_header = params_header.split()
+                params_header = [param.split("--")[1] if "--" in param else param for param in params_header]
+
+                # the parameter's column index within the .txt file
+                i_params = [params_header.index(param_correspondence[param]) for param in params]
+
+                # include NLA parameters, but the chain is actually TATT
+                transform_tatt_to_nla = any([param in ["Aia", "n_Aia"] for param in params]) and any(
+                    header in ["a2", "alpha2", "bias_ta"] for header in params_header
+                )
+                if transform_tatt_to_nla:
+                    LOGGER.warning("Returning NLA parameters, even though the chain is TATT")
+                    i_a2 = params_header.index("a2")
+                    i_bta = params_header.index("bias_ta")
+
+            # skip the file header
+            if line.startswith("#"):
+                pass
+            else:
+                columns = line.split()
+
+                # restrict the samples to ones where TATT is close to NLA
+                if transform_tatt_to_nla:
+                    a2 = float(columns[i_a2])
+                    bta = float(columns[i_bta])
+
+                    # TODO are these reasonable values to be hardcoded?
+                    if abs(a2) < 0.1 and bta < 0.1:
+                        chain.append([float(columns[i_param]) for i_param in i_params])
+                        weight.append(float(columns[-1]))
+
+                # use all samples
+                else:
+                    chain.append([float(columns[i_param]) for i_param in i_params])
+                    weight.append(float(columns[-1]))
+
+    chain = np.asarray(chain)
+    weight = np.asarray(weight)
+
+    # re-normalize
+    weight /= np.sum(weight)
+
+    LOGGER.info(f"Loaded chain containing {len(chain)} samples from {chain_file}")
+
+    return chain, weight
+
+
 def load_des_y3_key_project_chain(params, probes="3x2pt", cosmo_model="wCDM", ia_model="nla"):
     """Load the parameters of interest in one of the chains from
     https://des.ncsa.illinois.edu/releases/y3a2/Y3key-products or
@@ -107,62 +169,33 @@ def load_des_y3_key_project_chain(params, probes="3x2pt", cosmo_model="wCDM", ia
 
     LOGGER.info(f"Loading DESy3 key project chain for probes={probes}, cosmo_model={cosmo_model}, ia_model={ia_model}")
 
-    # set up the file
     conf = input_output.load_msi_config()
     chain_file = os.path.join(input_output.get_abs_dir_repo(), conf["files"]["chains"][cosmo_model][ia_model][probes])
 
-    with open(chain_file, "r") as f:
-        chain = []
-        weight = []
-        for i, line in enumerate(f):
-            # the column names are stored in the first line
-            if i == 0:
-                params_header = line
-                params_header = params_header.split()
-                params_header = [param.split("--")[1] if "--" in param else param for param in params_header]
+    return _load_cosmosis_chain(chain_file, params)
 
-                # the parameter's column index within the .txt file
-                i_params = [params_header.index(param_correspondence[param]) for param in params]
 
-                # include NLA parameters, but the chain is actually TATT
-                transform_tatt_to_nla = any([param in ["Aia", "n_Aia"] for param in params]) and any(
-                    header in ["a2", "alpha2", "bias_ta"] for header in params_header
-                )
-                if transform_tatt_to_nla:
-                    LOGGER.warning(f"Returning NLA parameters, even though the chain is TATT")
-                    i_a2 = params_header.index("a2")
-                    i_bta = params_header.index("bias_ta")
+def load_des_y3_harmonic_chain(params, ia_model="tatt"):
+    """Load the DES Y3 2x2pt harmonic-space (Cl) chain from arXiv:2406.12675.
 
-            # skip the file header
-            if line.startswith("#"):
-                pass
-            else:
-                columns = line.split()
+    This chain is LambdaCDM only (no "w0") and covers galaxy clustering + galaxy-galaxy lensing
+    (maglim, 4 lens bins) with the "improved" scale cuts and CosmoLike covariance.
 
-                # restrict the samples to ones where TATT is close to NLA
-                if transform_tatt_to_nla:
-                    a2 = float(columns[i_a2])
-                    bta = float(columns[i_bta])
+    Args:
+        params (list): List of strings of the constrained parameters, must not include "w0".
+        ia_model (str, optional): Only "tatt" is available for this chain. Defaults to "tatt".
+    """
+    assert ia_model == "tatt", f"The ia_model argument {ia_model} has to be 'tatt' for the harmonic-space chain"
+    assert "w0" not in params, "The harmonic-space chain is LambdaCDM only and does not constrain w0"
 
-                    # TODO are these reasonable values to be hardcoded?
-                    if abs(a2) < 0.1 and bta < 0.1:
-                        chain.append([float(columns[i_param]) for i_param in i_params])
-                        weight.append(float(columns[-1]))
+    LOGGER.info("Loading DESy3 2x2pt harmonic-space chain (arXiv:2406.12675)")
 
-                # use all samples
-                else:
-                    chain.append([float(columns[i_param]) for i_param in i_params])
-                    weight.append(float(columns[-1]))
+    conf = input_output.load_msi_config()
+    chain_file = os.path.join(
+        input_output.get_abs_dir_repo(), conf["files"]["chains"]["harmonic_2x2pt"]["LambdaCDM"][ia_model]
+    )
 
-    chain = np.asarray(chain)
-    weight = np.asarray(weight)
-
-    # re-normalize
-    weight /= np.sum(weight)
-
-    LOGGER.info(f"Loaded DESy3 key project chain containing {len(chain)} samples")
-
-    return chain, weight
+    return _load_cosmosis_chain(chain_file, params)
 
 
 _probe_to_des = {
@@ -173,14 +206,18 @@ _probe_to_des = {
 }
 
 
-def load_and_shift_des_chain(test_params, probe, msfm_conf):
-    """Load a DES Y3 key project chain and shift it to the fiducial cosmology
+def load_and_shift_des_chain(test_params, probe, msfm_conf, use_harmonic=False):
+    """Load a DES Y3 chain and shift it to the fiducial cosmology
     using the same MAP→fiducial blinding as load_shifted_chain in the notebook.
 
     Args:
         test_params (list): Parameter names to load (subset of param_correspondence keys is used).
         probe (str): Probe name matching a key in _probe_to_des.
         msfm_conf (dict): msfm config (for fiducial values via parameters.get_fiducials).
+        use_harmonic (bool, optional): If True, use the DES Y3 2x2pt harmonic-space (Cl) chain from
+            arXiv:2406.12675 instead of the real-space DES Y3 key project chain. Only applicable to the
+            "2x2pt"/"clustering" probes, since that chain only covers galaxy clustering and galaxy-galaxy
+            lensing. Defaults to False (DES Y3 key project chain).
 
     Returns:
         chain (np.ndarray or None): Shifted samples, shape (n, len(available)).
@@ -188,12 +225,24 @@ def load_and_shift_des_chain(test_params, probe, msfm_conf):
         foms (dict): {(p1, p2): int} weighted FoM for each parameter pair.
         available (list): Subset of test_params that exist in the DES chain.
     """
-    des_probes, des_ia = _probe_to_des[probe]
-    available = [p for p in test_params if p in param_correspondence]
-    if not available:
-        return None, None, {}, []
+    if use_harmonic:
+        if probe not in ("2x2pt", "clustering"):
+            LOGGER.warning(f"The harmonic-space DES chain only covers 2x2pt, skipping for probe={probe}")
+            return None, None, {}, []
 
-    chain, weights = load_des_y3_key_project_chain(available, des_probes, "wCDM", des_ia)
+        # the harmonic-space chain is LambdaCDM only, so "w0" is never available
+        available = [p for p in test_params if p in param_correspondence and p != "w0"]
+        if not available:
+            return None, None, {}, []
+
+        chain, weights = load_des_y3_harmonic_chain(available, "tatt")
+    else:
+        des_probes, des_ia = _probe_to_des[probe]
+        available = [p for p in test_params if p in param_correspondence]
+        if not available:
+            return None, None, {}, []
+
+        chain, weights = load_des_y3_key_project_chain(available, des_probes, "wCDM", des_ia)
 
     # MAP estimate: weighted mean of top-1% samples (mirrors find_MAP in plotting.py)
     w_threshold = np.percentile(weights, 99)

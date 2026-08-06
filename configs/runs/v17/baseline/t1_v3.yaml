@@ -1,0 +1,63 @@
+# Run definitions: which trained runs to analyse, organised as data representation -> probe, plus the
+# comparisons to auto-build and the observations to analyse. Method hyperparameters live elsewhere --
+# configs/tension/tension.yaml and configs/ppc/ppc.yaml.
+#
+# Pass via --runs_config to msi/apps/run_tension_chains.py, run_tension_values.py and run_ppc.py.
+# A data representation set to Null (e.g. `cls: Null`) is dropped, so one file can be sliced to just
+# maps or just Cls without editing the comparisons.
+
+flow_name: ensemble_flow
+
+# Scale cut the networks were trained with (defines the rebinned-Cls cache used by
+# the Cls-space PPD in run_ppc.py). Tied to the runs, so it lives here, not in ppc.yaml.
+scales_config: /users/athomsen/dlss/repos/y3-deep-lss/configs/scales/8wl,32gc.yaml
+
+# `steps` is the production checkpoint used everywhere. `convergence_steps` (optional, default [])
+# lists the additional training-step checkpoints at which the network was evaluated, used only for
+# the training-step convergence diagnostic plot (6b notebook); fill with steps that actually have a
+# `{flow_name}_{steps}/chain_*.npy`. Leave [] to skip the convergence plot for that run.
+runs:
+  maps:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/maps/lensing/t1_cls
+      steps: 150000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/maps/clustering/t1_cls
+      steps: 120000
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/maps/combined/t1_cls
+      steps: 130000
+      convergence_steps: []
+  cls:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/cls/lensing/v3_mlp
+      steps: 1000000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/cls/clustering/v3_mlp
+      steps: 1000000
+      convergence_steps: []
+    2x2pt:
+      params: [Om, s8, w0, Aia, n_Aia, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/cls/2x2pt/v3_mlp
+      steps: 1000000
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/cls/combined/v3_mlp
+      steps: 1000000
+      convergence_steps: []
+
+comparisons:
+  probes: true # within each data representation, all probe pairs (e.g. cls: lensing vs clustering, ...)
+  data: true # for each probe present in both, the maps-vs-cls pair (run_1 = maps, run_2 = cls)
+
+obs_labels:
+  - { label: DESy3, lambdaCDM: false }

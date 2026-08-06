@@ -20,9 +20,10 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 REPOS="/users/athomsen/dlss/repos"
 MSI="$REPOS/multiprobe-simulation-inference"
 
-RUNS_CONFIG="$MSI/configs/runs/v8_v33.yaml"
-TENSION_CONFIG="$MSI/configs/tension.yaml"
-MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
+RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t2_v3.yaml"
+# RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t1_v3.yaml"
+TENSION_CONFIG="$MSI/configs/tension/tension.yaml"
+MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/v17/baseline.yaml"
 
 LOG_DIR="$MSI/submissions/clariden/slurm"
 mkdir -p "$LOG_DIR"

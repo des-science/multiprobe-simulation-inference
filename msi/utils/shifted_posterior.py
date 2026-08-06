@@ -10,7 +10,7 @@ fiducial cosmology. This is only valid when the chain does not press a prior bou
 then unreliable), so :func:`load_shifted_chain` returns ``None`` for a pressing chain and the caller
 simply omits it -- per chain, not per probe.
 
-Run bookkeeping is driven by a runs config (e.g. ``configs/runs/v8_v33.yaml``); a run is the dict
+Run bookkeeping is driven by a runs config (e.g. ``configs/runs/v17/baseline/t2_v3.yaml``); a run is the dict
 ``runs[data_type][probe] = {params, pred_dir, steps, [convergence_steps]}`` augmented with the
 top-level ``flow_name``.
 """
@@ -40,7 +40,7 @@ ASTRO_PARAMS_BY_PROBE = {
 def get_run(runs_conf, data_type, probe):
     """Return the run dict for ``(data_type, probe)`` augmented with ``flow_name``, or ``None``.
 
-    Mirrors ``msi.utils.tensions`` so the same runs config (e.g. configs/runs/v8_v33.yaml) drives
+    Mirrors ``msi.utils.tensions`` so the same runs config (e.g. configs/runs/v17/baseline/t2_v3.yaml) drives
     both the tension analysis and these plots.
     """
     probes = runs_conf.get("runs", {}).get(data_type, {})

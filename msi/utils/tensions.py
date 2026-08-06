@@ -53,7 +53,9 @@ def build_combinations(runs_conf):
         ``data`` and ``probe`` keys.  Copies are returned so callers may process them without
         mutating the shared config.
     """
-    runs = runs_conf["runs"]
+    # Drop data representations set to Null/empty in the config (e.g. `cls: Null` for a maps-only run),
+    # so a single runs config can be sliced to just maps or just Cls without editing the comparisons.
+    runs = {data: probes for data, probes in runs_conf["runs"].items() if probes}
     comparisons = runs_conf.get("comparisons", {})
 
     # Flow checkpoint dir name: "likelihood_flow" for a single LikelihoodFlow, "ensemble_flow" for a
@@ -208,9 +210,7 @@ def process_cosmologies(cosmos, params, use_lambdaCDM, use_S8):
 
         s8_idx = params_processed.index("s8")
         Om_idx = params_processed.index("Om")
-        cosmos_processed[:, s8_idx] = sigma8_to_S8(
-            sigma8=cosmos_processed[:, s8_idx], Om=cosmos_processed[:, Om_idx]
-        )
+        cosmos_processed[:, s8_idx] = sigma8_to_S8(sigma8=cosmos_processed[:, s8_idx], Om=cosmos_processed[:, Om_idx])
         params_processed[s8_idx] = "S8"
 
     return cosmos_processed, params_processed
