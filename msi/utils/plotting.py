@@ -5,12 +5,12 @@ Author: Arne Thomsen
 Utils to plot the 1D and 2D marginals of samples from a posterior distribution.
 """
 
-import os, copy
+import os
+import copy
 import numpy as np
 import matplotlib.pyplot as plt
 
 from trianglechain import TriangleChain
-from trianglechain.utils_plots import get_lines_and_labels
 from seaborn import color_palette
 
 from msfm.utils import parameters, logger, files, cross_statistics, prior
@@ -35,6 +35,9 @@ param_label_dict = {
     "Ob": r"$\Omega_b$",
     "ns": r"$n_s$",
     "w0": r"$w_0$",
+    # baryonification (log10(Mc) convention, cf. the grid priors)
+    "bary_Mc": r"$\log_{10} M_c$",
+    "bary_nu": r"$\nu_{\mathrm{b}}$",
     # IA
     "Aia": r"$A_{IA}$",
     "n_Aia": r"$\eta_{A_{IA}}$",
@@ -131,6 +134,7 @@ def plot_chains(
 
         # check that all of the params are supported
         config_params = conf["analysis"]["params"]["cosmo"].copy()
+        config_params += conf["analysis"]["params"].get("bary", [])
 
         config_params += conf["analysis"]["params"]["ia"]["nla"]
         if conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
@@ -187,10 +191,16 @@ def plot_chains(
             else:
                 chains = chains[:, param_indices]
 
-    n_cosmo_params = sum([param in conf["analysis"]["params"]["cosmo"] + ["S8"] for param in all_params])
+    # baryonification params count as cosmological for grouping: they are part of the Sobol cosmo block
+    n_cosmo_params = sum(
+        [
+            param in conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"].get("bary", []) + ["S8"]
+            for param in all_params
+        ]
+    )
     n_ia_params = sum(
         [
-            param in conf["analysis"]["params"]["ia"]["nla"] + conf["analysis"]["params"]["ia"]["tatt"]
+            param in conf["analysis"]["params"]["ia"]["nla"] + conf["analysis"]["params"]["ia"].get("tatt", [])
             for param in all_params
         ]
     )
@@ -401,7 +411,7 @@ def plot_chains(
         tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=100)
         LOGGER.info(f"Saved the plot to {out_file}")
     else:
-        LOGGER.warning(f"Not saving the plot")
+        LOGGER.warning("Not saving the plot")
 
     return tri
 
@@ -574,16 +584,17 @@ def plot_human_summary(
         if label is not None:
             out_file = os.path.join(out_dir, f"plot_{label}.png")
         else:
-            out_file = os.path.join(out_dir, f"plot.png")
+            out_file = os.path.join(out_dir, "plot.png")
 
         fig.savefig(out_file, bbox_inches="tight", dpi=100)
         LOGGER.info(f"Saved the summary plot to {out_file}")
+
 
 def find_MAP(chain, log_probs, params, params_select, percentile=1):
     params_indices = np.array([params.index(param) for param in params_select])
 
     # Find samples with highest log probabilities (e.g., top 1%)
-    prob_threshold = np.percentile(log_probs, 100-percentile)
+    prob_threshold = np.percentile(log_probs, 100 - percentile)
     high_prob_indices = log_probs >= prob_threshold
 
     chain = chain[high_prob_indices]
@@ -591,13 +602,10 @@ def find_MAP(chain, log_probs, params, params_select, percentile=1):
 
     weights = np.exp(log_probs[high_prob_indices] - np.max(log_probs[high_prob_indices]))
 
-    high_prob_mean = np.average(
-        chain,
-        weights=weights,
-        axis=0
-    )
+    high_prob_mean = np.average(chain, weights=weights, axis=0)
 
     return high_prob_mean
 
+
 def sigma8_to_S8(sigma8, Om):
-        return sigma8 * np.sqrt(Om / 0.3)
+    return sigma8 * np.sqrt(Om / 0.3)

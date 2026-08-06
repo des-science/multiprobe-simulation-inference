@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 from msfm.utils import logger
-from msi.utils import preprocessing, plotting
+from msi.utils import preprocessing
 
 LOGGER = logger.get_logger(__file__)
 
@@ -31,7 +31,7 @@ def get_binned_power_spectra_dset(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     with_gaussian_noise=True,
     bin_indices=None,
     # CLs scale cuts
@@ -86,7 +86,7 @@ def get_binned_power_spectra_dset(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
         with_fiducial=False,
         with_gaussian_noise=with_gaussian_noise,
         bin_indices=bin_indices,
@@ -114,9 +114,7 @@ def get_binned_power_spectra_dset(
     grid_cosmos_test = out_dict["grid/cosmos/test"]
     noise_cls = out_dict["noise/cls"]
 
-    ell_weights_tf = (
-        tf.constant(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
-    )
+    ell_weights_tf = tf.constant(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
 
     if shuffle_buffer == "full":
         shuffle_buffer = grid_cls_train.shape[0]
@@ -188,13 +186,13 @@ def get_binned_power_spectra_dset_hard_cut(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     bin_indices=None,
     # additional preprocessing
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq"
-    n_extra_bins=0,      # 0 → hard cut; 1 → hard_conservative
+    n_extra_bins=0,  # 0 → hard cut; 1 → hard_conservative
 ):
     """Hard scale cut variant of get_binned_power_spectra_dset.
 
@@ -236,7 +234,7 @@ def get_binned_power_spectra_dset_hard_cut(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
         with_fiducial=False,
         bin_indices=bin_indices,
         apply_log=apply_log,
@@ -254,9 +252,7 @@ def get_binned_power_spectra_dset_hard_cut(
     grid_cosmos_train = out_dict["grid/cosmos/train"]
     grid_cosmos_test = out_dict["grid/cosmos/test"]
 
-    ell_weights_tf = (
-        tf.constant(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
-    )
+    ell_weights_tf = tf.constant(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
 
     if shuffle_buffer == "full":
         shuffle_buffer = grid_cls_train.shape[0]

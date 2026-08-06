@@ -79,7 +79,9 @@ def _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf):
     return x_vali, theta_vali
 
 
-def sample_coverage_posteriors(flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=None, msfm_conf=None):
+def sample_coverage_posteriors(
+    flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=None, msfm_conf=None, i_noise=None
+):
     """Sample the posterior for the held-out mock observations and write flow.model_dir/mcmc_samples.h5.
 
     Reproduces the flow's signal-grouped validation split -- exactly as
@@ -92,11 +94,18 @@ def sample_coverage_posteriors(flow, grid_preds, grid_cosmos, i_signal, flow_con
     the wide-grid cosmologies (via i_sobol + msfm_conf) so the coverage truths follow the wide analysis
     prior instead of the wide+narrow CosmoGrid Sobol density -- a prerequisite for valid TARP/SBC/HPD.
 
+    When both i_sobol and i_noise are given (alongside i_signal), the per-mock realization indices
+    (i_sobol, i_signal, i_noise) are tracked through the SAME selection as x_true and saved as a
+    `real_idx` dataset. This lets the cross-probe PPC calibration pair each obs-probe mock with the
+    rep-probe summary of the SAME sky realization (msi.utils.ppc.PosteriorPredictiveChecks); it is
+    skipped (with a warning) when those indices are unavailable.
+
     Returns:
         dict: {x_true, theta_true, log_prob_true, theta_sample, log_prob_sample} as numpy arrays, with the
         same layout/shapes written to mcmc_samples.h5 (i.e. what the paper's coverage notebook expects).
     """
     import torch
+
     mcmc_conf = flow_conf.get("mcmc", {})
     n_walkers = mcmc_conf.get("n_walkers", 1024)
     n_steps = mcmc_conf.get("n_steps", 1000)
@@ -108,6 +117,21 @@ def sample_coverage_posteriors(flow, grid_preds, grid_cosmos, i_signal, flow_con
 
     # reproduce the exact held-out validation split (deterministic, grouped by signal realization)
     x_vali, theta_vali = _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf)
+
+    # Track per-row realization indices through the SAME selection as x_vali (-> wide mask -> stride),
+    # so the saved mocks carry their (i_sobol, i_signal, i_noise) identity for cross-probe pairing.
+    save_real_idx = i_sobol is not None and i_noise is not None
+    if save_real_idx:
+        vali_indices = np.asarray(flow.vali_dset.indices)
+        real_idx_vali = np.stack([np.asarray(a).reshape(-1) for a in (i_sobol, i_signal, i_noise)], axis=1)[
+            vali_indices
+        ]
+    else:
+        real_idx_vali = None
+        LOGGER.warning(
+            "i_sobol/i_noise not provided; not saving real_idx to mcmc_samples.h5 -- cross-probe PPC "
+            "calibration will be unavailable for this run."
+        )
 
     # optionally keep only wide-grid cosmologies so the coverage truths follow the (wide) analysis prior
     # rather than the wide+narrow Sobol density. flow.vali_dset.indices (set by _held_out_split) maps the
@@ -122,8 +146,35 @@ def sample_coverage_posteriors(flow, grid_preds, grid_cosmos, i_signal, flow_con
         LOGGER.info(f"prior_selection='wide': {keep.sum()} / {keep.size} held-out mocks on the wide grid")
         keep_t = torch.as_tensor(keep, device=x_vali.device)
         x_vali, theta_vali = x_vali[keep_t], theta_vali[keep_t]
+        if save_real_idx:
+            real_idx_vali = real_idx_vali[keep]
     elif prior_selection != "all":
         raise ValueError(f"Unknown diagnostics.prior_selection={prior_selection!r}; expected 'all' or 'wide'.")
+
+    # Sort the held-out rows by realization identity before subsampling. The stride below selects by row
+    # POSITION, so without this the mock set depends on how the upstream pipeline happened to pack its
+    # (i_signal, i_noise) example axis. The maps and Cls pipelines pack it transposed, and the stride
+    # shares a factor with the per-cosmology block size, so the two aliased onto DIFFERENT realizations:
+    # their 1000-mock sets covered the same 1000 cosmologies but overlapped in only 200 rows, leaving the
+    # two-point baseline unpairable against the map runs. Sorting on (i_sobol, i_signal, i_noise) makes
+    # the selection a function of realization identity alone, so every pipeline yields the same mocks
+    # regardless of layout. This is a no-op for the maps pipeline, whose rows are already in this order.
+    if save_real_idx:
+        canonical = np.lexsort((real_idx_vali[:, 2], real_idx_vali[:, 1], real_idx_vali[:, 0]))
+        if not np.array_equal(canonical, np.arange(canonical.size)):
+            LOGGER.info(
+                "held-out rows were not in (i_sobol, i_signal, i_noise) order; reordering so the mock "
+                "selection matches other pipelines' runs"
+            )
+            order_t = torch.as_tensor(canonical, device=x_vali.device)
+            x_vali, theta_vali = x_vali[order_t], theta_vali[order_t]
+            real_idx_vali = real_idx_vali[canonical]
+    else:
+        LOGGER.warning(
+            "without i_sobol/i_noise the held-out rows cannot be put in a canonical order, so the mock "
+            "selection below depends on the upstream example-axis layout and these mocks may not be "
+            "pairable with runs from another pipeline."
+        )
 
     n_cosmos = x_vali.shape[0]
     if n_cosmos < n_sims:
@@ -131,6 +182,8 @@ def sample_coverage_posteriors(flow, grid_preds, grid_cosmos, i_signal, flow_con
         n_sims = n_cosmos
     x_true = x_vali[:: n_cosmos // n_sims][:n_sims]
     theta_true = theta_vali[:: n_cosmos // n_sims][:n_sims]
+    if save_real_idx:
+        real_idx_true = real_idx_vali[:: n_cosmos // n_sims][:n_sims]
     LOGGER.info(f"Coverage sampling {n_sims} held-out mock observations in a single batched pass")
 
     # one batched run over all mock observations (batch size = n_sims, fits a single GPU)
@@ -171,6 +224,8 @@ def sample_coverage_posteriors(flow, grid_preds, grid_cosmos, i_signal, flow_con
         "theta_sample": theta_sample,
         "log_prob_sample": log_prob_sample,
     }
+    if save_real_idx:
+        samples["real_idx"] = real_idx_true
 
     out_file = os.path.join(flow.model_dir, "mcmc_samples.h5")
     with h5py.File(out_file, "w") as f:
@@ -358,13 +413,30 @@ def run_likelihood_coverage(flow, grid_preds, grid_cosmos, i_signal, flow_conf, 
     run_likelihood_coverage_tests(x_true, grid_preds_sample, theta_true, flow, plot_dir, tests=tests)
 
 
-def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0.05):
-    """Local Classifier Two-Sample Test (l-C2ST) for one observation, following the sbi tutorial. Uses the
-    coverage calibration set (x_true/theta_true/theta_sample) and the observation's posterior chain (loaded
-    from chain_{obs_label}.npy if available, else resampled). Needs sbi."""
+def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None):
+    """Run the Local Classifier Two-Sample Test (l-C2ST) at one observation, following the sbi tutorial,
+    and return its scores without plotting anything. Needs sbi.
+
+    Split out of run_lc2st so that a caller which already has the arrays on disk -- the coverage samples
+    and the observation's chain, e.g. a paper figure -- can obtain the same numbers without a flow, a GPU
+    or the diagnostic plots. run_lc2st is the pipeline's wrapper around it.
+
+    Args:
+        samples: the coverage samples (mcmc_samples.h5) as loaded by sample_coverage_posteriors; only
+            x_true, theta_true and theta_sample[0] are used, i.e. one posterior realization per
+            calibration cosmology.
+        obs_pred: the observation's network summary, of shape (n_summaries,).
+        post_samples_star: the observation's posterior chain, of shape (n_samples, n_params).
+        conf_alpha: significance level of the test.
+        n_eval: number of posterior samples the classifier is evaluated on; the chain is subsampled
+            down to this. Note the statistic is noticeably sensitive to which subsample is drawn.
+        seed: seed for that subsample. None keeps the global numpy stream, i.e. an unseeded draw.
+
+    Returns:
+        dict: {probs_data, probs_null, T_data, T_null, p_value, reject, conf_alpha}.
+    """
     import torch
     from sbi.diagnostics.lc2st import LC2ST
-    from sbi.analysis.plot import pp_plot_lc2st
 
     # calibration set from the coverage samples; single posterior realization per calibration cosmology
     xs_star = np.asarray(obs_pred, dtype=np.float32)
@@ -372,13 +444,9 @@ def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0
     theta_cal = samples["theta_true"]
     post_samples_cal = samples["theta_sample"][0]
 
-    chain_file = os.path.join(flow.model_dir, f"chain_{obs_label}.npy")
-    if os.path.exists(chain_file):
-        post_samples_star = np.load(chain_file)
-    else:
-        post_samples_star = np.asarray(flow.sample_posterior(xs_star, label=obs_label))
-    i_rand = np.random.choice(post_samples_star.shape[0], 10_000)
-    post_samples_star = post_samples_star[i_rand]
+    rng = np.random.default_rng(seed) if seed is not None else np.random
+    i_rand = rng.choice(post_samples_star.shape[0], n_eval)
+    post_samples_star = np.asarray(post_samples_star)[i_rand]
 
     xs_star = torch.from_numpy(xs_star)
     x_cal = torch.from_numpy(x_cal)
@@ -400,8 +468,32 @@ def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0
     probs_null, T_null = lc2st.get_statistics_under_null_hypothesis(
         theta_o=post_samples_star, x_o=xs_star, return_probs=True
     )
-    p_value = lc2st.p_value(post_samples_star, xs_star)
-    reject = lc2st.reject_test(post_samples_star, xs_star, alpha=conf_alpha)
+    return {
+        "probs_data": np.asarray(probs_data),
+        "probs_null": np.asarray(probs_null),
+        "T_data": float(T_data),
+        "T_null": np.asarray(T_null),
+        "p_value": float(lc2st.p_value(post_samples_star, xs_star)),
+        "reject": bool(lc2st.reject_test(post_samples_star, xs_star, alpha=conf_alpha)),
+        "conf_alpha": conf_alpha,
+    }
+
+
+def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0.05):
+    """l-C2ST for one observation, plotted as the two unblinding diagnostics. Uses the coverage
+    calibration set (x_true/theta_true/theta_sample) and the observation's posterior chain (loaded from
+    chain_{obs_label}.npy if available, else resampled). Needs sbi."""
+    from sbi.analysis.plot import pp_plot_lc2st
+
+    chain_file = os.path.join(flow.model_dir, f"chain_{obs_label}.npy")
+    if os.path.exists(chain_file):
+        post_samples_star = np.load(chain_file)
+    else:
+        post_samples_star = np.asarray(flow.sample_posterior(np.asarray(obs_pred, dtype=np.float32), label=obs_label))
+
+    scores = lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=conf_alpha)
+    T_data, T_null = scores["T_data"], scores["T_null"]
+    p_value, reject = scores["p_value"], scores["reject"]
     LOGGER.info(f"l-C2ST [{obs_label}]: p-value = {p_value:.3f}, reject = {reject}")
 
     # quantitative: observed statistic vs null distribution
@@ -417,8 +509,8 @@ def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0
     # qualitative: pp-plot
     fig, ax = plt.subplots(figsize=(12, 8))
     pp_plot_lc2st(
-        probs=[probs_data],
-        probs_null=probs_null,
+        probs=[scores["probs_data"]],
+        probs_null=scores["probs_null"],
         conf_alpha=conf_alpha,
         labels=["classifier probabilities on observed data"],
         colors=["red"],
@@ -430,8 +522,17 @@ def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0
 
 
 def run_coverage(
-    flow, grid_preds, grid_cosmos, i_signal, flow_conf, params, obs_pred_dict=None, obs_label="DESy3",
-    i_sobol=None, msfm_conf=None,
+    flow,
+    grid_preds,
+    grid_cosmos,
+    i_signal,
+    flow_conf,
+    params,
+    obs_pred_dict=None,
+    obs_label="DESy3",
+    i_sobol=None,
+    msfm_conf=None,
+    i_noise=None,
 ):
     """Orchestrate the full posterior-coverage stage: GPU-batched sampling of held-out mock observations,
     then the coverage diagnostics, with plots saved under flow.model_dir/unblinding_plots.
@@ -441,7 +542,7 @@ def run_coverage(
     required only when flow_conf enables diagnostics.prior_selection='wide'.
     """
     samples = sample_coverage_posteriors(
-        flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=i_sobol, msfm_conf=msfm_conf
+        flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=i_sobol, msfm_conf=msfm_conf, i_noise=i_noise
     )
 
     plot_dir = os.path.join(flow.model_dir, "unblinding_plots")

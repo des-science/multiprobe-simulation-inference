@@ -8,7 +8,8 @@ Utils to preprocess the raw network predictions and human defined summary statis
 example entails concatenating the example and cosmology axes.
 """
 
-import os, re
+import os
+import re
 import numpy as np
 
 from scipy.stats import binned_statistic
@@ -21,6 +22,11 @@ from msi.utils.sklearn import GeneralizedSklearnModel
 from msi.utils import plotting, input_output
 
 LOGGER = logger.get_logger(__file__)
+
+
+def _concat_example_axis(array):
+    """Flatten the leading cosmology axis into the example axis: (n_cosmo, n_ex, ...) -> (n_cosmo * n_ex, ...)."""
+    return np.concatenate([array[i, ...] for i in range(array.shape[0])], axis=0)
 
 
 def get_reshaped_network_preds(
@@ -41,7 +47,7 @@ def get_reshaped_network_preds(
     LOGGER.info(f"file_dict.keys = {file_dict.keys()}")
 
     print("\n")
-    LOGGER.info(f"Shapes after concatenation and selection:")
+    LOGGER.info("Shapes after concatenation and selection:")
 
     if with_fidu:
         fidu_preds = file_dict["fiducial/vali/pred"]
@@ -63,7 +69,7 @@ def get_reshaped_network_preds(
         # only take a subset of the permutations
         if n_perms_per_cosmo is not None:
             LOGGER.warning(f"Only taking the first {n_perms_per_cosmo} permutations per cosmology")
-            LOGGER.warning(f"n_patches and n_noise are hard-coded here!")
+            LOGGER.warning("n_patches and n_noise are hard-coded here!")
             n_patches = 4
             n_noise = 3
             grid_preds = grid_preds[:, : (n_perms_per_cosmo * n_patches * n_noise), :]
@@ -100,7 +106,7 @@ def get_reshaped_human_summaries(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     with_grid=True,
     # power spectra specific
     bin_indices=None,
@@ -175,7 +181,7 @@ def get_reshaped_human_summaries(
 
         # apply scale cuts to the raw Cls
         if from_raw_cls:
-            LOGGER.warning(f"Applying scale cuts to the raw Cls, this is deprecated")
+            LOGGER.warning("Applying scale cuts to the raw Cls, this is deprecated")
 
             assert (
                 (l_mins is not None) and (l_maxs is not None) and (n_bins is not None)
@@ -212,7 +218,7 @@ def get_reshaped_human_summaries(
                     return_fiducial=with_fiducial,
                     return_grid=with_grid,
                 )
-                LOGGER.warning(f"Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
+                LOGGER.warning("Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
                 LOGGER.timer.start("scale_cuts")
                 fidu_summs, _ = power_spectra.smooth_and_bin_cls(
                     file_dict["fiducial/cls/raw"],
@@ -238,7 +244,7 @@ def get_reshaped_human_summaries(
 
         # load the pre-binned Cls
         else:
-            LOGGER.info(f"Loading the pre-binned Cls")
+            LOGGER.info("Loading the pre-binned Cls")
             file_dict = input_output.load_human_summaries(
                 base_dir,
                 summary_type,
@@ -248,11 +254,11 @@ def get_reshaped_human_summaries(
                 return_fiducial=with_fiducial,
                 return_grid=with_grid,
             )
-            fidu_summs = file_dict[f"fiducial/cls/binned"] if with_fiducial else None
-            grid_summs = file_dict[f"grid/cls/binned"]
+            fidu_summs = file_dict["fiducial/cls/binned"] if with_fiducial else None
+            grid_summs = file_dict["grid/cls/binned"]
 
             if not skip_smoothing:
-                LOGGER.info(f"Applying Gaussian scale cuts to the pre-binned Cls")
+                LOGGER.info("Applying Gaussian scale cuts to the pre-binned Cls")
 
                 # binning
                 ells = np.arange(0, 3 * msfm_conf["analysis"]["n_side"])
@@ -288,7 +294,7 @@ def get_reshaped_human_summaries(
                         LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
                 except FileNotFoundError:
                     with_noise = False
-                    LOGGER.warning(f"No white noise Cls found, continuing without")
+                    LOGGER.warning("No white noise Cls found, continuing without")
 
                 # apply the smoothing to all (cross) bins, the selection only happens later
                 n_z = n_z_lensing_active + n_z_clustering_active
@@ -329,10 +335,10 @@ def get_reshaped_human_summaries(
                 LOGGER.info("skip_smoothing=True — skipping Gaussian factors and noise; noise_cls stays None")
 
     elif summary_type == "peaks":
-        LOGGER.info(f"Loading the pre-binned peak statistics")
+        LOGGER.info("Loading the pre-binned peak statistics")
 
         LOGGER.warning(
-            f"The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments"
+            "The scale cuts are baked into the peak statistics, ignoring the l_mins, l_maxs, and n_bins arguments"
         )
 
         file_dict = input_output.load_human_summaries(
@@ -360,7 +366,7 @@ def get_reshaped_human_summaries(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            ggl_only=ggl_only,
+            lenses_before_sources=lenses_before_sources,
         )
         LOGGER.info(f"Using the bin names {bin_names}")
 
@@ -406,8 +412,13 @@ def get_reshaped_human_summaries(
             param_indices.append(i)
     grid_cosmos = grid_cosmos[..., param_indices]
 
+    # the stored label table follows the CosmoGrid convention where bary_Mc is raw (1e12 - 1e15), while the
+    # priors, fiducials and inference all use log10(Mc) -- convert via the shared helper
+    selected_params = [all_params[i] for i in param_indices]
+    grid_cosmos = parameters.raw_to_prior_units(grid_cosmos, selected_params, copy=False)
+
     print("\n")
-    LOGGER.info(f"Shapes after probe selection")
+    LOGGER.info("Shapes after probe selection")
     if with_fiducial:
         LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
@@ -461,7 +472,7 @@ def get_reshaped_human_summaries(
         LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
 
     if do_plot:
-        assert concat_example_dim, f"Plotting only works if the examples are concatenated"
+        assert concat_example_dim, "Plotting only works if the examples are concatenated"
 
         LOGGER.info(f"Plotting the selected raw {summary_type}")
         label = f"lensing={with_lensing},clustering={with_clustering},cross_z={with_cross_z},cross_probe={with_cross_probe}"
@@ -510,15 +521,15 @@ def preprocess_human_summaries(
     summaries, apply_log=False, standardize=False, pca_components=None, scaler=None, pca=None
 ):
     if apply_log:
-        LOGGER.info(f"Taking the logarithm of the absolute values.")
+        LOGGER.info("Taking the logarithm of the absolute values.")
         summaries = np.log(np.abs(summaries))
 
     if standardize and scaler is None:
-        LOGGER.info(f"Fitting the scaler to transform to zero mean and unit variance")
+        LOGGER.info("Fitting the scaler to transform to zero mean and unit variance")
         scaler = GeneralizedSklearnModel(StandardScaler())
         summaries = scaler.fit_transform(summaries)
     elif isinstance(scaler, GeneralizedSklearnModel):
-        LOGGER.info(f"Applying the scaler to transform to zero mean and unit variance")
+        LOGGER.info("Applying the scaler to transform to zero mean and unit variance")
         summaries = scaler.transform(summaries)
 
     if pca_components is not None and pca is None:
@@ -571,7 +582,7 @@ def get_binned_power_spectra(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     with_gaussian_noise=True,
     with_fiducial=True,
     bin_indices=None,
@@ -593,7 +604,7 @@ def get_binned_power_spectra(
 
     msfm_conf = files.load_config(msfm_conf)
 
-    if concat_bin_dim == False:
+    if not concat_bin_dim:
         LOGGER.warning("concat_example_dim = False should not be used when training networks, it's just for plotting")
 
     fidu_cls, grid_cls, noise_cls, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = get_reshaped_human_summaries(
@@ -612,7 +623,7 @@ def get_binned_power_spectra(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
         with_fiducial=with_fiducial,
         bin_indices=bin_indices,
         # power spectra: scales
@@ -664,8 +675,6 @@ def get_binned_power_spectra(
     grid_cls_test = grid_cls[:, eval_mask, :]
     grid_cosmos_train = grid_cosmos[:, train_mask, :]
     grid_cosmos_test = grid_cosmos[:, eval_mask, :]
-
-    _concat_example_axis = lambda array: np.concatenate([array[i, ...] for i in range(array.shape[0])], axis=0)
 
     grid_cls_train = _concat_example_axis(grid_cls_train)
     grid_cls_test = _concat_example_axis(grid_cls_test)
@@ -769,7 +778,7 @@ def get_binned_power_spectra(
                 with_clustering=with_clustering,
                 with_cross_z=with_cross_z,
                 with_cross_probe=with_cross_probe,
-                ggl_only=ggl_only,
+                lenses_before_sources=lenses_before_sources,
             )
         l_max_per_selected = _hard_cut_per_spectrum_lmax(
             n_z_lensing_active,
@@ -900,14 +909,14 @@ def get_binned_power_spectra_hard_cut(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     with_fiducial=True,
     bin_indices=None,
     # additional preprocessing
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq"
-    n_extra_bins=0,      # 0 → hard cut at right edge ≤ l_max; 1 → "hard_conservative" (one extra bin)
+    n_extra_bins=0,  # 0 → hard cut at right edge ≤ l_max; 1 → "hard_conservative" (one extra bin)
 ):
     """Like get_binned_power_spectra but applies a hard scale cut: drops all ℓ bins above
     min(l_max[i], l_max[j]) for each cross-pair (from the explicit config l_max field) rather
@@ -930,7 +939,7 @@ def get_binned_power_spectra_hard_cut(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            ggl_only=ggl_only,
+            lenses_before_sources=lenses_before_sources,
         )
     else:
         bin_indices_for_cut = bin_indices
@@ -959,7 +968,7 @@ def get_binned_power_spectra_hard_cut(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
         with_fiducial=with_fiducial,
         bin_indices=bin_indices,
         from_raw_cls=False,
@@ -985,7 +994,7 @@ def get_binned_power_spectra_hard_cut(
             hard_indices = np.where(ell_right_edges <= lmax_k)[0]
             last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
             keep_to = min(last_idx + n_extra_bins, len(ell_right_edges) - 1)
-            segments.append(cls_array[..., :keep_to + 1, k])
+            segments.append(cls_array[..., : keep_to + 1, k])
         return np.concatenate(segments, axis=-1)
 
     grid_cls = _apply_hard_cut(grid_cls)
@@ -1000,7 +1009,7 @@ def get_binned_power_spectra_hard_cut(
             hard_indices = np.where(ell_right_edges <= lmax_k)[0]
             last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
             keep_to = min(last_idx + n_extra_bins, len(ell_right_edges) - 1)
-            ell_k = ell_centers[:keep_to + 1]
+            ell_k = ell_centers[: keep_to + 1]
             w_k = ell_k if ell_weighting == "ell" else ell_k**2
             w_segments.append(w_k)
         ell_weights = np.concatenate(w_segments).astype(np.float32)
@@ -1039,16 +1048,15 @@ def get_binned_power_spectra_hard_cut(
     grid_cosmos_train = grid_cosmos[:, train_mask, :]
     grid_cosmos_test = grid_cosmos[:, eval_mask, :]
 
-    _concat = lambda arr: np.concatenate([arr[i, ...] for i in range(arr.shape[0])], axis=0)
-    grid_cls_train = _concat(grid_cls_train)
-    grid_cls_test = _concat(grid_cls_test)
-    grid_cosmos_train = _concat(grid_cosmos_train)
-    grid_cosmos_test = _concat(grid_cosmos_test)
+    grid_cls_train = _concat_example_axis(grid_cls_train)
+    grid_cls_test = _concat_example_axis(grid_cls_test)
+    grid_cosmos_train = _concat_example_axis(grid_cosmos_train)
+    grid_cosmos_test = _concat_example_axis(grid_cosmos_test)
 
     # row identity for the test set, so downstream consumers can align it against other predictions
-    grid_i_sobol_test = _concat(grid_i_sobols_sorted[:, eval_mask])
-    grid_i_signal_test = _concat(grid_i_signals[:, eval_mask])
-    grid_i_noise_test = _concat(grid_i_noises[:, eval_mask])
+    grid_i_sobol_test = _concat_example_axis(grid_i_sobols_sorted[:, eval_mask])
+    grid_i_signal_test = _concat_example_axis(grid_i_signals[:, eval_mask])
+    grid_i_noise_test = _concat_example_axis(grid_i_noises[:, eval_mask])
 
     def _log_transform(cls):
         if ell_weights is not None:
@@ -1118,7 +1126,7 @@ def get_preprocessed_cl_observation(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     # CLs scale cuts
     l_mins=None,
     l_maxs=None,
@@ -1177,21 +1185,13 @@ def get_preprocessed_cl_observation(
         )
 
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
-    # msfm.observation.forward_model_observation_map
-    with_cross_calc = True
-    if not (store_lensing and store_clustering):
-        # if one of them is missing, we don't have inter-probe cross-correlation,
-        # but power_spectra.smooth_and_bin_cls might still count intra-probe cross-correlations
-        pass
-
-    with_cross_calc = True
-    if not (store_lensing and store_clustering):
-        # if one of them is missing, we don't have inter-probe cross-correlation,
-        # but power_spectra.smooth_and_bin_cls might still count intra-probe cross-correlations
-        pass
+    # msfm.observation.forward_model_observation_map.
+    # NOTE when only one of lensing/clustering is stored there is no inter-probe cross-correlation,
+    # but power_spectra.smooth_and_bin_cls may still count intra-probe ones; the spectrum selection
+    # below is driven by with_cross_probe / bin_indices rather than by that distinction.
 
     if from_raw_cls:
-        LOGGER.warning(f"Applying scale cuts to the raw Cls, this is deprecated")
+        LOGGER.warning("Applying scale cuts to the raw Cls, this is deprecated")
         obs_cl, _ = power_spectra.smooth_and_bin_cls(
             obs_cl,
             l_mins_smoothing=l_mins,
@@ -1279,11 +1279,11 @@ def get_preprocessed_cl_observation(
 
         if obs_cl.shape[-1] == noise_cl.shape[-1]:
             obs_cl += noise_cl
-            LOGGER.info(f"Adding white noise to the observation")
+            LOGGER.info("Adding white noise to the observation")
         else:
             LOGGER.warning(f"Could not add white noise, shapes {obs_cl.shape} and {noise_cl.shape} do not match.")
     else:
-        LOGGER.warning(f"Not adding white noise to the observation!")
+        LOGGER.warning("Not adding white noise to the observation!")
 
     if bin_indices is None:
         n_z_lensing_active = (
@@ -1303,7 +1303,7 @@ def get_preprocessed_cl_observation(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            ggl_only=ggl_only,
+            lenses_before_sources=lenses_before_sources,
         )
 
     assert isinstance(bin_indices, (list, np.ndarray)), "bin_indices must be a list or numpy array"
@@ -1359,7 +1359,7 @@ def get_preprocessed_cl_observation(
                 with_clustering=with_clustering,
                 with_cross_z=with_cross_z,
                 with_cross_probe=with_cross_probe,
-                ggl_only=ggl_only,
+                lenses_before_sources=lenses_before_sources,
             )
         l_max_per_selected = _hard_cut_per_spectrum_lmax(
             n_z_lensing_active,
@@ -1398,13 +1398,13 @@ def get_preprocessed_cl_observation_hard_cut(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     bin_indices=None,
     # additional preprocessing
     apply_log=False,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq" — must match training pipeline
-    n_extra_bins=0,      # 0 → hard cut; 1 → "hard_conservative" (one extra bin past l_max right edge)
+    n_extra_bins=0,  # 0 → hard cut; 1 → "hard_conservative" (one extra bin past l_max right edge)
     # plotting
     make_plot=True,
     obs_label=None,
@@ -1477,7 +1477,7 @@ def get_preprocessed_cl_observation_hard_cut(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            ggl_only=ggl_only,
+            lenses_before_sources=lenses_before_sources,
         )
     obs_cl = obs_cl[..., bin_indices]  # (..., n_bins_per_spec, n_selected_spectra)
 
@@ -1506,9 +1506,9 @@ def get_preprocessed_cl_observation_hard_cut(
         hard_indices = np.where(ell_right_edges <= lmax_k)[0]
         last_idx = int(hard_indices[-1]) if len(hard_indices) > 0 else -1
         keep_to = min(last_idx + n_extra_bins, len(ell_right_edges) - 1)
-        segments.append(obs_cl[..., :keep_to + 1, k])
+        segments.append(obs_cl[..., : keep_to + 1, k])
         if ell_weighting is not None:
-            ell_k = ell_centers[:keep_to + 1]
+            ell_k = ell_centers[: keep_to + 1]
             ew_segments.append(ell_k if ell_weighting == "ell" else ell_k**2)
     obs_cl = np.concatenate(segments, axis=-1)
 

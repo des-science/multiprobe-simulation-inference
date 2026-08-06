@@ -6,7 +6,6 @@ import h5py
 import numpy as np
 import torch
 
-from msfm.utils.input_output import read_yaml
 from msi.flow_conductor import architecture
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 from msi.utils import input_output
@@ -44,7 +43,7 @@ def _fit_pca(x, n_components):
     return mean, components
 
 
-def _load_grid_indices(pred_file):
+def load_grid_indices(pred_file):
     """Load and flatten the (i_sobol, i_signal, i_noise) triplet identifying each grid/test row."""
     with h5py.File(pred_file, "r") as f:
         i_sobol = f["grid/i_sobol/test"][:]
@@ -97,7 +96,7 @@ def load_grid_summaries(pred_file, pred_file_2=None):
     """
     print(f"Loading predictions from: {pred_file}")
     grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict = input_output.load_network_preds_simple(pred_file)
-    i_sobol, i_signal, _ = _load_grid_indices(pred_file)
+    i_sobol, i_signal, _ = load_grid_indices(pred_file)
 
     if pred_file_2:
         print(f"Loading second predictions from: {pred_file_2}")
@@ -106,8 +105,8 @@ def load_grid_summaries(pred_file, pred_file_2=None):
         # the two prediction files generally store the same held-out grid examples in different
         # orders, so align them onto a common (i_sobol, i_signal, i_noise) ordering before comparing
         print("Aligning the two grids by (i_sobol, i_signal, i_noise)...")
-        i_sobol, i_signal, i_noise = _load_grid_indices(pred_file)
-        i_sobol_2, i_signal_2, i_noise_2 = _load_grid_indices(pred_file_2)
+        i_sobol, i_signal, i_noise = load_grid_indices(pred_file)
+        i_sobol_2, i_signal_2, i_noise_2 = load_grid_indices(pred_file_2)
 
         order = np.lexsort((i_noise, i_signal, i_sobol))
         order_2 = np.lexsort((i_noise_2, i_signal_2, i_sobol_2))
@@ -162,7 +161,7 @@ def load_grid_summaries_multi(pred_files, pca_compress=False):
         all_grid_cosmos.append(gc)
         all_obs_pred_dicts.append(opd)
         all_obs_cosmo_dicts.append(ocd)
-        all_indices.append(_load_grid_indices(pf))
+        all_indices.append(load_grid_indices(pf))
 
     sort_orders = [np.lexsort((idx[2], idx[1], idx[0])) for idx in all_indices]
 
@@ -192,9 +191,7 @@ def load_grid_summaries_multi(pred_files, pca_compress=False):
     i_sobol = ref_sobol
 
     common_keys = set.intersection(*[set(opd.keys()) for opd in all_obs_pred_dicts])
-    obs_pred_dict = {
-        key: np.concatenate([opd[key] for opd in all_obs_pred_dicts], axis=-1) for key in common_keys
-    }
+    obs_pred_dict = {key: np.concatenate([opd[key] for opd in all_obs_pred_dicts], axis=-1) for key in common_keys}
     obs_cosmo_dict = all_obs_cosmo_dicts[0]
 
     if pca_compress:
@@ -311,8 +308,18 @@ def _extract_train_kwargs(flow_conf: dict) -> dict:
 
 
 def build_flow(
-    params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, flow_conf: dict,
-    prefix: str = "", i_signal=None, seed=None, n_flows=1, flow_confs=None,
+    params,
+    msfm_conf,
+    pred_dir,
+    n_steps,
+    grid_preds,
+    grid_cosmos,
+    flow_conf: dict,
+    prefix: str = "",
+    i_signal=None,
+    seed=None,
+    n_flows=1,
+    flow_confs=None,
 ):
     """Build, train, plot diagnostics, and return a LikelihoodFlow or LikelihoodFlowEnsemble.
 

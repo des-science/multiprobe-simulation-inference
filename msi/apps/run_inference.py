@@ -8,6 +8,7 @@ from msfm.utils import logger
 from msfm.utils.input_output import read_yaml
 from deep_lss.utils import configuration
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
+from msi.utils import extended_params
 from msi.utils import flow as flow_utils
 from msi.utils import observations
 from msi.utils import coverage
@@ -148,6 +149,19 @@ def setup():
         "flow configs on the same prediction file.",
     )
     parser.add_argument(
+        "--extend_params",
+        nargs="*",
+        default=None,
+        help="Condition the flow on an EXTENDED parameter vector: append these CosmoGrid grid parameters "
+        "(recorded per grid cosmology in the metainfo, looked up via i_sobol -- no summary recomputation) "
+        "to the training params, e.g. 'ns Ob H0 bary_Mc bary_nu' (also the default when the flag is given "
+        "without values). The otherwise implicit wide flat marginalization over these parameters then "
+        "becomes explicit and controllable at MCMC time: DES observations automatically get additional "
+        "reference-prior chains (near-delta ns/Obh2/H0 Gaussians + fixed baryons, the Gower-Street-family "
+        "analysis choices of the DES Y3 SBI papers; see msi.utils.observations). Unless --flow_label is "
+        "given, it defaults to 'ext' so the extended flow does not clobber the baseline checkpoint.",
+    )
+    parser.add_argument(
         "--mcmc_backend",
         choices=("emcee", "torch_batched"),
         default="torch_batched",
@@ -190,6 +204,15 @@ def main():
 
     # an ensemble is used for >1 seed-clone members or for any heterogeneous config list
     is_ensemble = args.n_flows > 1 or is_hetero
+
+    # extended conditioning vector: [] (flag without values) means the default extension set. Default the
+    # flow label so the extended flow trains/saves alongside -- not over -- the baseline checkpoint.
+    if args.extend_params is not None and len(args.extend_params) == 0:
+        args.extend_params = list(extended_params.DEFAULT_EXTEND_PARAMS)
+    if args.extend_params and not args.flow_label:
+        args.flow_label = "ext"
+        print("--extend_params: defaulting --flow_label to 'ext'")
+
     prefix = f"{args.flow_label}_" if args.flow_label else ""
 
     # Load the held-out grid/observation summaries and resolve the checkpoint label. The two paths
@@ -209,6 +232,9 @@ def main():
         grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal, i_sobol = (
             flow_utils.load_grid_summaries_multi(pred_files, pca_compress=args.pca_compress)
         )
+        # multi-checkpoint / PCA grids are reordered+concatenated, so a single row-aligned i_noise is not
+        # available; cross-probe PPC calibration is unsupported for these (real_idx simply not written).
+        i_noise = None
 
         steps_str = "_".join(str(s) for s in steps_list)
         n_steps_label = f"multi_{steps_str}" + ("_pca" if args.pca_compress else "")
@@ -223,6 +249,10 @@ def main():
         grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal, i_sobol = flow_utils.load_grid_summaries(
             pred_file, pred_file_2
         )
+        # Per-row i_noise (single-file path leaves grid rows in native order, so the pred-file index is
+        # row-aligned). Threaded into the coverage stage so mcmc_samples.h5 carries the full realization
+        # triplet for cross-probe PPC calibration. Unavailable when combining two pred files.
+        i_noise = None if pred_file_2 else flow_utils.load_grid_indices(pred_file)[2]
 
         n_steps_label = n_steps
         suffix = f"_{n_steps}" if n_steps is not None else ""
@@ -230,10 +260,25 @@ def main():
     dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
     params = dlss_conf["dset"]["training"]["params"]
 
+    if args.extend_params:
+        # Append the recorded grid values of the extension parameters to every grid row (via i_sobol) and
+        # to the observation truth points; the flow below then conditions on the extended vector.
+        extend = [p for p in args.extend_params if p not in params]
+        table = extended_params.load_grid_param_table(msfm_conf)
+        grid_cosmos = extended_params.extend_grid_cosmos(grid_cosmos, i_sobol, extend, msfm_conf, table=table)
+        obs_cosmo_dict = extended_params.extend_obs_cosmo_dict(obs_cosmo_dict, params, extend, msfm_conf, table=table)
+        params = params + extend
+        print(f"Extended conditioning vector: {params}")
+
     if args.load_flow:
         print("Loading flow from checkpoint...")
         flow_cls = LikelihoodFlowEnsemble if is_ensemble else LikelihoodFlow
         flow = flow_cls.from_checkpoint(out_dir=pred_dir, prefix=prefix, suffix=suffix)
+        if list(flow.params) != list(params):
+            raise ValueError(
+                f"Loaded flow was trained on params {flow.params} but the current run expects {params}; "
+                "make sure --extend_params (and its values) match the trained checkpoint."
+            )
     else:
         flow = flow_utils.build_flow(
             params,
@@ -251,9 +296,7 @@ def main():
 
     LOGGER.info(f"[timing] flow {'loaded' if args.load_flow else 'trained'}: {LOGGER.timer.elapsed('flow')}")
 
-    _save_flow_config(
-        flow, flow_conf, args.flow_config, flow_confs=flow_confs, flow_config_paths=args.flow_configs
-    )
+    _save_flow_config(flow, flow_conf, args.flow_config, flow_confs=flow_confs, flow_config_paths=args.flow_configs)
 
     mcmc_conf = flow_conf.get("mcmc", {})
     # ensemble member weighting: tempered softmax of negative validation losses. Set before any
@@ -318,8 +361,16 @@ def main():
             try:
                 LOGGER.timer.start("coverage")
                 coverage.run_coverage(
-                    flow, grid_preds, grid_cosmos, i_signal, flow_conf, params, obs_pred_dict,
-                    i_sobol=i_sobol, msfm_conf=msfm_conf,
+                    flow,
+                    grid_preds,
+                    grid_cosmos,
+                    i_signal,
+                    flow_conf,
+                    params,
+                    obs_pred_dict,
+                    i_sobol=i_sobol,
+                    msfm_conf=msfm_conf,
+                    i_noise=i_noise,
                 )
                 LOGGER.info(f"[timing] coverage sampling + tests: {LOGGER.timer.elapsed('coverage')}")
             except Exception as e:
