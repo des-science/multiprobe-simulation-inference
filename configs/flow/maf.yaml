@@ -42,3 +42,4 @@ diagnostics:
     tarp: true
     sbc: true
     lc2st: true
+    mock_contamination: true

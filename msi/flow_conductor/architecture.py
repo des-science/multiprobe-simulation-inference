@@ -19,7 +19,7 @@ from enflows.transforms import (
 )
 from enflows.transforms.permutations import RandomPermutation
 from enflows.transforms.lu import LULinear
-from enflows.nn.nets import Sin, CSin, ResidualNet
+from enflows.nn.nets import CSin, ResidualNet
 
 from msi.flow_conductor.spline import RQSplineCouplingTransform, RQSplineAutoregressiveTransform
 from msi.flow_conductor.maf import AffineAutoregressiveTransform
@@ -51,6 +51,33 @@ def get_normal_dist(feature_dim, type="standard"):
         raise ValueError(f"Unknown distribution type {type}")
 
     return dist
+
+
+class StandardizedContextEmbedding(torch.nn.Module):
+    """Fixed affine context standardization prepended to an embedding net.
+
+    The flow's context (theta) enters the embedding net in physical units, whose per-parameter scales
+    can differ by orders of magnitude (e.g. H0 ~ 70 vs n_Aia ~ 0.1 for the extended targets) -- the
+    same conditioning problem as an unstandardized theta in the deep_lss VMIM head, one stage
+    downstream. Call set_stats() once on the training thetas before fitting; the statistics are
+    non-trainable buffers, so they persist through state_dict checkpoints and every context entry
+    point (log_prob, sampling, MCMC) shares the identical transform. Until set_stats() is called the
+    transform is the identity, reproducing the previous unstandardized behavior.
+    """
+
+    def __init__(self, embedding_net, context_dim):
+        super().__init__()
+        self.embedding_net = embedding_net
+        self.register_buffer("context_shift", torch.zeros(context_dim))
+        self.register_buffer("context_scale", torch.ones(context_dim))
+
+    def set_stats(self, theta, eps=1e-8):
+        theta = torch.as_tensor(theta, dtype=self.context_shift.dtype, device=self.context_shift.device)
+        self.context_shift.copy_(theta.mean(dim=0))
+        self.context_scale.copy_(theta.std(dim=0).clamp_min(eps))
+
+    def forward(self, context):
+        return self.embedding_net((context - self.context_shift) / self.context_scale)
 
 
 def get_context_embedding_net(

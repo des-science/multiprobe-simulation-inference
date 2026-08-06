@@ -65,6 +65,10 @@ class LikelihoodBase(ABC):
         n_steps=1_000,
         n_burnin_steps=1_000,
         lambdaCDM=False,
+        w0_prior=None,
+        nla=False,
+        fixed_params=None,
+        gaussian_priors=None,
         device=None,
         seed=12,
         use_validation_weights=True,
@@ -87,6 +91,26 @@ class LikelihoodBase(ABC):
             n_burnin_steps (int, optional): Number of burn-in steps. Defaults to 1000.
             lambdaCDM (bool, optional): If True, fix w0 = -1 and sample the reduced (w0-dropped) parameter
                 space, mirroring the emcee sample_posterior's lambdaCDM mode. Defaults to False.
+            w0_prior (tuple, optional): ``(lower, upper)`` override of the flat w0 prior box. Either entry
+                may be None to keep the config bound, e.g. ``(-1.0, None)`` restricts to w0 > -1 while
+                leaving the upper bound at the config value. w0 stays a free, sampled parameter (the chain
+                is full-dimensional); only the top-hat prior is tightened. Ignored when lambdaCDM=True (w0
+                is dropped there). Defaults to None (full config prior).
+            nla (bool, optional): If True, reduce the intrinsic-alignment model from delta-NLA/TATT to
+                standard NLA by fixing bta = 0: bta is dropped from the sampled space and reinserted as 0
+                only to evaluate the model + full-parameter prior, exactly the drop-and-fix idiom lambdaCDM
+                uses for w0. Composes with w0_prior (w0 stays sampled+tightened while bta is fixed).
+                No-op when bta is not among self.params (e.g. clustering). Defaults to False.
+            fixed_params (dict, optional): ``{name: value}`` of further parameters to fix by the same
+                drop-and-fix idiom (dropped from the sampled space, reinserted only for the model +
+                full-parameter prior eval). Composes with lambdaCDM / nla; names not in self.params are
+                ignored. E.g. ``{"bary_Mc": 13.82, "bary_nu": 0.0}`` fixes baryonification at the
+                fiducial for a flow conditioned on the extended parameter vector. Defaults to None.
+            gaussian_priors (dict, optional): ``{name: (mu, sigma)}`` Gaussian priors ADDED to the flat
+                analysis prior for parameters that stay sampled, e.g. the Gower-Street-family
+                ``{"ns": (0.9649, 0.0063), "H0": (70.22, 2.45)}``. The special name ``"Obh2"`` puts the
+                Gaussian on the derived quantity Ob * (H0/100)^2 (requires Ob and H0 in self.params).
+                Defaults to None.
             device (str, optional): Device to run on. Defaults to None (self.device).
             seed (int, optional): RNG seed for reproducibility. Defaults to 12 (matching mcmc.py).
             use_validation_weights (bool, optional): For an ensemble, weight members by validation
@@ -104,7 +128,7 @@ class LikelihoodBase(ABC):
         Returns:
             tuple(np.ndarray, np.ndarray): chain of shape (n_obs, n_steps * n_walkers, n_params) and its
                 log-posterior of shape (n_obs, n_steps * n_walkers), as numpy arrays on the host. For
-                lambdaCDM the chain is in the reduced (w0-dropped) space.
+                lambdaCDM / nla the chain is in the reduced space (w0 / bta dropped, respectively).
         """
         import torch
         from msi.utils import torch_ensemble
@@ -116,14 +140,23 @@ class LikelihoodBase(ABC):
         x_obs_batch = torch.atleast_2d(x_obs_batch)
         n_obs = x_obs_batch.shape[0]
 
-        # the sampler walks the reduced (w0-dropped) space under lambdaCDM; w0 = -1 is reinserted only
-        # to evaluate the model and the full-parameter prior, exactly as the emcee path does
-        if lambdaCDM:
-            i_w = self.params.index("w0")
-            params_sample = [p for p in self.params if p != "w0"]
-        else:
-            i_w = None
-            params_sample = self.params
+        # Parameters fixed to a constant are dropped from the sampled space and reinserted only to
+        # evaluate the model + full-parameter prior (the drop-and-fix idiom): lambdaCDM fixes w0 = -1,
+        # nla fixes bta = 0 (reducing delta-NLA/TATT to standard NLA). They compose; the reinsertion
+        # loop below restores the full ordering by inserting at ascending original indices.
+        dropped = []
+        if lambdaCDM and "w0" in self.params:
+            dropped.append((self.params.index("w0"), -1.0))
+        if nla and "bta" in self.params:
+            dropped.append((self.params.index("bta"), 0.0))
+        for name, value in (fixed_params or {}).items():
+            if name in self.params and self.params.index(name) not in {i for i, _ in dropped}:
+                dropped.append((self.params.index(name), float(value)))
+            elif name not in self.params:
+                LOGGER.warning(f"fixed_params: {name!r} not in self.params; ignored")
+        dropped.sort(key=lambda t: t[0])
+        drop_idx = {i for i, _ in dropped}
+        params_sample = [p for k, p in enumerate(self.params) if k not in drop_idx]
         n_params = len(params_sample)
 
         self._set_eval_device(device)
@@ -131,6 +164,19 @@ class LikelihoodBase(ABC):
 
         # the prior is always evaluated in the full parameter space (after reinserting w0 if lambdaCDM)
         prior_data = prior.get_torch_prior_data(self.params, conf=self.conf, device=device, floatx=self.floatx)
+
+        # optionally tighten the flat w0 box (w0 stays sampled; only the top-hat bound moves). No-op under
+        # lambdaCDM, where w0 is dropped from the sampled space and fixed to -1.
+        if w0_prior is not None and not lambdaCDM and "w0" in self.params:
+            i_w0 = self.params.index("w0")
+            lo, hi = w0_prior
+            if lo is not None:
+                prior_data["lower"][i_w0] = torch.as_tensor(lo, dtype=self.floatx, device=device)
+            if hi is not None:
+                prior_data["upper"][i_w0] = torch.as_tensor(hi, dtype=self.floatx, device=device)
+
+        # Gaussian prior terms, evaluated in the full parameter space (like the hard prior)
+        gaussian_data = self._resolve_gaussian_priors(gaussian_priors)
 
         # initial walker positions: same recipe as mcmc.run_emcee, replicated for every observation.
         # Factored into a closure so the eager-fallback retry below can reproduce the exact same seeded
@@ -148,12 +194,18 @@ class LikelihoodBase(ABC):
 
         def make_log_prob_fn(llf):
             def log_prob_fn(theta):
-                if lambdaCDM:
-                    # reinsert the fixed w0 = -1 column at its original index before the model/prior eval
-                    w0_col = torch.full((*theta.shape[:-1], 1), -1.0, dtype=theta.dtype, device=theta.device)
-                    theta = torch.cat([theta[..., :i_w], w0_col, theta[..., i_w:]], dim=-1)
+                # reinsert each fixed column at its original index before the model/prior eval (ascending
+                # order keeps subsequent original indices aligned as the tensor grows)
+                for i, val in dropped:
+                    col = torch.full((*theta.shape[:-1], 1), val, dtype=theta.dtype, device=theta.device)
+                    theta = torch.cat([theta[..., :i], col, theta[..., i:]], dim=-1)
                 return self._batched_log_posterior_torch(
-                    theta, x_obs_batch, prior_data, weights=weights, loglike_fn=llf
+                    theta,
+                    x_obs_batch,
+                    prior_data,
+                    weights=weights,
+                    loglike_fn=llf,
+                    gaussian_data=gaussian_data,
                 )
 
             return log_prob_fn
@@ -238,14 +290,17 @@ class LikelihoodBase(ABC):
 
         return chain, log_prob
 
-    def _batched_log_posterior_torch(self, theta, x_obs, prior_data, weights=None, loglike_fn=None):
+    def _batched_log_posterior_torch(
+        self, theta, x_obs, prior_data, weights=None, loglike_fn=None, gaussian_data=None
+    ):
         """On-device batched log-posterior: the subclass's batched log-likelihood plus the hard top-hat
         prior (applied once here). theta is (n_obs, n_walkers, n_params); returns (n_obs, n_walkers) with
         -inf outside the flat analysis prior.
 
         ``loglike_fn`` lets the caller inject an alternative log-likelihood callable (e.g. a
         ``torch.compile``-wrapped version of ``_batched_log_likelihood_torch``); defaults to the eager
-        method."""
+        method. ``gaussian_data`` optionally adds Gaussian log-prior terms inside the top-hat (see
+        sample_posterior_batched's gaussian_priors)."""
         import torch
 
         if loglike_fn is None:
@@ -253,9 +308,49 @@ class LikelihoodBase(ABC):
 
         with torch.no_grad():
             log_like = loglike_fn(theta, x_obs, weights=weights)
+            if gaussian_data is not None:
+                for kind, idx, mu, sigma in gaussian_data:
+                    if kind == "Obh2":
+                        i_Ob, i_H0 = idx
+                        value = theta[..., i_Ob] * (theta[..., i_H0] / 100.0) ** 2
+                    else:
+                        value = theta[..., idx]
+                    log_like = log_like - 0.5 * ((value - mu) / sigma) ** 2
             in_prior = prior.in_grid_prior_torch(theta, prior_data)
             log_post = torch.where(in_prior, log_like, torch.full_like(log_like, float("-inf")))
         return log_post
+
+    def _resolve_gaussian_priors(self, gaussian_priors):
+        """Resolve a ``{name: (mu, sigma)}`` Gaussian-prior spec into (kind, index, mu, sigma) tuples in
+        self.params ordering, shared by the torch-batched and emcee samplers. The special name "Obh2"
+        yields a derived-quantity term on Ob * (H0/100)^2; unknown names are warned about and skipped.
+        Returns None when nothing resolves, so callers can branch cheaply."""
+        gaussian_data = []
+        for name, (mu, sigma) in (gaussian_priors or {}).items():
+            if name == "Obh2":
+                if "Ob" not in self.params or "H0" not in self.params:
+                    LOGGER.warning("gaussian_priors: 'Obh2' needs Ob and H0 in self.params; ignored")
+                    continue
+                gaussian_data.append(("Obh2", (self.params.index("Ob"), self.params.index("H0")), mu, sigma))
+            elif name in self.params:
+                gaussian_data.append(("param", self.params.index(name), mu, sigma))
+            else:
+                LOGGER.warning(f"gaussian_priors: {name!r} not in self.params; ignored")
+        return gaussian_data or None
+
+    @staticmethod
+    def _gaussian_log_prior_np(theta, gaussian_data):
+        """Numpy counterpart of the Gaussian terms in _batched_log_posterior_torch, for the emcee paths.
+        theta is (n_walkers, n_params) in the FULL parameter space; returns (n_walkers,)."""
+        log_prior = np.zeros(theta.shape[0])
+        for kind, idx, mu, sigma in gaussian_data:
+            if kind == "Obh2":
+                i_Ob, i_H0 = idx
+                value = theta[:, i_Ob] * (theta[:, i_H0] / 100.0) ** 2
+            else:
+                value = theta[:, idx]
+            log_prior -= 0.5 * ((value - mu) / sigma) ** 2
+        return log_prior
 
     def _set_eval_device(self, device):
         """Move the model(s) to ``device`` and switch to eval mode. Default works for an nn.Module-based
@@ -386,7 +481,7 @@ class LikelihoodBase(ABC):
             grid_cosmos = grid_cosmos[random_indices]
 
         LOGGER.timer.start("sampling")
-        LOGGER.info(f"Drawing samples from the likelihood")
+        LOGGER.info("Drawing samples from the likelihood")
         grid_preds_sample = self.sample_likelihood(
             grid_cosmos, n_samples=n_samples, batch_size=batch_size, return_numpy=True
         )

@@ -2,6 +2,42 @@ import os
 
 import numpy as np
 
+# Restricted-w0 DES variant: w0 stays a free, sampled parameter but its flat prior is tightened to the
+# non-phantom half, w0 > -1 (lower bound raised to -1, upper kept at the config value). Run automatically
+# for every DES observation as a third chain alongside the wCDM and lambdaCDM (w0 = -1) chains.
+W0_GT_M1_PRIOR = (-1.0, None)
+W0_SUFFIX = "_w0gt-1"
+
+# Combined restricted DES variant: w0 > -1 AND NLA (bta = 0). Run automatically for every DES
+# observation of a probe that has bta among its inferred params (lensing / 2x2pt / combined). bta is
+# dropped from the sampled space and fixed to 0 (delta-NLA/TATT -> standard NLA); the chain is thus in
+# the reduced (bta-dropped) space. clustering has no bta, so this variant is skipped there.
+NLA_SUFFIX = "_nla"
+
+# Reference-prior DES variant, only possible for a flow conditioned on the EXTENDED parameter vector
+# (run_inference --extend_params): replaces the implicit wide flat CosmoGrid marginalization of
+# ns / Obh2 / H0 with the near-delta Gaussians shared by the DES Y3 SBI reference papers (the Gower
+# Street analysis family: Jeffrey+24 2403.02314, Gatti+24 2405.10881, Williamson+26), and fixes
+# baryonification at the fiducial (the references do not marginalize baryons). Run automatically for
+# every DES observation when ns/Ob/H0 are among the flow's params, as w0 > -1 + NLA and lambdaCDM +
+# NLA chains -- the closest apples-to-apples analogues to the references' wCDM and LCDM results.
+REF_GAUSSIAN_PRIORS = {
+    "ns": (0.9649, 0.0063),
+    "Obh2": (0.02237, 0.00015),  # derived Ob * (H0/100)^2
+    "H0": (70.22, 2.45),
+}
+REF_PRIOR_SUFFIX = "_refpriors"
+
+
+def _ref_prior_kwargs(flow):
+    """Sampler kwargs for the reference-prior variant, or None when the flow is not conditioned on the
+    extended parameter vector. Baryon fiducials are read from the run's own msfm config."""
+    if not all(p in flow.params for p in ("ns", "Ob", "H0")):
+        return None
+    fiducial = flow.conf["analysis"]["fiducial"]
+    fixed = {p: fiducial[p] for p in ("bary_Mc", "bary_nu") if p in flow.params}
+    return {"gaussian_priors": REF_GAUSSIAN_PRIORS, "fixed_params": fixed}
+
 
 def add_obs_args(parser, mock_labels_default=None):
     """Add observation inclusion flags to an argument parser (all default off)."""
@@ -133,19 +169,25 @@ def _can_batch(flow, obs_dict, backend):
     return True
 
 
-def _save_member_chains(flow, keys, member_chains, member_log_probs, lambda_suffix=""):
+def _save_member_chains(flow, keys, member_chains, member_log_probs, variant_suffix=""):
     """Persist each ensemble member's own batched chain alongside the pooled one (store_individual_chains).
     member_chains[i] is that member's (n_obs, n_samples, n_params) array, keyed by observation order."""
     if flow.model_dir is None:
         return
     for m, (chains_m, lps_m) in enumerate(zip(member_chains, member_log_probs)):
         for i, key in enumerate(keys):
-            np.save(os.path.join(flow.model_dir, f"chain_{key}{lambda_suffix}_flow_{m}.npy"), chains_m[i])
-            np.save(os.path.join(flow.model_dir, f"log_probs_{key}{lambda_suffix}_flow_{m}.npy"), lps_m[i])
+            np.save(os.path.join(flow.model_dir, f"chain_{key}{variant_suffix}_flow_{m}.npy"), chains_m[i])
+            np.save(os.path.join(flow.model_dir, f"log_probs_{key}{variant_suffix}_flow_{m}.npy"), lps_m[i])
 
 
 def _run_mcmc_batched(
-    flow, obs_dict, n_walkers, n_steps, n_burnin_steps, use_validation_weights=True, method="ensemble",
+    flow,
+    obs_dict,
+    n_walkers,
+    n_steps,
+    n_burnin_steps,
+    use_validation_weights=True,
+    method="ensemble",
     store_individual_chains=False,
 ):
     """Sample every observation's wCDM posterior in a single GPU-batched run, then save each chain in
@@ -203,13 +245,102 @@ def _run_mcmc_batched(
         )
         if want_members:
             chains_l, log_probs_l, member_chains_l, member_log_probs_l = result_l
-            _save_member_chains(flow, des_keys, member_chains_l, member_log_probs_l, lambda_suffix="_lambdaCDM")
+            _save_member_chains(flow, des_keys, member_chains_l, member_log_probs_l, variant_suffix="_lambdaCDM")
         else:
             chains_l, log_probs_l = result_l
         for i, key in enumerate(des_keys):
             if flow.model_dir is not None:
                 np.save(os.path.join(flow.model_dir, f"chain_{key}_lambdaCDM.npy"), chains_l[i])
                 np.save(os.path.join(flow.model_dir, f"log_probs_{key}_lambdaCDM.npy"), log_probs_l[i])
+
+        # DES observations additionally get a restricted-w0 (w0 > -1) posterior, with w0 still a free
+        # sampled parameter (full-dimensional chain), batched together like the lambdaCDM block above
+        print(
+            f"\nGPU-batched restricted-w0 (w0 > -1) sampling of {len(des_keys)} DES observation(s) (method={method})"
+        )
+        result_w = flow.sample_posterior_batched(
+            x_des,
+            n_walkers=n_walkers,
+            n_steps=n_steps,
+            n_burnin_steps=n_burnin_steps,
+            w0_prior=W0_GT_M1_PRIOR,
+            use_validation_weights=use_validation_weights,
+            method=method,
+            **({"return_members": True} if want_members else {}),
+        )
+        if want_members:
+            chains_w, log_probs_w, member_chains_w, member_log_probs_w = result_w
+            _save_member_chains(flow, des_keys, member_chains_w, member_log_probs_w, variant_suffix=W0_SUFFIX)
+        else:
+            chains_w, log_probs_w = result_w
+        for i, key in enumerate(des_keys):
+            if flow.model_dir is not None:
+                np.save(os.path.join(flow.model_dir, f"chain_{key}{W0_SUFFIX}.npy"), chains_w[i])
+                np.save(os.path.join(flow.model_dir, f"log_probs_{key}{W0_SUFFIX}.npy"), log_probs_w[i])
+
+        # DES observations of an IA probe additionally get the combined w0 > -1 AND NLA (bta = 0)
+        # posterior: the closest analogue to a standard DES-Y3-like model. bta is dropped from the
+        # sampled space, so this chain is in the reduced (bta-dropped) parameter ordering.
+        if "bta" in getattr(flow, "params", []):
+            suffix_wn = f"{W0_SUFFIX}{NLA_SUFFIX}"
+            print(
+                f"\nGPU-batched w0 > -1 + NLA (bta = 0) sampling of {len(des_keys)} "
+                f"DES observation(s) (method={method})"
+            )
+            result_wn = flow.sample_posterior_batched(
+                x_des,
+                n_walkers=n_walkers,
+                n_steps=n_steps,
+                n_burnin_steps=n_burnin_steps,
+                w0_prior=W0_GT_M1_PRIOR,
+                nla=True,
+                use_validation_weights=use_validation_weights,
+                method=method,
+                **({"return_members": True} if want_members else {}),
+            )
+            if want_members:
+                chains_wn, log_probs_wn, member_chains_wn, member_log_probs_wn = result_wn
+                _save_member_chains(flow, des_keys, member_chains_wn, member_log_probs_wn, variant_suffix=suffix_wn)
+            else:
+                chains_wn, log_probs_wn = result_wn
+            for i, key in enumerate(des_keys):
+                if flow.model_dir is not None:
+                    np.save(os.path.join(flow.model_dir, f"chain_{key}{suffix_wn}.npy"), chains_wn[i])
+                    np.save(os.path.join(flow.model_dir, f"log_probs_{key}{suffix_wn}.npy"), log_probs_wn[i])
+
+        # Extended-vector flows additionally get the reference-prior (Gower-Street-family) chains: the
+        # w0 > -1 + NLA and lambdaCDM + NLA models with near-delta ns/Obh2/H0 Gaussians and baryons fixed
+        # at the fiducial, matching the analysis choices of the DES Y3 SBI reference papers.
+        ref_kwargs = _ref_prior_kwargs(flow)
+        if ref_kwargs is not None:
+            for model_kwargs, suffix_ref in (
+                ({"w0_prior": W0_GT_M1_PRIOR, "nla": True}, f"{W0_SUFFIX}{NLA_SUFFIX}{REF_PRIOR_SUFFIX}"),
+                ({"lambdaCDM": True, "nla": True}, f"_lambdaCDM{NLA_SUFFIX}{REF_PRIOR_SUFFIX}"),
+            ):
+                print(
+                    f"\nGPU-batched reference-prior sampling ({suffix_ref}) of {len(des_keys)} "
+                    f"DES observation(s) (method={method})"
+                )
+                result_r = flow.sample_posterior_batched(
+                    x_des,
+                    n_walkers=n_walkers,
+                    n_steps=n_steps,
+                    n_burnin_steps=n_burnin_steps,
+                    use_validation_weights=use_validation_weights,
+                    method=method,
+                    **model_kwargs,
+                    **ref_kwargs,
+                    **({"return_members": True} if want_members else {}),
+                )
+                if want_members:
+                    chains_r, log_probs_r, member_chains_r, member_log_probs_r = result_r
+                    _save_member_chains(flow, des_keys, member_chains_r, member_log_probs_r, variant_suffix=suffix_ref)
+                else:
+                    chains_r, log_probs_r = result_r
+                for i, key in enumerate(des_keys):
+                    if flow.model_dir is not None:
+                        np.save(os.path.join(flow.model_dir, f"chain_{key}{suffix_ref}.npy"), chains_r[i])
+                        np.save(os.path.join(flow.model_dir, f"log_probs_{key}{suffix_ref}.npy"), log_probs_r[i])
 
 
 def run_mcmc(
@@ -225,8 +356,13 @@ def run_mcmc(
 ):
     if _can_batch(flow, obs_dict, backend):
         _run_mcmc_batched(
-            flow, obs_dict, n_walkers, n_steps, n_burnin_steps,
-            use_validation_weights=use_validation_weights, method=method,
+            flow,
+            obs_dict,
+            n_walkers,
+            n_steps,
+            n_burnin_steps,
+            use_validation_weights=use_validation_weights,
+            method=method,
             store_individual_chains=store_individual_chains,
         )
         return
@@ -268,3 +404,46 @@ def run_mcmc(
                 use_validation_weights=use_validation_weights,
                 **extra,
             )
+            print(f"\nStarting restricted-w0 (w0 > -1) run for {key}")
+            flow.sample_posterior(
+                obs["pred"],
+                label=key,
+                n_walkers=n_walkers,
+                n_steps=n_steps,
+                n_burnin_steps=n_burnin_steps,
+                w0_prior=W0_GT_M1_PRIOR,
+                method=method,
+                use_validation_weights=use_validation_weights,
+                **extra,
+            )
+            if "bta" in getattr(flow, "params", []):
+                print(f"\nStarting w0 > -1 + NLA (bta = 0) run for {key}")
+                flow.sample_posterior(
+                    obs["pred"],
+                    label=key,
+                    n_walkers=n_walkers,
+                    n_steps=n_steps,
+                    n_burnin_steps=n_burnin_steps,
+                    w0_prior=W0_GT_M1_PRIOR,
+                    nla=True,
+                    method=method,
+                    use_validation_weights=use_validation_weights,
+                    **extra,
+                )
+            ref_kwargs = _ref_prior_kwargs(flow)
+            if ref_kwargs is not None:
+                for model_kwargs in ({"w0_prior": W0_GT_M1_PRIOR, "nla": True}, {"lambdaCDM": True, "nla": True}):
+                    print(f"\nStarting reference-prior run ({model_kwargs}) for {key}")
+                    flow.sample_posterior(
+                        obs["pred"],
+                        label=key,
+                        n_walkers=n_walkers,
+                        n_steps=n_steps,
+                        n_burnin_steps=n_burnin_steps,
+                        variant_label=REF_PRIOR_SUFFIX,
+                        method=method,
+                        use_validation_weights=use_validation_weights,
+                        **model_kwargs,
+                        **ref_kwargs,
+                        **extra,
+                    )

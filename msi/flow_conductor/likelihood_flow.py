@@ -177,19 +177,33 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         # default architecture
         if embedding_net is None:
             embedding_net = architecture.get_context_embedding_net(context_dim)
-            LOGGER.info(f"Using the default context embedding network:")
+            LOGGER.info("Using the default context embedding network:")
             LOGGER.info(type(embedding_net))
         if base_dist is None:
             base_dist = architecture.get_normal_dist(feature_dim)
-            LOGGER.info(f"Using the default base distribution:")
+            LOGGER.info("Using the default base distribution:")
             LOGGER.info(type(base_dist))
         if transform is None:
             transform = architecture.get_sigmoids_transform(feature_dim)
-            LOGGER.info(f"Using the default transform:")
+            LOGGER.info("Using the default transform:")
             LOGGER.info(type(transform))
 
+        # standardize the context inside the flow (fixed affine, stats set from the training thetas in
+        # fit(); identity until then). The features get ActNorm inside the transforms, but nothing else
+        # standardizes the context -- wrapping the embedding net makes every entry point (log_prob,
+        # sampling, MCMC) share the transform, checkpointed via the wrapper's buffers.
+        if not isinstance(embedding_net, architecture.StandardizedContextEmbedding):
+            # len(params) is only the context dimension when the default embedding net is built from it.
+            # When a pre-built embedding net is supplied directly (e.g. PPC passes params=[] and builds
+            # the net from the data), take the context dimension from the net's input layer so the
+            # standardization buffers match the theta actually fed in at fit() time.
+            wrapper_context_dim = context_dim
+            if len(params) == 0 and hasattr(embedding_net, "initial_layer"):
+                wrapper_context_dim = embedding_net.initial_layer.in_features
+            embedding_net = architecture.StandardizedContextEmbedding(embedding_net, wrapper_context_dim)
+
         super(LikelihoodFlow, self).__init__(transform, base_dist, embedding_net=embedding_net)
-        LOGGER.info(f"Initialized the normalizing flow")
+        LOGGER.info("Initialized the normalizing flow")
 
         # device
         if device is None:
@@ -206,7 +220,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             except FileNotFoundError:
                 LOGGER.warning(f"Could not load the model from {self.model_file}")
         else:
-            LOGGER.info(f"Initializing fresh weights")
+            LOGGER.info("Initializing fresh weights")
 
     # training ########################################################################################################
 
@@ -274,6 +288,14 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         n_examples = x.shape[0]
         LOGGER.info(f"batch size = {batch_size} -> {n_examples // batch_size} steps per epoch for {n_epochs} epochs")
 
+        # fix the context standardization from the training thetas before the first training step
+        if isinstance(self._embedding_net, architecture.StandardizedContextEmbedding):
+            self._embedding_net.set_stats(theta)
+            LOGGER.info(
+                f"Context standardization: shift = {self._embedding_net.context_shift.cpu().numpy()}, "
+                f"scale = {self._embedding_net.context_scale.cpu().numpy()}"
+            )
+
         self._prepare_data(x, theta, batch_size, vali_split, seed=seed, group_ids=group_ids)
 
         # optimizer
@@ -282,7 +304,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         # learning rate scheduler
         if scheduler_type is None:
-            LOGGER.info(f"Not using a learning rate scheduler")
+            LOGGER.info("Not using a learning rate scheduler")
         elif scheduler_type == "cosine":
             scheduler_kwargs.setdefault("eta_min", 1e-5)
             scheduler_kwargs.setdefault("T_max", n_epochs)
@@ -298,7 +320,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 f"eta_min {(learning_rate*scheduler_kwargs['gamma']**n_epochs):.2E}"
             )
         elif scheduler_type == "plateau":
-            LOGGER.info(f"Using a ReduceLROnPlateau scheduler")
+            LOGGER.info("Using a ReduceLROnPlateau scheduler")
             scheduler_kwargs.setdefault("min_lr", 1e-5)
             scheduler_kwargs.setdefault("mode", "min")
             scheduler_kwargs.setdefault("factor", 0.5)
@@ -604,7 +626,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         # ravel all but the last dimension
         do_reshape = x.ndim > 2 or theta.ndim > 2
         if do_reshape:
-            assert x.shape[:-1] == theta.shape[:-1], f"The feature dimension needs to be the same for x and theta"
+            assert x.shape[:-1] == theta.shape[:-1], "The feature dimension needs to be the same for x and theta"
             out_shape = x.shape[:-1]
 
             x_features = x.shape[-1]
@@ -634,6 +656,11 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         n_steps=1_000,
         n_burnin_steps=1_000,
         lambdaCDM=False,
+        w0_prior=None,
+        nla=False,
+        fixed_params=None,
+        gaussian_priors=None,
+        variant_label=None,
         label=None,
         device=None,
         dont_save=False,
@@ -660,34 +687,68 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             array-like: The generated samples from the likelihood flow model.
         """
 
-        n_samples = n_steps * n_walkers
-
         if device is None:
             device = self.device
 
         x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
         x_obs = torch.atleast_2d(x_obs)
         if x_obs.shape[0] == 1:
-            LOGGER.info(f"Sampling the posterior from a single observation")
+            LOGGER.info("Sampling the posterior from a single observation")
         else:
-            LOGGER.info(f"Sampling the posterior from multiple observations")
+            LOGGER.info("Sampling the posterior from multiple observations")
 
         self.to(device)
         self.eval()
 
+        # Parameters fixed to a constant are dropped from the sampled space and reinserted (at their
+        # original indices, ascending) only for the model + full-parameter prior eval: lambdaCDM fixes
+        # w0 = -1, nla fixes bta = 0 (delta-NLA/TATT -> standard NLA). They compose.
+        LOGGER.warning("lambdaCDM" if lambdaCDM else "wCDM")
+        dropped = []
         if lambdaCDM:
-            LOGGER.warning("lambdaCDM")
             label = (label or "") + "_lambdaCDM"
-            i_w = self.params.index("w0")
-            params = [p for p in self.params if p != "w0"]
+            dropped.append((self.params.index("w0"), -1.0))
         else:
-            LOGGER.warning("wCDM")
-            params = self.params
+            # optionally tighten the flat w0 box (w0 stays sampled). The emcee prior is enforced from the
+            # config inside _mcmc_log_posterior, so we add the restriction here as an explicit rejection
+            # mask. No-op under lambdaCDM, where w0 is dropped from the sampled space.
+            if w0_prior is not None and "w0" in self.params:
+                label = (label or "") + "_w0gt-1"
+        if nla and "bta" in self.params:
+            label = (label or "") + "_nla"
+            dropped.append((self.params.index("bta"), 0.0))
+        for name, value in (fixed_params or {}).items():
+            if name in self.params and self.params.index(name) not in {i for i, _ in dropped}:
+                dropped.append((self.params.index(name), float(value)))
+            elif name not in self.params:
+                LOGGER.warning(f"fixed_params: {name!r} not in self.params; ignored")
+        if variant_label:
+            label = (label or "") + variant_label
+        dropped.sort(key=lambda t: t[0])
+        drop_idx = {i for i, _ in dropped}
+        params = [p for k, p in enumerate(self.params) if k not in drop_idx]
+
+        restrict_w0 = w0_prior is not None and not lambdaCDM and "w0" in self.params
+        if restrict_w0:
+            i_w0 = self.params.index("w0")
+            w0_lo, w0_hi = w0_prior
+
+        gaussian_data = self._resolve_gaussian_priors(gaussian_priors)
 
         def log_prob_fn(theta_walkers):
-            if lambdaCDM:
-                theta_walkers = np.insert(theta_walkers, i_w, -1.0, axis=1)
-            return self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
+            for i, val in dropped:
+                theta_walkers = np.insert(theta_walkers, i, val, axis=1)
+            log_prob = self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
+            if gaussian_data is not None:
+                log_prob = log_prob + self._gaussian_log_prior_np(theta_walkers, gaussian_data)
+            if restrict_w0:
+                out = np.zeros(theta_walkers.shape[0], dtype=bool)
+                if w0_lo is not None:
+                    out |= theta_walkers[:, i_w0] < w0_lo
+                if w0_hi is not None:
+                    out |= theta_walkers[:, i_w0] > w0_hi
+                log_prob = np.where(out, -np.inf, log_prob)
+            return log_prob
 
         chain = mcmc.run_emcee(
             log_prob_fn,
@@ -783,7 +844,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 torch.save({"state_dict": self.state_dict()}, self.model_file)
             LOGGER.info(f"Saved the model to {self.model_file}")
         else:
-            LOGGER.warning(f"Could not save the model, no output directory specified")
+            LOGGER.warning("Could not save the model, no output directory specified")
 
     def load(self):
         """Load the weights of the model from disk."""
@@ -795,11 +856,34 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         if self.model_dir is not None:
             loaded = torch.load(self.model_file, map_location=map_location, weights_only=False)
-            if isinstance(loaded, dict) and "state_dict" in loaded:
-                self.load_state_dict(loaded["state_dict"])
-            else:
-                self.load_state_dict(loaded)
+            state_dict = loaded["state_dict"] if isinstance(loaded, dict) and "state_dict" in loaded else loaded
+            self.load_state_dict(self._migrate_context_standardization(state_dict))
             LOGGER.info(f"Loaded the model from {self.model_file}")
+
+    def _migrate_context_standardization(self, state_dict):
+        """Remap checkpoints saved before the StandardizedContextEmbedding wrapper.
+
+        Old checkpoints hold the embedding weights directly under ``_embedding_net.`` (now nested one
+        level down) and have no standardization buffers; those models were trained on unstandardized
+        context, so they get the identity transform.
+        """
+        prefix = "_embedding_net."
+        if not isinstance(self._embedding_net, architecture.StandardizedContextEmbedding) or any(
+            k.startswith(prefix + "embedding_net.") or k == prefix + "context_shift" for k in state_dict
+        ):
+            return state_dict
+
+        migrated = {
+            (prefix + "embedding_net." + k[len(prefix) :] if k.startswith(prefix) else k): v
+            for k, v in state_dict.items()
+        }
+        migrated[prefix + "context_shift"] = torch.zeros_like(self._embedding_net.context_shift)
+        migrated[prefix + "context_scale"] = torch.ones_like(self._embedding_net.context_scale)
+        LOGGER.warning(
+            f"Loaded a pre-context-standardization checkpoint from {self.model_file}; "
+            f"remapped the embedding keys and set an identity context transform"
+        )
+        return migrated
 
     @classmethod
     def from_checkpoint(
@@ -977,9 +1061,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             # (members differ in architecture, so we cannot rebuild them from a single shared config) and
             # avoids depending on the ensemble's own (unpicklable) factory closures.
             member_ckpt = (
-                os.path.join(flow_model_dir, f"{LikelihoodFlow.model_name}.pt")
-                if flow_model_dir is not None
-                else None
+                os.path.join(flow_model_dir, f"{LikelihoodFlow.model_name}.pt") if flow_model_dir is not None else None
             )
             if load_existing and member_ckpt is not None and os.path.exists(member_ckpt):
                 try:
@@ -1099,6 +1181,13 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         """
 
         LOGGER.info(f"Training ensemble of {self.n_flows} flows")
+
+        # fix every member's context standardization up front: the fused path below bypasses the
+        # members' fit() and stacks their buffers directly (stack_module_state), so the statistics
+        # must be in place before fusion. The sequential path re-sets them in fit() to the same values.
+        for flow in self.flows:
+            if isinstance(flow._embedding_net, architecture.StandardizedContextEmbedding):
+                flow._embedding_net.set_stats(theta)
 
         # Fused vmap lockstep training: train all (identical-architecture) members in a single vmapped
         # pass per batch on one GPU, instead of the sequential per-member loop below. Restricted to the
@@ -1381,10 +1470,8 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         pfx = "flow."
         for i, flow in enumerate(self.flows):
             expected = set(flow.state_dict().keys())
-            member_sd = {k[len(pfx):]: v[i].detach() for k, v in params.items() if k[len(pfx):] in expected}
-            member_sd.update(
-                {k[len(pfx):]: v[i].detach() for k, v in buffers.items() if k[len(pfx):] in expected}
-            )
+            member_sd = {k[len(pfx) :]: v[i].detach() for k, v in params.items() if k[len(pfx) :] in expected}
+            member_sd.update({k[len(pfx) :]: v[i].detach() for k, v in buffers.items() if k[len(pfx) :] in expected})
             incompatible = flow.load_state_dict(member_sd, strict=False)
             if incompatible.missing_keys or incompatible.unexpected_keys:
                 raise RuntimeError(
@@ -1421,9 +1508,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 except Exception as e:
                     LOGGER.warning(f"C2ST for flow {i+1} failed ({type(e).__name__}: {e}); skipping")
 
-        return [
-            {"train_loss": list(train_hist[:, i]), "vali_loss": list(val_hist[:, i])} for i in range(N)
-        ]
+        return [{"train_loss": list(train_hist[:, i]), "vali_loss": list(val_hist[:, i])} for i in range(N)]
 
     def sample_likelihood(self, theta, n_samples=1000, batch_size=None, return_numpy=True):
         """
@@ -1506,6 +1591,11 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         n_steps=1_000,
         n_burnin_steps=1_000,
         lambdaCDM=False,
+        w0_prior=None,
+        nla=False,
+        fixed_params=None,
+        gaussian_priors=None,
+        variant_label=None,
         label=None,
         device=None,
         dont_save=False,
@@ -1522,6 +1612,19 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             n_steps (int, optional): The number of steps per walker. Defaults to 1_000.
             n_burnin_steps (int, optional): The number of burn-in steps. Defaults to 1_000.
             lambdaCDM (bool, optional): Whether to fix w0=-1 for LambdaCDM. Defaults to False.
+            w0_prior (tuple, optional): ``(lower, upper)`` override of the flat w0 prior box; either entry
+                may be None to keep the config bound (e.g. ``(-1.0, None)`` restricts to w0 > -1). w0 stays
+                a free, sampled parameter. Ignored under lambdaCDM. Defaults to None.
+            nla (bool, optional): If True, fix bta = 0 (delta-NLA/TATT -> standard NLA): bta is dropped
+                from the sampled space and reinserted as 0 for the model + prior eval. Composes with
+                w0_prior. No-op when bta is not in self.params. Defaults to False.
+            fixed_params (dict, optional): ``{name: value}`` of further parameters fixed by the same
+                drop-and-fix idiom; composes with lambdaCDM / nla. Defaults to None.
+            gaussian_priors (dict, optional): ``{name: (mu, sigma)}`` Gaussian priors added inside the
+                flat analysis prior ("Obh2" = derived Ob * (H0/100)^2); see
+                LikelihoodBase.sample_posterior_batched. Defaults to None.
+            variant_label (str, optional): Appended to the chain label after the automatic modifiers,
+                e.g. "_refpriors". Defaults to None.
             label (str, optional): Additional label for the saved chain. Defaults to None.
             device (str, optional): The device to use. Defaults to None.
             dont_save (bool, optional): Whether to skip saving the chain. Defaults to False.
@@ -1539,32 +1642,55 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 chain (drawn from the weighted mixture of the members), shape-matching the ensemble path.
         """
 
-        n_samples = n_steps * n_walkers
-
         if device is None:
             device = self.device
 
         x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
         x_obs = torch.atleast_2d(x_obs)
         if x_obs.shape[0] == 1:
-            LOGGER.info(f"Sampling the posterior from a single observation")
+            LOGGER.info("Sampling the posterior from a single observation")
         else:
-            LOGGER.info(f"Sampling the posterior from multiple observations")
+            LOGGER.info("Sampling the posterior from multiple observations")
 
         # move all flows to the specified device
         for flow in self.flows:
             flow.to(device)
             flow.eval()
 
-        # Handle lambdaCDM setup
+        # Fixed-parameter (drop-and-fix) setup, mirroring the single-flow path: lambdaCDM fixes w0 = -1,
+        # nla fixes bta = 0 (delta-NLA/TATT -> standard NLA). They compose; dropped columns are reinserted
+        # at their original indices (ascending) for the model + prior eval.
+        LOGGER.warning("lambdaCDM" if lambdaCDM else "wCDM")
+        dropped = []
         if lambdaCDM:
-            LOGGER.warning("lambdaCDM")
             label = (label or "") + "_lambdaCDM"
-            i_w = self.params.index("w0")
-            params = [p for p in self.params if p != "w0"]
+            dropped.append((self.params.index("w0"), -1.0))
         else:
-            LOGGER.warning("wCDM")
-            params = self.params
+            if w0_prior is not None and "w0" in self.params:
+                label = (label or "") + "_w0gt-1"
+        if nla and "bta" in self.params:
+            label = (label or "") + "_nla"
+            dropped.append((self.params.index("bta"), 0.0))
+        for name, value in (fixed_params or {}).items():
+            if name in self.params and self.params.index(name) not in {i for i, _ in dropped}:
+                dropped.append((self.params.index(name), float(value)))
+            elif name not in self.params:
+                LOGGER.warning(f"fixed_params: {name!r} not in self.params; ignored")
+        if variant_label:
+            label = (label or "") + variant_label
+        dropped.sort(key=lambda t: t[0])
+        drop_idx = {i for i, _ in dropped}
+        params = [p for k, p in enumerate(self.params) if k not in drop_idx]
+
+        # optionally tighten the flat w0 box (w0 stays sampled); no-op under lambdaCDM. For method="ensemble"
+        # we add the rejection in the local log_prob_fn below; for method="individual" w0_prior is forwarded
+        # to each member's sample_posterior.
+        restrict_w0 = w0_prior is not None and not lambdaCDM and "w0" in self.params
+        if restrict_w0:
+            i_w0 = self.params.index("w0")
+            w0_lo, w0_hi = w0_prior
+
+        gaussian_data = self._resolve_gaussian_priors(gaussian_priors)
 
         # Compute weights for ensemble method
         if method == "ensemble":
@@ -1579,9 +1705,19 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
 
             # Create log probability function
             def log_prob_fn(theta_walkers):
-                if lambdaCDM:
-                    theta_walkers = np.insert(theta_walkers, i_w, -1.0, axis=1)
-                return self._mcmc_log_posterior(theta_walkers, x_obs, device=device, weights=weights)
+                for i, val in dropped:
+                    theta_walkers = np.insert(theta_walkers, i, val, axis=1)
+                log_prob = self._mcmc_log_posterior(theta_walkers, x_obs, device=device, weights=weights)
+                if gaussian_data is not None:
+                    log_prob = log_prob + self._gaussian_log_prior_np(theta_walkers, gaussian_data)
+                if restrict_w0:
+                    out = np.zeros(theta_walkers.shape[0], dtype=bool)
+                    if w0_lo is not None:
+                        out |= theta_walkers[:, i_w0] < w0_lo
+                    if w0_hi is not None:
+                        out |= theta_walkers[:, i_w0] > w0_hi
+                    log_prob = np.where(out, -np.inf, log_prob)
+                return log_prob
 
         if method == "ensemble":
             LOGGER.info(f"Sampling the posterior from the ensemble using method '{method}'")
@@ -1616,6 +1752,11 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                     n_steps=n_steps,
                     n_burnin_steps=n_burnin_steps,
                     lambdaCDM=lambdaCDM,
+                    w0_prior=w0_prior,
+                    nla=nla,
+                    fixed_params=fixed_params,
+                    gaussian_priors=gaussian_priors,
+                    variant_label=variant_label,
                     label=flow_label,
                     device=device,
                     dont_save=(dont_save or not store_individual_chains),
@@ -1750,6 +1891,10 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         n_steps=1_000,
         n_burnin_steps=1_000,
         lambdaCDM=False,
+        w0_prior=None,
+        nla=False,
+        fixed_params=None,
+        gaussian_priors=None,
         device=None,
         seed=12,
         use_validation_weights=True,
@@ -1777,6 +1922,10 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
                 lambdaCDM=lambdaCDM,
+                w0_prior=w0_prior,
+                nla=nla,
+                fixed_params=fixed_params,
+                gaussian_priors=gaussian_priors,
                 device=device,
                 seed=seed,
                 use_validation_weights=use_validation_weights,
@@ -1799,6 +1948,10 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
                 lambdaCDM=lambdaCDM,
+                w0_prior=w0_prior,
+                nla=nla,
+                fixed_params=fixed_params,
+                gaussian_priors=gaussian_priors,
                 device=device,
                 seed=seed + i,  # distinct walker init per member
                 use_validation_weights=False,  # a single flow has no members to weight
@@ -1870,8 +2023,8 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         """Load all flows in the ensemble."""
         if self.model_dir is not None:
             try:
-                # we don't strictly need to load the init_kwargs, but we can verify it's there
-                loaded = torch.load(self.model_file, map_location="cpu", weights_only=False)
+                # we don't need the init_kwargs here, only to verify the checkpoint is there
+                torch.load(self.model_file, map_location="cpu", weights_only=False)
             except FileNotFoundError:
                 LOGGER.warning(f"Could not load the model from {self.model_file}")
 
