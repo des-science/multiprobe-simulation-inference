@@ -9,7 +9,9 @@ Adapted from https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/netwo
 
 import numpy as np
 import tensorflow as tf
-import os, warnings, pickle
+import os
+import warnings
+import pickle
 
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 
@@ -62,8 +64,8 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         self._setup_dirs(".tf")
 
         if layers is None:
-            LOGGER.warning(f"Assuming that the feature/summary dimension is equal to the context/parameter dimension")
-            LOGGER.info(f"Using the default Gaussian mixture model")
+            LOGGER.warning("Assuming that the feature/summary dimension is equal to the context/parameter dimension")
+            LOGGER.info("Using the default Gaussian mixture model")
             layers = architecture.get_gmm_layers(len(params), len(params))
 
         super(LikelihoodGMM, self).__init__(layers=layers)
@@ -74,7 +76,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
             except tf.errors.NotFoundError:
                 LOGGER.warning(f"Could not load the model from {self.model_file}")
         else:
-            LOGGER.info(f"Initializing fresh weights")
+            LOGGER.info("Initializing fresh weights")
 
     # training ########################################################################################################
 
@@ -141,7 +143,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
 
         # learning rate scheduler
         if scheduler_kwargs is not None:
-            LOGGER.info(f"Using a ReduceLROnPlateau learning rate scheduler")
+            LOGGER.info("Using a ReduceLROnPlateau learning rate scheduler")
             scheduler_kwargs.setdefault("min_lr", 1e-6)
             scheduler_kwargs.setdefault("factor", 0.75)
             scheduler_kwargs.setdefault("patience", 20)
@@ -193,7 +195,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         self.scaler_x.fit(x)
         self.scaler_theta.fit(theta)
 
-        LOGGER.info(f"Fitted the x and y scalers")
+        LOGGER.info("Fitted the x and y scalers")
 
     def _scale(self, inputs, transform):
         """Handle dimensions > 2 and arrays/tensors"""
@@ -227,7 +229,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
                 raise ValueError
 
         else:
-            raise ValueError(f"Input must either be a numpy array or a TensorFlow tensor")
+            raise ValueError("Input must either be a numpy array or a TensorFlow tensor")
 
         return outputs
 
@@ -298,7 +300,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
 
         Args:
             x (np.ndarray): Conditioning of shape (n_samples, n_conditions).
-            y (np.ndarray): Features to be modelled by the Gaussians of shape (n_samples, n_features).
+            theta (np.ndarray): Features to be modelled by the Gaussians of shape (n_samples, n_features).
 
         Returns:
             np.ndarray: Array of shape (n_samples,) containing the log likelihoods.
@@ -326,7 +328,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
                 log_like = self(theta).log_prob(x).numpy()
 
         # tensors
-        elif isinstance(x, tf.Tensor) and isinstance(y, tf.Tensor):
+        elif isinstance(x, tf.Tensor) and isinstance(theta, tf.Tensor):
             if len(x.shape) > 2 and len(theta.shape) > 2:
                 assert x.shape[:-1] == theta.shape[:-1]
                 out_shape = x.shape[:-1]
@@ -347,7 +349,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
                 raise NotImplementedError
 
         else:
-            raise ValueError(f"Input must either be a numpy array or a TensorFlow tensor")
+            raise ValueError("Input must either be a numpy array or a TensorFlow tensor")
 
         return log_like
 
@@ -375,9 +377,9 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
         if x_obs.ndim == 1:
             x_obs = tf.expand_dims(x_obs, axis=0)
         if x_obs.shape[0] == 1:
-            LOGGER.info(f"Sampling the posterior from a single observation")
+            LOGGER.info("Sampling the posterior from a single observation")
         else:
-            LOGGER.info(f"Sampling the posterior from multiple observations")
+            LOGGER.info("Sampling the posterior from multiple observations")
 
         chain = mcmc.run_emcee(
             lambda theta_walkers: self._mcmc_log_posterior(theta_walkers, x_obs),
@@ -430,7 +432,7 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
             self.save_weights(self.model_file)
             LOGGER.info(f"Saved the model to {self.model_file}")
         else:
-            LOGGER.warning(f"Could not save the model, no model directory specified")
+            LOGGER.warning("Could not save the model, no model directory specified")
 
     def _save_scalers(self):
         with open(os.path.join(self.model_dir, "scalers.pkl"), "wb") as f:
