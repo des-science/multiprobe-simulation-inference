@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 from msfm.utils import logger, cosmogrid
 from msfm.utils import files as msfm_files
 from msi.utils import diagnostics
+from msi.utils.plotting import PLOT_DPI
 
 LOGGER = logger.get_logger(__file__)
 
@@ -238,7 +239,7 @@ def sample_coverage_posteriors(
 
 def _save(fig, plot_dir, name):
     plot_file = os.path.join(plot_dir, name)
-    fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+    fig.savefig(plot_file, bbox_inches="tight", dpi=PLOT_DPI)
     plt.close(fig)
     LOGGER.info(f"Saved {plot_file}")
 

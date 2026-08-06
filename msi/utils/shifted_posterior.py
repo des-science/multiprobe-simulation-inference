@@ -207,7 +207,7 @@ def plot_comparison(
     for pdir in plot_dirs:
         os.makedirs(pdir, exist_ok=True)
         out_file = os.path.join(pdir, fname)
-        tri.fig.savefig(out_file, bbox_inches="tight", dpi=100)
+        tri.fig.savefig(out_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         LOGGER.info(f"saved {out_file}")
 
     # probe-qualified copy in the flat aggregation dir (per-model dirs disambiguate by path; the
@@ -215,7 +215,7 @@ def plot_comparison(
     if agg_dir is not None:
         os.makedirs(agg_dir, exist_ok=True)
         agg_file = os.path.join(agg_dir, f"6_comparison_{probe}_{'_'.join(plot_params)}_{obs_label}.png")
-        tri.fig.savefig(agg_file, bbox_inches="tight", dpi=100)
+        tri.fig.savefig(agg_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         LOGGER.info(f"saved {agg_file}")
 
 
@@ -270,7 +270,7 @@ def plot_convergence(run, obs_label, test_params, steps_list, msfm_conf, plot_di
         plot_dir = os.path.join(run["pred_dir"], "convergence_plots")
     os.makedirs(plot_dir, exist_ok=True)
     out_file = os.path.join(plot_dir, f"6_convergence_{'_'.join(test_params)}_{obs_label}.png")
-    tri.fig.savefig(out_file, bbox_inches="tight", dpi=100)
+    tri.fig.savefig(out_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
     LOGGER.info(f"saved {out_file}")
 
     # data_type/probe-qualified copy in the flat aggregation dir (avoids collisions across runs)
@@ -278,5 +278,5 @@ def plot_convergence(run, obs_label, test_params, steps_list, msfm_conf, plot_di
         os.makedirs(agg_dir, exist_ok=True)
         tag = f"{run['data']}_{run['probe']}"
         agg_file = os.path.join(agg_dir, f"6_convergence_{tag}_{'_'.join(test_params)}_{obs_label}.png")
-        tri.fig.savefig(agg_file, bbox_inches="tight", dpi=100)
+        tri.fig.savefig(agg_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         LOGGER.info(f"saved {agg_file}")

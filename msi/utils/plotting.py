@@ -18,6 +18,11 @@ from msi.utils.chains import load_des_y3_key_project_chain
 
 LOGGER = logger.get_logger(__file__)
 
+# Raster resolution for the diagnostic PNGs (unblinding_plots, convergence_plots, ...). Triangle
+# plots pack many small axes and tick labels into one figure, so 100 dpi is too coarse to read the
+# contours in detail; 200 dpi is legible when zoomed while keeping the files at a few hundred kB.
+PLOT_DPI = 200
+
 method_label_dict = {
     "gp_abc": "GP ABC",
     "flow_likelihood": "flow (likelihood)",
@@ -408,7 +413,7 @@ def plot_chains(
         else:
             out_file = os.path.join(out_dir, f"contours.{file_type}")
 
-        tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=100)
+        tri.fig.savefig(os.path.join(out_file), bbox_inches="tight", dpi=PLOT_DPI)
         LOGGER.info(f"Saved the plot to {out_file}")
     else:
         LOGGER.warning("Not saving the plot")
@@ -516,7 +521,7 @@ def plot_single_power_spectrum(
 
     if out_file is not None:
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
-        fig.savefig(out_file, bbox_inches="tight", dpi=100)
+        fig.savefig(out_file, bbox_inches="tight", dpi=PLOT_DPI)
 
     return fig, ax
 
@@ -586,7 +591,7 @@ def plot_human_summary(
         else:
             out_file = os.path.join(out_dir, "plot.png")
 
-        fig.savefig(out_file, bbox_inches="tight", dpi=100)
+        fig.savefig(out_file, bbox_inches="tight", dpi=PLOT_DPI)
         LOGGER.info(f"Saved the summary plot to {out_file}")
 
 

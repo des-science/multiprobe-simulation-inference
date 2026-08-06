@@ -795,7 +795,7 @@ class PosteriorPredictiveChecks:
 
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_data_marginals.png")
         LOGGER.info(f"Saving data marginals plot to {plot_file}")
-        tri.fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        tri.fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
 
     def _pval_log_prob(self, s_rep, s_obs_rep, context_star):
         """Pure log-prob PPC p-value (see ``_check_log_prob`` for the statistic's meaning).
@@ -862,7 +862,7 @@ class PosteriorPredictiveChecks:
         ax.legend()
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_log_prob_check.png")
         LOGGER.info(f"Saving Log-Prob PPC plot to {plot_file}")
-        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
 
     def log_prob_ppc(self):
         """The log-prob PPC result for the current observation, as numbers rather than a plot.
@@ -1052,7 +1052,7 @@ class PosteriorPredictiveChecks:
 
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{info['file_tag']}.png")
         LOGGER.info(f"Saving {info['title_tag']} plot to {plot_file}")
-        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
 
     # ---- p-value calibration (Doux et al. 2020, Eq. 9) -----------------------------------------
     # Calibrate each raw PPC p-value (auto AND cross) against its null distribution over the consistent
@@ -1261,7 +1261,7 @@ class PosteriorPredictiveChecks:
         fig.suptitle(f"{self.obs_label}: {stat} calibration — {self._setup_descriptor()}")
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{stat}_calibration.png")
         LOGGER.info(f"Saving calibration plot to {plot_file}")
-        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         plt.close(fig)
 
     def _save_calibration_summary(self, summary, meta):
@@ -1662,6 +1662,6 @@ class PosteriorPredictiveChecks:
 
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{file_label}_marginals.png")
         LOGGER.info(f"Saving Cls marginals plot to {plot_file}")
-        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         plt.close(fig)
         return plot_file

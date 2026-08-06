@@ -350,7 +350,9 @@ def plot_diff_chain(
     label_2="",
     n_sigma_str_1="",
     n_sigma_str_2="",
-    dpi=100,
+    # kept a literal rather than importing msi.utils.plotting.PLOT_DPI: this module has no
+    # framework imports at top level by design (see the module docstring). Keep the two in sync.
+    dpi=200,
 ):
     """Triangle plot of one or two parameter-difference chains, saved to ``out_files``.
 

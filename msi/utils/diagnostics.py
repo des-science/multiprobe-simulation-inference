@@ -15,6 +15,7 @@ import tarp.drp as _tarp_drp
 from tarp import get_tarp_coverage
 
 from msfm.utils import logger
+from msi.utils.plotting import PLOT_DPI
 
 LOGGER = logger.get_logger(__file__)
 
@@ -111,7 +112,7 @@ def plot_histogram_check(grid_preds_true, grid_preds_sample, n_random_indices=10
                 ax[i, j].legend(loc="upper left")
 
     if out_dir is not None:
-        fig.savefig(os.path.join(out_dir, prefix + "histogram.png"), bbox_inches="tight", dpi=100)
+        fig.savefig(os.path.join(out_dir, prefix + "histogram.png"), bbox_inches="tight", dpi=PLOT_DPI)
 
 
 def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_hist=True, out_dir=None, prefix=""):
@@ -171,7 +172,7 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
 
     if out_dir is not None:
         fig.savefig(
-            os.path.join(out_dir, prefix + "diagnostic_deeplss_relative_stat.png"), bbox_inches="tight", dpi=100
+            os.path.join(out_dir, prefix + "diagnostic_deeplss_relative_stat.png"), bbox_inches="tight", dpi=PLOT_DPI
         )
 
     if plot_per_summary_dim_hist and n_summaries < 20 and n_examples != 1:
@@ -212,7 +213,7 @@ def plot_deeplss_check(grid_preds_true, grid_preds_sample, plot_per_summary_dim_
 
         if out_dir is not None:
             fig.savefig(
-                os.path.join(out_dir, prefix + "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=100
+                os.path.join(out_dir, prefix + "diagnostic_deeplss_per_summary.png"), bbox_inches="tight", dpi=PLOT_DPI
             )
 
 
@@ -327,7 +328,7 @@ def plot_eecp_check(
         ax.grid(True)
 
         if out_dir is not None:
-            fig.savefig(os.path.join(out_dir, prefix + "hpd.png"), bbox_inches="tight", dpi=100)
+            fig.savefig(os.path.join(out_dir, prefix + "hpd.png"), bbox_inches="tight", dpi=PLOT_DPI)
     else:
         return true_coverage, eecp
 
@@ -505,7 +506,7 @@ def plot_tarp_check(
         ax.grid(True)
 
         if out_dir is not None:
-            fig.savefig(os.path.join(out_dir, prefix + "tarp.png"), bbox_inches="tight", dpi=100)
+            fig.savefig(os.path.join(out_dir, prefix + "tarp.png"), bbox_inches="tight", dpi=PLOT_DPI)
     else:
         return alpha, ecp_mean, ecp_std
 

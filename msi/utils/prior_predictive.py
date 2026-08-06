@@ -30,7 +30,7 @@ LOGGER = logger.get_logger(__file__)
 
 def _save(fig, plot_dir, name):
     plot_file = os.path.join(plot_dir, name)
-    fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+    fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
     plt.close(fig)
     LOGGER.info(f"Saved {plot_file}")
 

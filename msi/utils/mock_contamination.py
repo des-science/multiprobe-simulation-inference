@@ -157,5 +157,5 @@ def run_mock_contamination(flow, params, msfm_conf, flow_conf, fidu_label="fiduc
                 tri.scatter(fidu_MAP, color="k", label="fiducial MAP")
 
             plot_file = os.path.join(plot_dir, f"3_mock_contamination_{ptag}_{stag}.png")
-            tri.fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+            tri.fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
             LOGGER.info(f"Saved {plot_file}")
