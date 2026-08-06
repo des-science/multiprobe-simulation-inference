@@ -4,6 +4,11 @@
 *.DS_store
 *.json
 */DESy3_harmonic_chains
+*.out
+# Large binary inputs kept next to the code that reads them (DES Y3 SBI reference chains,
+# the cached metacal pixel-index arrays). Never versioned -- they live on scratch/at the source.
+*.npy
+*.npz
 
 !data/figures/*.png
 
