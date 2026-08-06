@@ -1,0 +1,50 @@
+# Quick-test PPC config focused on the rebinned Cls-space posterior predictive (check_cls_marginals).
+#
+# Everything heavy is trimmed: cross checks and p-value calibration are off, all individual obs
+# checks are off, neural/grid sampling is small, and the PPC flow trains for only a few epochs. The
+# auto loop still runs setup_flow + run_checks (to set the observation state) and then the
+# cls-marginals post-hook, which produces {flow_dir}/ppc/auto_wl/DESy3_cls_marginals.png.
+#
+# Edit ppc.sh to point RUNS_CONFIG at a live runs config (e.g. configs/runs/v17/baseline/t2_v3.yaml)
+# and PPC_CONFIG at this file, then submit it. Short enough for --partition=debug.
+
+cosmo_params: [Om, s8, w0]
+seed: 111
+
+run_auto: true
+run_cross: false
+
+independent_cross: false
+skip_probes: [2x2pt]
+cross_pairs:
+  - [lensing, clustering]
+cross_same_probe: false
+
+flow_config: /users/athomsen/dlss/repos/multiprobe-simulation-inference/configs/flow/maf_ppc.yaml
+n_flows: 1
+
+sampling:
+  n_samples_neural: 100000
+  n_samples_grid: 1000
+  k_highest_grid: null
+
+# Skip the individual obs checks; we only want the Cls-space PPD plot.
+checks:
+  plot_param_posterior: false
+  check_data_marginals: false
+  check_log_prob: false
+  check_kernel: false
+  check_mahalanobis: false
+  check_l1: false
+  check_l2: false
+  check_linf: false
+
+# The diagnostic under test: rebinned Cls-space PPD. cls_n_bins / scales_name are auto-detected from
+# the cache under {base_dir}/cls/ (rebinned_nb16_8wl,32gc.h5).
+cls_marginals:
+  enabled: true
+  base_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/data/v16/rot_in_place
+
+# Calibration off for the quick test (it trains the null over many mocks).
+calibration:
+  enabled: false

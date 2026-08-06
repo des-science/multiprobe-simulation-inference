@@ -1,7 +1,9 @@
 #!/bin/bash
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=02:00:00
+# Cold first run trains ~10 PPC flows AND runs per-mock calibration over all auto runs; that fits in
+# ~6h. Re-runs are checkpoint-aware (flows recovered from disk) and much faster -- lower if needed.
+#SBATCH --time=06:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
@@ -19,10 +21,19 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 REPOS="/users/athomsen/dlss/repos"
 MSI="$REPOS/multiprobe-simulation-inference"
 
-# RUNS_CONFIG="$MSI/configs/runs/v8_v33.yaml"
-RUNS_CONFIG="$MSI/configs/runs/v8_v33_extended.yaml"
-PPC_CONFIG="$MSI/configs/ppc.yaml"
-MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
+RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t2_v3.yaml"
+# RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t1_v3.yaml"
+
+PPC_CONFIG="$MSI/configs/ppc/ppc.yaml"
+# ppc_quick.yaml trims everything but the Cls-space PPD; short enough for --partition=debug.
+# PPC_CONFIG="$MSI/configs/ppc/ppc_quick.yaml"
+
+MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/v17/baseline.yaml"
+
+# Flow training is checkpoint-aware by default: each PPC flow is recovered from disk when one exists.
+# Force a retrain from scratch (e.g. after an architecture change) with
+#   RETRAIN_FLOWS=--retrain_flows sbatch ppc.sh
+RETRAIN_FLOWS="${RETRAIN_FLOWS:-}"
 
 # Keep stage logs in the submissions tree (do not pollute the scratch runs/ tree), like tension.sh.
 LOG_DIR="$MSI/submissions/clariden/slurm"
@@ -37,4 +48,5 @@ srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --m
         --runs_config=\"$RUNS_CONFIG\" \
         --ppc_config=\"$PPC_CONFIG\" \
         --msfm_config=\"$MSFM_CONFIG\" \
+        $RETRAIN_FLOWS \
         --device=cuda"

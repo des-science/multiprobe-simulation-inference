@@ -1,0 +1,60 @@
+# PPC method hyperparameters (runs/comparisons/observations come from --runs_config).
+# Driven by msi/apps/run_ppc.py; every key below is read in its main().
+
+cosmo_params: [Om, s8, w0]
+seed: 111
+
+run_auto: true # single-probe goodness-of-fit (rep == obs)
+run_cross: true # cross-probe consistency, both directions
+
+independent_cross: false # Doux 2020 form p(s_rep | theta_obs, s_obs); keep false
+skip_probes: [2x2pt]
+cross_pairs:
+  - [lensing, clustering] # disjoint pairs only; null -> all pairs
+cross_same_probe: false # maps-vs-cls shared-data cross family
+
+# PPC flow: same architecture/builders as run_inference. Checkpoint-aware (--retrain_flows to force).
+flow_config: /users/athomsen/dlss/repos/multiprobe-simulation-inference/configs/flow/maf_ppc.yaml
+n_flows: 1
+flow_fit: { run_c2st: true } # C2ST goodness-of-fit for the PPC flow after training
+
+# PPD sampling. n_samples_neural also sets the log_prob histogram size (no bootstrap).
+sampling:
+  n_samples_neural: 100000
+  n_samples_grid: 1000 # auto-probe only
+  k_highest_grid: null # null -> importance sampling
+
+# check_log_prob is the PRIMARY statistic (uncalibrated PPP, full PPD cloud, no bootstrap).
+# The distance/kernel stats are optional diagnostics, off by default (flip to true to enable).
+checks:
+  plot_param_posterior: false
+  check_data_marginals: true
+  check_log_prob: true
+  check_kernel: false
+  check_mahalanobis: false
+  check_l1: false
+  check_l2: false
+  check_linf: false
+
+# Rebinned-Cls-space PPD (auto-probe + DESy3 only). The scale cut is tied to the runs, so the runs
+# config sets `scales_config` (e.g. configs/scales/8wl,32gc.yaml); cls_n_bins is read from the cache.
+cls_marginals:
+  enabled: true
+  base_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/data/v16/rot_in_place
+  # cls_n_bins: only if {base_dir}/cls/ holds >1 rebinned cache for the runs' scales_config
+  # sample_set: realizations to draw from. "test" (default, theta == flow context) or "all"
+  # (train+test, ~5x more astro samples -> higher ESS; train/val flow losses are close so it's fine).
+  sample_set: test
+  # k_top: null (default) = importance sampling (unbiased posterior predictive). An int instead picks
+  # the k highest-likelihood sims (deterministic, smooth band even at tiny ESS, but BIASED narrow).
+  k_top: null
+
+# Doux 2020 (Eq. 9) calibration against consistent wide-prior mocks (mcmc_samples.h5).
+# Reports calibrated p̃; skipped automatically when the file is missing.
+calibration:
+  enabled: true # calibrates auto + cross (cross auto-skips if mcmc_samples.h5 lacks real_idx)
+  n_sim: all # 'all' = every mock in mcmc_samples.h5 (count logged); or an int to thin. p̃ ~ 1/n_sim
+  n_samples_neural: 10000 # PPD cloud per mock
+  # n_bootstrap / n_ref only affect the distance/kernel stats; inert while only log_prob is on
+  # (run_calibration defaults to 2000 / 1000 if a distance stat is re-enabled). n_ref is the heavier
+  # knob: the distance work is ~O(n_bootstrap * n_ref) per statistic.

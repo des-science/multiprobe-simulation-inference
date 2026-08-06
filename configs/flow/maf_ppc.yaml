@@ -1,0 +1,30 @@
+seed: 7
+
+context_embedding:
+  dim: 16
+  hidden_dim: 32
+  n_blocks: 2
+  dropout_probability: 0.1
+
+transform:
+  type: maf
+  n_layers: 8
+  hidden_dim: 256
+  maf:
+    num_blocks: 2
+    dropout_probability: 0.1
+    use_linear: false
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  vali_split: 0.1
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  scheduler_type: cosine
+  n_patience_epochs: null
+  run_c2st: false
+
+# No `mcmc:` / `diagnostics:` blocks here, unlike configs/flow/maf.yaml. A PPC flow models
+# p(s_rep | theta, s_obs) and is only ever sampled forward by msi/utils/ppc.py -- it never runs an
+# MCMC chain or the coverage diagnostics, so run_ppc.py reads neither block.

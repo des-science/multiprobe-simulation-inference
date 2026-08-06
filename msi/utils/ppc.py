@@ -10,12 +10,7 @@ from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEns
 
 LOGGER = logger.get_logger(__file__)
 
-_PROBE_ABBREVIATIONS = {
-    "lensing": "wl",
-    "clustering": "gc",
-    "cross": "x",
-    "combined": "wl+gc",
-}
+_PROBE_ABBREVIATIONS = {"lensing": "wl", "clustering": "gc", "cross": "x", "combined": "wl+gc"}
 
 
 def _join(*parts):
@@ -165,10 +160,7 @@ class PosteriorPredictiveChecks:
         import h5py
 
         with h5py.File(pred_file, "r") as f:
-            return np.stack(
-                [f[f"grid/{k}/test"][:].reshape(-1) for k in ("i_sobol", "i_signal", "i_noise")],
-                axis=1,
-            )
+            return np.stack([f[f"grid/{k}/test"][:].reshape(-1) for k in ("i_sobol", "i_signal", "i_noise")], axis=1)
 
     def _assert_aligned_grids(self):
         """Verify probe1 and probe2 grids are the SAME realizations in the same row order.
@@ -251,9 +243,7 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Probe '{probe_name}' parameters: {params}")
         return params
 
-    def setup_flow(
-        self, rep_probe, obs_probe, independent_cross=False, train_flow=False, flow_label="", fit_kwargs={}
-    ):
+    def setup_flow(self, rep_probe, obs_probe, independent_cross=False, retrain=False, flow_label="", fit_kwargs={}):
         """
         Set up the normalizing flow for the posterior predictive checks.
 
@@ -276,7 +266,9 @@ class PosteriorPredictiveChecks:
                   physics). Refused when ``shared_data=True`` since shared-data summaries clearly
                   share cosmic variance and noise.
 
-            train_flow (bool): If True, trains the flow from scratch.
+            retrain (bool): Force training from scratch even when a checkpoint exists. Default False:
+                the flow is recovered from its checkpoint if one exists, and only trained when none
+                is found.
             flow_label (str): Label for the flow model.
             fit_kwargs (dict): Overrides for the training kwargs derived from ``self.flow_conf``
                 (``_extract_train_kwargs``); merged on top, so e.g. ``{"n_epochs": 50}`` shortens
@@ -314,17 +306,17 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Setup: {self._setup_descriptor()}")
 
         # Bind role → attribute once; all private methods use these names directly.
-        self._obs_flow_dir  = getattr(self, f"{self.obs_probe}_flow_dir")
-        self._rep_flow_dir  = getattr(self, f"{self.rep_probe}_flow_dir")
-        self._s_obs_grid    = getattr(self, f"s_{self.obs_probe}_grid")
-        self._s_rep_prior   = getattr(self, f"s_{self.rep_probe}_grid")
-        self._theta_obs     = getattr(self, f"theta_{self.obs_probe}_grid")
+        self._obs_flow_dir = getattr(self, f"{self.obs_probe}_flow_dir")
+        self._rep_flow_dir = getattr(self, f"{self.rep_probe}_flow_dir")
+        self._s_obs_grid = getattr(self, f"s_{self.obs_probe}_grid")
+        self._s_rep_prior = getattr(self, f"s_{self.rep_probe}_grid")
+        self._theta_obs = getattr(self, f"theta_{self.obs_probe}_grid")
         self._obs_cosmo_idx = getattr(self, f"{self.obs_probe}_cosmo_idx")
-        self._obs_obs_dict  = getattr(self, f"{self.obs_probe}_obs_dict")
-        self._rep_obs_dict  = getattr(self, f"{self.rep_probe}_obs_dict") if self.is_cross_probe else None
-        self._obs_params    = getattr(self, f"{self.obs_probe}_params")
-        self._rep_params    = getattr(self, f"{self.rep_probe}_params")
-        self.s_prior        = self._s_rep_prior
+        self._obs_obs_dict = getattr(self, f"{self.obs_probe}_obs_dict")
+        self._rep_obs_dict = getattr(self, f"{self.rep_probe}_obs_dict") if self.is_cross_probe else None
+        self._obs_params = getattr(self, f"{self.obs_probe}_params")
+        self._rep_params = getattr(self, f"{self.rep_probe}_params")
+        self.s_prior = self._s_rep_prior
 
         rep_subs = self._summ_subs("rep")
         obs_subs = self._summ_subs("obs")
@@ -377,7 +369,7 @@ class PosteriorPredictiveChecks:
                 transform_fn=lambda: _arch(1),
                 out_dir=flow_dir,
                 label=flow_label,
-                load_existing=not train_flow,
+                load_existing=not retrain,
                 torch_seed=self.flow_conf.get("seed", 7),
             )
         else:
@@ -390,15 +382,23 @@ class PosteriorPredictiveChecks:
                 transform=transform,
                 out_dir=flow_dir,
                 label=flow_label,
-                load_existing=not train_flow,
+                load_existing=not retrain,
                 torch_seed=self.flow_conf.get("seed", 7),
             )
         self.out_dir = self.flow.model_dir
 
-        if train_flow:
+        # Default policy: recover the flow from its checkpoint when one exists, otherwise train.
+        # ``retrain`` forces training even when a checkpoint is present. (When retrain is False and a
+        # checkpoint is missing, the constructor above already fell back to fresh weights, so we train.)
+        do_train = retrain or not os.path.exists(self.flow.model_file)
+        if do_train:
+            reason = "retrain requested" if retrain else f"no checkpoint at {self.flow.model_file}"
+            LOGGER.info(f"Training PPC flow ({reason})")
             train_kwargs = flow_utils._extract_train_kwargs(self.flow_conf)
             train_kwargs.update(fit_kwargs)  # explicit per-call overrides win
             self.flow.fit(x=features_grid, theta=context_grid, save_model=True, **train_kwargs)
+        else:
+            LOGGER.info(f"Loaded existing PPC flow from {self.flow.model_file}")
 
     def run_checks(
         self,
@@ -454,7 +454,16 @@ class PosteriorPredictiveChecks:
             self._sample_grid_posterior_predictive(n_importance_samples=n_samples_grid, k_highest=k_highest_grid)
 
         if check_data_marginals:
-            self._check_data_marginals()
+            # The marginals figure is a non-essential diagnostic; never let a plotting failure (e.g.
+            # a trianglechain density-estimation edge case) abort the quantitative checks below or the
+            # remaining runs in the loop.
+            try:
+                self._check_data_marginals()
+            except Exception as e:
+                LOGGER.warning(
+                    f"Skipping data-marginals plot for {self.obs_label} ({self._setup_descriptor()}): "
+                    f"{type(e).__name__}: {e}. Quantitative checks are unaffected."
+                )
 
         if check_log_prob:
             self._check_log_prob()
@@ -546,16 +555,22 @@ class PosteriorPredictiveChecks:
             file_label=self.obs_label,
         )
 
-    def _sample_neural_posterior_predictive(self, n_samples=100_000):
-        """Sample from the neural posterior predictive distribution."""
+    def _sample_neural(self, theta_post, n_samples, s_obs=None, log=True):
+        """Pure neural posterior-predictive sampler: returns ``(s_rep, context_star)``.
 
+        Draws ``s_rep ~ p(s | context)`` where ``context`` is built from ``theta_post`` (a
+        posterior chain) exactly as the obs path does -- for cross-probe checks the obs summary
+        ``s_obs`` is concatenated (joint) or only the cosmo columns are kept (independent). Holds
+        no instance state, so it can be called repeatedly on mock posteriors during calibration
+        without clobbering the obs-path ``self.s_rep`` / ``self.context_star``.
+        """
         # subsample the posterior
-        i_star = self.rng.integers(0, self.theta_post.shape[0], n_samples)
-        theta_star = self.theta_post[i_star]
+        i_star = self.rng.integers(0, theta_post.shape[0], n_samples)
+        theta_star = theta_post[i_star]
 
         # sample the flow
         if self.is_cross_probe and not self.independent_cross:
-            s_obs_star = np.repeat(np.atleast_2d(self.s_obs), n_samples, axis=0)
+            s_obs_star = np.repeat(np.atleast_2d(s_obs), n_samples, axis=0)
             context_star = np.concatenate([theta_star, s_obs_star], axis=-1)
         elif self.is_cross_probe and self.independent_cross:
             # marginalise over probe-specific nuisances by using only the shared cosmo columns
@@ -563,18 +578,51 @@ class PosteriorPredictiveChecks:
         else:
             context_star = theta_star
 
-        LOGGER.info(f"Generating {n_samples} neural samples of {self.flow_dist} flow")
-        LOGGER.timer.start("sampling")
-        s_rep = self.flow.sample_likelihood(
-            context_star,
-            n_samples=1,
-            batch_size=min(context_star.shape[0], 10_000),
-        )
+        if log:
+            LOGGER.info(f"Generating {n_samples} neural samples of {self.flow_dist} flow")
+            LOGGER.timer.start("sampling")
+        s_rep = self.flow.sample_likelihood(context_star, n_samples=1, batch_size=min(context_star.shape[0], 10_000))
         s_rep = np.squeeze(s_rep)
-        LOGGER.info(f"Done sampling after {LOGGER.timer.elapsed('sampling')}")
+        if log:
+            LOGGER.info(f"Done sampling after {LOGGER.timer.elapsed('sampling')}")
 
-        self.context_star = context_star
-        self.s_rep = s_rep
+        # Normalizing-flow sampling can occasionally emit pathological draws: the inverse transform
+        # overflows for extreme base-distribution samples, giving either non-finite values OR finite
+        # but astronomically large ones (|s| ~ 1e150). A freshly retrained flow may do this where a
+        # previously trained one did not. Both wreck the run: a NaN/inf or huge row breaks the
+        # density-grid plot in _check_data_marginals (the huge values overflow PCA's X.T@X to NaN) and
+        # poisons every statistic (Mahalanobis covariance, distance means). Drop such rows together
+        # with their paired context (keeping s_rep and context_star aligned). The bound is a very
+        # generous margin around the prior summary support (self.s_prior, real finite sims in the same
+        # rep space), so only catastrophic flow failures are removed -- legitimate PPD tail draws sit
+        # comfortably inside it and well-behaved flows lose nothing. A large bad fraction means the
+        # flow is unusable and is surfaced loudly even inside the (quiet) calibration loop.
+        s_rep_2d = s_rep.reshape(s_rep.shape[0], -1)
+        lo = self.s_prior.min(axis=0)
+        hi = self.s_prior.max(axis=0)
+        span = np.maximum(hi - lo, np.finfo(s_rep.dtype).tiny)
+        margin = 100.0  # keep draws within 100x the full prior span of either edge
+        good = (
+            np.isfinite(s_rep_2d).all(axis=1)
+            & (s_rep_2d >= lo - margin * span).all(axis=1)
+            & (s_rep_2d <= hi + margin * span).all(axis=1)
+        )
+        n_bad = int((~good).sum())
+        if n_bad:
+            frac = n_bad / s_rep.shape[0]
+            if log or frac > 0.01:
+                LOGGER.warning(
+                    f"Dropping {n_bad}/{s_rep.shape[0]} ({frac:.2%}) pathological neural samples from "
+                    f"{self.flow_dist} flow (non-finite or far outside the prior summary support)."
+                )
+            s_rep = s_rep[good]
+            context_star = context_star[good]
+
+        return s_rep, context_star
+
+    def _sample_neural_posterior_predictive(self, n_samples=100_000):
+        """Sample from the neural posterior predictive distribution (obs path; stores state)."""
+        self.s_rep, self.context_star = self._sample_neural(self.theta_post, n_samples, s_obs=self.s_obs)
 
     def _grid_importance_indices(self, n_samples):
         """Importance-sample indices from the cosmology grid using p(s_obs | theta).
@@ -586,8 +634,7 @@ class PosteriorPredictiveChecks:
         """
         log_probs = (
             self.flow.log_likelihood(
-                np.repeat(np.atleast_2d(self.s_obs_rep), self.context_grid.shape[0], axis=0),
-                self.context_grid,
+                np.repeat(np.atleast_2d(self.s_obs_rep), self.context_grid.shape[0], axis=0), self.context_grid
             )
             .cpu()
             .numpy()
@@ -617,9 +664,10 @@ class PosteriorPredictiveChecks:
         too sparse near the posterior mode for the resulting empirical PPD to be meaningful;
         ``self.s_rep_grid`` is set to ``None`` and the caller should skip plotting/using it.
         """
-        # TODO for the cross-probe check, this is currently wrong: https://gemini.google.com/share/1e7a829ec98b
-        # The weights should be proportional to p(theta|s_obs) ~ p(s_obs|theta) and not p(s_rep|theta, s_obs).
-        # For the single probe, it doesn't make a difference as s_rep = s_obs.
+        # TODO the importance weights below are only correct for the auto-probe case. They should be
+        # proportional to p(theta | s_obs) ~ p(s_obs | theta), but _grid_importance_indices evaluates
+        # p(s_rep | theta, s_obs). Those coincide only when s_rep == s_obs, i.e. rep == obs -- hence the
+        # guard. Implementing the cross case needs a separate p(s_obs | theta) evaluation.
         assert not self.is_cross_probe, "Grid PPC not implemented for cross-probe checks yet."
 
         if (n_importance_samples is not None) and (k_highest is None):
@@ -637,8 +685,7 @@ class PosteriorPredictiveChecks:
         elif (k_highest is not None) and (n_importance_samples is None):
             log_probs = (
                 self.flow.log_likelihood(
-                    np.repeat(np.atleast_2d(self.s_obs_rep), self.context_grid.shape[0], axis=0),
-                    self.context_grid,
+                    np.repeat(np.atleast_2d(self.s_obs_rep), self.context_grid.shape[0], axis=0), self.context_grid
                 )
                 .cpu()
                 .numpy()
@@ -750,10 +797,34 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Saving data marginals plot to {plot_file}")
         tri.fig.savefig(plot_file, bbox_inches="tight", dpi=100)
 
-    def _check_log_prob(self, n_bootstrap=10_000):
+    def _pval_log_prob(self, s_rep, s_obs_rep, context_star):
+        """Pure log-prob PPC p-value (see ``_check_log_prob`` for the statistic's meaning).
+
+        Uses the full PPD cloud directly: every ``(theta_i, s_rep_i)`` pair in ``s_rep`` /
+        ``context_star`` contributes one paired draw -- no bootstrap subsampling. The pairs are
+        already i.i.d. draws from ``p(s_rep | s_obs)``, so the plain mean over all of them is the
+        lowest-variance estimate of ``P[T_rep >= T_obs]``; the only knob is the number of PPD
+        samples (``sampling.n_samples_neural``).
+
+        Returns ``(p_val, t_score, t_diff)`` where ``t_diff`` is the per-draw paired
+        log-likelihood difference (for plotting) and ``t_score = median(t_diff)`` is a
+        continuous discrepancy oriented so *larger = more extreme* (obs less likely than rep),
+        used by the calibration's tie-robust ranking.
+        """
+        s_obs = np.atleast_2d(s_obs_rep)
+        n = s_rep.shape[0]
+
+        log_lik = lambda x, ctx: self.flow.log_likelihood(x, ctx, return_numpy=True)  # noqa: E731
+        t_diff = log_lik(s_rep, context_star) - log_lik(
+            np.repeat(s_obs, n, axis=0), context_star
+        )  # positive: rep more likely than obs
+        p_val = np.mean(t_diff <= 0)
+        return p_val, float(np.median(t_diff)), t_diff
+
+    def _check_log_prob(self):
         """Bayesian posterior predictive p-value via paired log-likelihood comparison.
 
-        For each bootstrap draw i, computes
+        For each PPD draw i (all ``n_samples_neural`` of them -- no bootstrap), computes
             delta_i = log p(s_rep_i | theta_i) - log p(s_obs | theta_i)
         where theta_i ~ p(theta | s_obs) and s_rep_i ~ p(s | theta_i).
         p-value = fraction of draws where delta_i <= 0 (obs at least as likely as rep).
@@ -773,19 +844,8 @@ class PosteriorPredictiveChecks:
         ``p(s_rep | theta, s_obs)``, so the densities here are conditional on s_obs. This is a
         different statistic from the marginal-likelihood test in Doux et al. 2020 and the
         numerical p-values are not directly comparable.
-
-        Args:
-            n_bootstrap: Number of paired draws for the p-value estimate.
         """
-        s_rep = self.s_rep
-        s_obs = np.atleast_2d(self.s_obs_rep)
-        i_boot = self.rng.integers(0, s_rep.shape[0], n_bootstrap)
-
-        log_lik = lambda x, ctx: self.flow.log_likelihood(x, ctx, return_numpy=True)  # noqa: E731
-        t_diff = log_lik(s_rep[i_boot], self.context_star[i_boot]) - log_lik(
-            np.repeat(s_obs, n_bootstrap, axis=0), self.context_star[i_boot]
-        )  # positive: rep more likely than obs
-        p_val = np.mean(t_diff <= 0)
+        p_val, _, t_diff = self._pval_log_prob(self.s_rep, self.s_obs_rep, self.context_star)
 
         rep_subs = self._summ_subs("rep")
         diff_label = (
@@ -804,8 +864,38 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Saving Log-Prob PPC plot to {plot_file}")
         fig.savefig(plot_file, bbox_inches="tight", dpi=100)
 
-    def _check_one_sample(self, stat, n_bootstrap=10_000, n_ref=5_000):
-        """Generic one-sample test: is s_obs an outlier relative to the PPD?
+    def log_prob_ppc(self):
+        """The log-prob PPC result for the current observation, as numbers rather than a plot.
+
+        ``run_checks(check_log_prob=True)`` draws the histogram straight into the run directory;
+        this returns the same quantities for a caller that draws them itself (the paper figure
+        does). Call it after ``run_checks`` has set the observation state -- with every ``check_*``
+        off if the pipeline's own PNGs are not wanted.
+
+        Returns:
+            tuple: ``(p_val, t_score, t_diff)`` as defined by ``_pval_log_prob`` -- the posterior
+            predictive p-value ``P[t_diff <= 0]``, the median paired difference, and the per-draw
+            differences the p-value is the tail mass of.
+        """
+        return self._pval_log_prob(self.s_rep, self.s_obs_rep, self.context_star)
+
+    def _to_dev(self, a):
+        """Move a numpy array onto the flow's torch device/dtype (lazy torch import).
+
+        Used by the distance statistics so the (calibration-dominating) pairwise-distance work runs
+        on the GPU via ``torch.cdist`` with the reduction done on-device -- only the small reduced
+        vector is copied back to host.
+        """
+        import torch
+
+        return torch.as_tensor(
+            np.ascontiguousarray(a),
+            dtype=getattr(self.flow, "floatx", torch.float32),
+            device=getattr(self.flow, "device", "cpu"),
+        )
+
+    def _pval_one_sample(self, stat, s_rep, s_obs_rep, n_bootstrap=10_000, n_ref=5_000, log=True):
+        """Generic one-sample test: is s_obs an outlier relative to the PPD? (pure helper)
 
         Null distribution: evaluate the same statistic on bootstrap draws from
         the PPD samples s_rep.  A small p-value means s_obs is extreme.
@@ -819,16 +909,21 @@ class PosteriorPredictiveChecks:
         statistic) and the bootstrap pool (builds the null) are independent;
         the Mahalanobis covariance is also estimated from the ref pool only.
 
+        Returns ``(p_val, t_score, info)``: ``t_score`` is oriented so *larger = more extreme*
+        (``= t_obs`` for the high-tail stats, ``= -t_obs`` for kernel similarity), so the
+        calibration can rank one continuous discrepancy uniformly across stats; ``info`` carries
+        the arrays/labels the plotting wrapper needs.
+
         Args:
             stat: 'mahalanobis', 'l1', 'l2', 'linf', or 'kernel'.
+            s_rep: PPD samples, shape (N, dim).
+            s_obs_rep: observed summary for the replicated probe, shape (dim,) or (1, dim).
             n_bootstrap: Number of bootstrap draws for the null.
             n_ref: Reference subsample size for distance-based stats (kernel, L1, L2).
         """
-        from scipy.spatial.distance import cdist
         from scipy.linalg import solve_triangular
 
-        s_rep = self.s_rep  # (N, dim)
-        s_obs = np.atleast_2d(self.s_obs_rep)  # (1, dim)
+        s_obs = np.atleast_2d(s_obs_rep)  # (1, dim)
         n_rep = s_rep.shape[0]
 
         # Non-overlapping split: ref pool defines the statistic; boot pool builds the null.
@@ -875,10 +970,13 @@ class PosteriorPredictiveChecks:
             stat_label = r"$D_M^2(s_{" + rep_subs + r"}^{obs})$"
 
         elif stat in ("l1", "l2"):
-            metric, norm_ord = ("cityblock", 1) if stat == "l1" else ("euclidean", 2)
+            import torch
+
+            norm_ord = 1 if stat == "l1" else 2
+            ref_t = self._to_dev(s_ref_n)
 
             def compute_stat(x):
-                return np.mean(cdist(x, s_ref_n, metric=metric), axis=-1)
+                return torch.cdist(self._to_dev(x), ref_t, p=float(norm_ord)).mean(dim=-1).cpu().numpy()
 
             s_obs_eval, s_rep_eval = s_obs_n, s_rep_n
             outlier_if_high = True
@@ -902,13 +1000,19 @@ class PosteriorPredictiveChecks:
             stat_label = r"$\|s_{" + rep_subs + r"}^{obs}\|_\infty$"
 
         elif stat == "kernel":
+            import torch
+
+            ref_t = self._to_dev(s_ref_n)
             n_bw = min(2_000, s_ref_n.shape[0])
-            sq_dists_bw = cdist(s_ref_n[:n_bw], s_ref_n[:n_bw], metric="sqeuclidean")
-            bw2 = np.median(sq_dists_bw[np.triu_indices(n_bw, k=1)]) or 1.0
-            LOGGER.info(f"Kernel bandwidth (squared, normalised): {bw2:.4f}")
+            d2_bw = torch.cdist(ref_t[:n_bw], ref_t[:n_bw], p=2) ** 2
+            iu = torch.triu_indices(n_bw, n_bw, offset=1, device=d2_bw.device)
+            bw2 = float(d2_bw[iu[0], iu[1]].median()) or 1.0
+            if log:
+                LOGGER.info(f"Kernel bandwidth (squared, normalised): {bw2:.4f}")
 
             def compute_stat(x):
-                return np.mean(np.exp(-cdist(x, s_ref_n, metric="sqeuclidean") / bw2), axis=-1)
+                d2 = torch.cdist(self._to_dev(x), ref_t, p=2) ** 2
+                return torch.exp(-d2 / bw2).mean(dim=-1).cpu().numpy()
 
             s_obs_eval, s_rep_eval = s_obs_n, s_rep_n
             outlier_if_high = False
@@ -924,20 +1028,251 @@ class PosteriorPredictiveChecks:
         t_obs = compute_stat(s_obs_eval)[0]
         t_boot = compute_stat(s_rep_eval[i_boot])
         p_val = np.mean(t_boot >= t_obs) if outlier_if_high else np.mean(t_boot <= t_obs)
+        t_score = t_obs if outlier_if_high else -t_obs
+
+        info = dict(
+            t_obs=t_obs, t_boot=t_boot, xlabel=xlabel, title_tag=title_tag, file_tag=file_tag, stat_label=stat_label
+        )
+        return p_val, float(t_score), info
+
+    def _check_one_sample(self, stat, n_bootstrap=10_000, n_ref=5_000):
+        """Run ``_pval_one_sample`` on the obs PPD and plot the null histogram + obs marker."""
+        p_val, _, info = self._pval_one_sample(stat, self.s_rep, self.s_obs_rep, n_bootstrap, n_ref)
+        t_obs, t_boot = info["t_obs"], info["t_boot"]
 
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.hist(t_boot, bins=100, alpha=0.5, label="null (PPD samples)")
-        ax.axvline(t_obs, color="k", label=f"{stat_label} = {t_obs:.4f}")
+        ax.axvline(t_obs, color="k", label=f"{info['stat_label']} = {t_obs:.4f}")
         ax.set(
-            xlabel=xlabel,
+            xlabel=info["xlabel"],
             ylabel="Count",
-            title=f"{self.obs_label}: {title_tag}: p = {p_val:.4f}\n{self._setup_descriptor()}",
+            title=f"{self.obs_label}: {info['title_tag']}: p = {p_val:.4f}\n{self._setup_descriptor()}",
         )
         ax.legend()
 
-        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{file_tag}.png")
-        LOGGER.info(f"Saving {title_tag} plot to {plot_file}")
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{info['file_tag']}.png")
+        LOGGER.info(f"Saving {info['title_tag']} plot to {plot_file}")
         fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+
+    # ---- p-value calibration (Doux et al. 2020, Eq. 9) -----------------------------------------
+    # Calibrate each raw PPC p-value (auto AND cross) against its null distribution over the consistent
+    # wide-prior mock observations whose posteriors the inference coverage stage already sampled into
+    # ``{obs_flow_dir}/mcmc_samples.h5``. The reported p̃ is the percentile of the observed raw p within
+    # that null and is ~Uniform(0,1) under the null, so p̃≈0.5 means the observed p (even a saturated
+    # p≈1) is exactly what consistent data produces (no tension). Cross-probe calibration pairs each obs
+    # mock to the rep-probe summary of the same realization via the saved ``real_idx`` (see
+    # _load_mock_posteriors).
+    _CALIB_STATS = ("log_prob", "mahalanobis", "l2", "l1", "linf", "kernel")
+
+    def _load_mock_posteriors(self):
+        """Load the wide-prior mock observations + posteriors from the OBS probe's ``mcmc_samples.h5``.
+
+        Returns ``(x_true, theta_sample, x_true_rep)`` or ``None`` (with a warning) when the file (or,
+        for cross-probe, the ``real_idx`` dataset) is absent:
+
+        * ``x_true``      -- (N, dim_obs) obs-probe summaries of the held-out wide-prior mocks.
+        * ``theta_sample``-- (n_samp, N, n_params) obs-probe posteriors, same params order as ``theta_post``.
+        * ``x_true_rep``  -- (N, dim_rep) summary scored against the predictive. For AUTO this is just
+          ``x_true`` (rep == obs). For CROSS it is the REP probe's summary of the SAME sky realization,
+          looked up from the rep grid (``self._s_rep_prior``) by the per-mock ``(i_sobol, i_signal,
+          i_noise)`` saved in ``real_idx`` -- the data-level pairing that makes the cross null respect
+          the probe correlation (cf. ``_assert_aligned_grids``).
+
+        Dimensions are asserted (obs dim for ``x_true``, rep dim for ``x_true_rep``, obs params for
+        ``theta_sample``) so a mismatched / PCA / multi-checkpoint preds file fails loudly.
+        """
+        import h5py
+
+        path = os.path.join(self._obs_flow_dir, "mcmc_samples.h5")
+        if not os.path.exists(path):
+            LOGGER.warning(
+                f"No mcmc_samples.h5 at {path}; skipping p-value calibration. Produce it by running "
+                "inference with --sample_posterior (the coverage stage writes this file)."
+            )
+            return None
+
+        with h5py.File(path, "r") as f:
+            x_true = f["x_true"][:]
+            theta_sample = f["theta_sample"][:]
+            real_idx = f["real_idx"][:] if "real_idx" in f else None
+
+        assert x_true.shape[1] == self._s_obs_grid.shape[1], (
+            f"mock x_true summary dim {x_true.shape[1]} != obs-probe summary dim "
+            f"{self._s_obs_grid.shape[1]}; mcmc_samples.h5 must come from the same summary space "
+            "(no PCA / multi-checkpoint preds)."
+        )
+        assert theta_sample.shape[-1] == len(self._obs_params), (
+            f"mock theta dim {theta_sample.shape[-1]} != n obs params {len(self._obs_params)} "
+            f"({self._obs_params})."
+        )
+        assert theta_sample.shape[1] == x_true.shape[0], (
+            f"mcmc_samples.h5 mock-count mismatch: x_true has {x_true.shape[0]} rows but "
+            f"theta_sample has {theta_sample.shape[1]}."
+        )
+
+        if not self.is_cross_probe:
+            x_true_rep = x_true
+        else:
+            if real_idx is None:
+                LOGGER.warning(
+                    f"mcmc_samples.h5 at {path} has no 'real_idx' dataset; cross-probe calibration needs "
+                    "the per-mock (i_sobol, i_signal, i_noise) to pair the obs mock with the rep-probe "
+                    "summary. Regenerate it by re-running inference --sample_posterior. Skipping."
+                )
+                return None
+            # Pair each obs mock to the rep-probe summary of the SAME sky realization. The rep grid is
+            # aligned to (i_sobol, i_signal, i_noise) and asserted identical to the obs grid in cross
+            # mode (_assert_aligned_grids), so a value-keyed lookup is order-independent and exact.
+            rep_real_idx = getattr(self, f"{self.rep_probe}_real_idx")
+            pos_of = {tuple(int(v) for v in row): i for i, row in enumerate(rep_real_idx)}
+            try:
+                rep_pos = np.array([pos_of[tuple(int(v) for v in row)] for row in real_idx])
+            except KeyError as e:
+                raise AssertionError(
+                    f"mock realization {e.args[0]} from mcmc_samples.h5 not found in the rep-probe grid; "
+                    "the obs and rep pred files must come from the same simulation grid / split."
+                )
+            x_true_rep = self._s_rep_prior[rep_pos]
+            assert (
+                x_true_rep.shape[1] == self.s_prior.shape[1]
+            ), f"paired rep summary dim {x_true_rep.shape[1]} != PPC rep dim {self.s_prior.shape[1]}."
+
+        LOGGER.info(f"Loaded {x_true.shape[0]} mock posteriors from {path}")
+        return x_true, theta_sample, x_true_rep
+
+    def _calibration_pvals(self, s_rep, context_star, s_obs_rep, stats, n_bootstrap, n_ref):
+        """Compute ``{stat: (p, t_score)}`` for one (s_rep, s_obs) pair using the pure helpers."""
+        out = {}
+        for stat in stats:
+            if stat == "log_prob":
+                # log_prob uses the full PPD cloud (no bootstrap); n_bootstrap applies only to the
+                # distance/kernel stats below. Parity holds since both legs draw n_samples_neural.
+                p, score, _ = self._pval_log_prob(s_rep, s_obs_rep, context_star)
+            else:
+                # quiet inside the calibration loop: the per-mock kernel-bandwidth line would
+                # otherwise repeat once per mock and swamp the log.
+                p, score, _ = self._pval_one_sample(stat, s_rep, s_obs_rep, n_bootstrap, n_ref, log=False)
+            out[stat] = (float(p), float(score))
+        return out
+
+    def run_calibration(self, n_sim="all", n_samples_neural=10_000, n_bootstrap=2_000, n_ref=1_000, stats=None):
+        """Doux Eq. 9 calibration of the PPC p-values for the current observation (auto AND cross).
+
+        ``n_sim`` is the number of mock observations forming the null: ``"all"`` (default) uses every
+        mock available in ``mcmc_samples.h5``; an int thins them by a ``linspace`` stride.
+
+        Builds the null distribution of each raw statistic p-value over ``n_sim`` consistent
+        wide-prior mocks (loaded from the obs probe's ``mcmc_samples.h5``), recomputes the observed p
+        at the SAME ``(n_samples_neural, n_bootstrap, n_ref)`` for parity, and reports
+        ``p̃ = mean(p_mock <= p_obs)`` plus a tie-robust continuous variant
+        ``p̃_cont = mean(score_mock >= score_obs)``. Must be called after ``run_checks`` (so the
+        observation state is set).
+
+        For cross-probe setups the null reuses the same trained cross flow ``p(s_rep | theta_obs,
+        s_obs)``: each mock draws ``s_rep`` from the obs mock's posterior + obs summary and scores the
+        rep-probe summary of the SAME sky realization (paired via ``real_idx`` in
+        ``_load_mock_posteriors``), so the calibrated cross p̃ respects the probe correlation.
+        Requires ``real_idx`` in ``mcmc_samples.h5`` (re-run inference --sample_posterior); skipped
+        with a warning otherwise.
+        """
+        stats = tuple(stats) if stats is not None else self._CALIB_STATS
+        mocks = self._load_mock_posteriors()
+        if mocks is None:
+            return None
+        x_true, theta_sample, x_true_rep = mocks
+        N = x_true.shape[0]
+        if isinstance(n_sim, str):
+            if n_sim != "all":
+                raise ValueError(f"n_sim must be an int or 'all', got {n_sim!r}")
+            LOGGER.info(f"n_sim='all': using all {N} mocks available in mcmc_samples.h5")
+            n_sim = N
+        else:
+            n_sim = min(int(n_sim), N)
+        idx = np.unique(np.linspace(0, N - 1, n_sim).round().astype(int))
+        n_sim = idx.size
+
+        LOGGER.info(
+            f"Calibration ({self.obs_label}, {self._setup_descriptor()}): {n_sim} mocks, "
+            f"n_samples_neural={n_samples_neural}, n_bootstrap={n_bootstrap}, n_ref={n_ref}"
+        )
+
+        # obs leg, at the SAME reduced settings as the mocks (parity)
+        s_rep_obs, ctx_obs = self._sample_neural(self.theta_post, n_samples_neural, s_obs=self.s_obs)
+        obs = self._calibration_pvals(s_rep_obs, ctx_obs, self.s_obs_rep, stats, n_bootstrap, n_ref)
+
+        # null leg: one mock at a time. (Sampling is NOT batched across mocks -- enflows batches the
+        # num_samples dimension, not the context rows, so a single flow.sample call over all mocks'
+        # contexts would invert the whole sigmoid flow at once and OOM; per-mock sampling of
+        # n_samples_neural contexts is cheap and bounded.)
+        null_p = {s: np.empty(n_sim) for s in stats}
+        null_score = {s: np.empty(n_sim) for s in stats}
+        LOGGER.timer.start("calibration")
+        for k, j in enumerate(idx):
+            # context from the obs mock (posterior + obs summary); score the rep-probe summary of the
+            # same realization (x_true_rep[j] == x_true[j] for auto).
+            s_rep_j, ctx_j = self._sample_neural(theta_sample[:, j, :], n_samples_neural, s_obs=x_true[j], log=False)
+            pj = self._calibration_pvals(s_rep_j, ctx_j, x_true_rep[j], stats, n_bootstrap, n_ref)
+            for s in stats:
+                null_p[s][k], null_score[s][k] = pj[s]
+            if (k + 1) % 50 == 0 or (k + 1) == n_sim:
+                LOGGER.info(f"  calibration: {k + 1}/{n_sim} mocks ({LOGGER.timer.elapsed('calibration')})")
+
+        summary = {}
+        for s in stats:
+            p_obs, score_obs = obs[s]
+            p_tilde = float(np.mean(null_p[s] <= p_obs))
+            p_tilde_cont = float(np.mean(null_score[s] >= score_obs))
+            summary[s] = dict(p_obs=p_obs, p_tilde=p_tilde, p_tilde_continuous=p_tilde_cont)
+            LOGGER.info(f"calibration[{s}]: p_obs={p_obs:.4f}  p̃={p_tilde:.4f}  p̃_cont={p_tilde_cont:.4f}")
+            self._plot_calibration(s, null_p[s], p_obs, p_tilde, null_score[s], score_obs, p_tilde_cont, n_sim)
+
+        self._save_calibration_summary(
+            summary, dict(n_sim=n_sim, n_samples_neural=n_samples_neural, n_bootstrap=n_bootstrap, n_ref=n_ref)
+        )
+        return summary
+
+    def _plot_calibration(self, stat, null_p, p_obs, p_tilde, null_score, score_obs, p_tilde_cont, n_sim):
+        """Two-panel calibration figure for one statistic.
+
+        Left: null distribution of the raw inner p-value over the mocks with the observed p marked;
+        ``p̃`` is the mass at/below the line. Right: null distribution of the continuous discrepancy
+        (oriented larger = more extreme) with the observed value marked; ``p̃_cont`` is the mass
+        at/above the line — the tie-robust companion that avoids the raw-p saturation near 1.
+        """
+        bins = min(50, max(10, n_sim // 10))
+        fig, (ax_p, ax_s) = plt.subplots(1, 2, figsize=(18, 6))
+
+        # left: raw inner-p null (p̃ = fraction at/below the obs line)
+        ax_p.hist(null_p, bins=bins, range=(0, 1), alpha=0.5, color="tab:blue", label=f"null p ({n_sim} mocks)")
+        ax_p.axvline(p_obs, color="k", label=f"p_obs = {p_obs:.4f}")
+        ax_p.set(xlabel=f"raw {stat} p-value", ylabel="Count", title=f"p̃ = {p_tilde:.3f}  (rank of raw p)")
+        ax_p.legend()
+
+        # right: continuous-discrepancy null (p̃_cont = fraction at/above the obs line)
+        ax_s.hist(null_score, bins=bins, alpha=0.5, color="tab:orange", label=f"null discrepancy ({n_sim} mocks)")
+        ax_s.axvline(score_obs, color="k", label=f"t_obs = {score_obs:.4g}")
+        ax_s.set(
+            xlabel=f"{stat} discrepancy (larger = more extreme)",
+            ylabel="Count",
+            title=f"p̃_cont = {p_tilde_cont:.3f}  (rank of continuous discrepancy)",
+        )
+        ax_s.legend()
+
+        fig.suptitle(f"{self.obs_label}: {stat} calibration — {self._setup_descriptor()}")
+        plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{stat}_calibration.png")
+        LOGGER.info(f"Saving calibration plot to {plot_file}")
+        fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        plt.close(fig)
+
+    def _save_calibration_summary(self, summary, meta):
+        """Write the per-statistic {p_obs, p_tilde, p_tilde_continuous} table to JSON."""
+        import json
+
+        meta = dict(meta, obs_label=self.obs_label, setup=self._setup_descriptor())
+        out_file = os.path.join(self.out_dir, f"{self.obs_label}_calibration.json")
+        with open(out_file, "w") as fp:
+            json.dump({"meta": meta, "stats": summary}, fp, indent=2)
+        LOGGER.info(f"Saved calibration summary to {out_file}")
 
     _PROBE_NAME_TO_CLS_FLAGS = {
         "lensing": {"with_lensing": True, "with_clustering": False, "with_cross_z": True, "with_cross_probe": False},
@@ -951,22 +1286,23 @@ class PosteriorPredictiveChecks:
         "combined": {"with_lensing": True, "with_clustering": True, "with_cross_z": True, "with_cross_probe": True},
     }
 
-    def _build_cls_obs(self, dlss_conf, base_dir, apply_log=False):
-        """Build the observed Cls vector for ``self.obs_label`` via the catalog → maps → Cls
-        pipeline (matching ``y3-deep-lss/notebooks/2pt_train+eval.ipynb``).
+    def _build_cls_obs(self, dlss_conf, cls_n_bins):
+        """Build the observed (linear) rebinned Cls vector for ``self.obs_label`` via the
+        catalog → maps → hard_rebinned-Cls pipeline — the same preprocessing the cls network is
+        trained on (``deep_lss.utils.cls_preprocessing.preprocess_obs_hard_rebinned``).
 
         Only catalog-based labels (currently ``"DESy3"``) are supported. For mock labels that
         live only in the maps obs_dict (e.g. ``"bench_fidu_mean"``, ``"grid_*"``), the caller
         must pass ``cls_obs`` to ``check_cls_marginals`` directly — the underlying maps for
         those mocks are not co-located with the compressed-summary obs_dict.
         """
-        # deferred imports: keep PPC usable when the catalog data is not present
+        # deferred imports: keep PPC usable when the catalog data / TF are not present
         from msfm.utils import catalog
-        from msi.utils import preprocessing
+        from deep_lss.utils import cls_preprocessing
 
-        if dlss_conf is None or base_dir is None:
+        if dlss_conf is None:
             raise ValueError(
-                "_build_cls_obs requires both dlss_conf and base_dir; pass them to "
+                "_build_cls_obs requires dlss_conf (with scale_cuts); pass it to "
                 "check_cls_marginals or provide cls_obs explicitly."
             )
 
@@ -982,54 +1318,83 @@ class PosteriorPredictiveChecks:
         wl_gamma_map, _ = catalog.build_metacal_map_from_cat(self.conf)
         gc_count_map = catalog.build_maglim_map_from_cat(self.conf)
 
-        cls_obs = preprocessing.get_preprocessed_cl_observation(
+        # Ask for the *linear* rebinned Cls (apply_log=False): the network input uses the sign-log
+        # transform sign(x)*log(|x|+eps), which is non-injective and cannot be inverted to linear, so
+        # we build the linear obs directly (same channels / flatten order as load_rebinned_cls_grid).
+        obs = cls_preprocessing.preprocess_obs_hard_rebinned(
             wl_gamma_map=wl_gamma_map,
             gc_count_map=gc_count_map,
             msfm_conf=self.conf,
             dlss_conf=dlss_conf,
-            base_dir=base_dir,
-            nest_in=False,
-            apply_log=apply_log,
-            standardize=False,
-            make_plot=False,
+            cls_n_bins=cls_n_bins,
+            apply_log=False,
             **flags,
         )
-        return np.asarray(cls_obs).reshape(-1)
+        return np.asarray(obs).reshape(-1)
 
     def check_cls_marginals(
         self,
         dlss_conf,
         base_dir,
+        cls_n_bins,
+        scales_name,
         cls_obs=None,
+        grid=None,
+        sample_set="test",
+        k_top=None,
         apply_log=True,
-        train_test_split=0.8,
         n_samples=5_000,
         percentiles=(16, 84),
+        outer_percentiles=(2.5, 97.5),
         file_label="cls",
-        x_label="data-vector index",
+        x_label="ell bin (per z-pair)",
         log_y=None,
         n_traces=20,
     ):
         """Plot the posterior predictive distribution in Cls space (auto-probe only).
 
-        Fully self-contained: loads the Cls grid from ``base_dir``, applies scale cuts via
-        ``preprocessing.get_reshaped_human_summaries``, replicates the sobol-sorted train/test
-        split used when generating the predictions file, importance-samples indices, adds an
-        independent noise realisation to each picked sample, and optionally applies
-        ``log(|Cls|)`` — mirroring the ``get_binned_power_spectra`` training pipeline.
+        Uses the ``hard_rebinned`` pipeline the cls network is trained on
+        (``deep_lss.utils.cls_preprocessing``): loads the full rebinned Cls grid from the cache in
+        ``base_dir`` (``cls/rebinned_nb{cls_n_bins}_{scales_name}.h5``), exactly aligns it to
+        ``self.s_prior`` by the per-row ``(i_sobol, i_signal, i_noise)`` sky realization,
+        importance-samples indices, and optionally applies ``log(|Cls|)``. The cached grid examples
+        are already per-noise realizations, so (unlike the old soft-pruned path) no extra noise draw
+        is added.
 
         Args:
-            dlss_conf: path or dict for the deep-lss config; supplies scale-cut parameters.
-            base_dir: data directory containing ``cls/`` and ``cls/white_noise.h5``.
-            cls_obs: (n_cls_dims,) observed Cls vector, already in the same preprocessed space
-                (scale cuts + noise + optional log). If None, built automatically via
-                ``_build_cls_obs`` (only supports ``self.obs_label='DESy3'``).
-            apply_log: apply ``log(|Cls|)`` to both PPD samples and obs after noise addition,
-                matching the training pipeline. Default True.
-            train_test_split: fraction used as training set when generating the predictions
-                file; the complementary fraction is the test set aligned with ``self.s_prior``.
-            n_samples: number of importance draws (capped at int(ESS) inside the helper).
-            percentiles: low/high percentiles for the shaded band.
+            dlss_conf: dict (or path) for the deep-lss config; supplies ``scale_cuts`` matching the
+                cache's ``scales_name`` (used for the obs rebinning and the per-pair ell axis).
+            base_dir: data directory containing the ``cls/rebinned_*`` cache.
+            cls_n_bins: number of ell bins per tomographic pair (matches the cache / training).
+            scales_name: scales-config stem identifying the cache (e.g. ``"8wl,32gc"``).
+            cls_obs: (n_cls_dims,) observed *linear* rebinned Cls vector. If None, built
+                automatically via ``_build_cls_obs`` (only supports ``self.obs_label='DESy3'``).
+            grid: optional preloaded cache as the 4-tuple
+                ``(cls_full, real_idx_full, cosmos_full, cosmo_param_names)`` returned by
+                ``cls_preprocessing.load_rebinned_cls_grid`` (the cache is ~GB; passing it lets a
+                notebook iterate without re-reading it). If None, it is loaded internally.
+            sample_set: which grid realizations form the PPD pool. The PPD is the astro-aware
+                posterior predictive: each realization is importance-weighted by ``p(s_obs | theta)``
+                with the FULL ``theta`` (cosmology + the per-signal Latin-hypercube astro nuisances)
+                the flow was trained on, and drawn proportionally (capped at ``int(ESS)``).
+                - ``"test"`` (default): only the test realizations, whose theta is the exact
+                  context the flow was trained on (no parameter-column matching). ESS limited.
+                - ``"all"``: every realization (train + test), giving ~5x more astro samples and a
+                  higher ESS. The flow's train/val losses are close, so scoring train thetas is fine.
+                  theta is taken from the cache cosmos, column-matched to the flow context and
+                  verified against the test context_grid. Requires cosmos (auto-loaded, or pass a
+                  4-tuple ``grid``).
+            k_top: if set to an int, replace importance sampling with a deterministic TOP-K
+                selection: the ``k_top`` realizations with the highest ``p(s_obs | theta)``. Gives
+                ``k_top`` distinct sims and a smooth band even when the ESS collapses, but it is
+                BIASED — it shows the spread of the best-fitting sims, not the posterior-predictive
+                width (it drops the weight tails, so it understates the spread). Default None =
+                importance sampling (the unbiased posterior predictive).
+            apply_log: apply ``log(|Cls|)`` to both PPD samples and obs for the top panel. Default True.
+            n_samples: number of importance draws (capped at int(ESS); drawing more just duplicates).
+            percentiles: low/high percentiles for the inner shaded band.
+            outer_percentiles: low/high percentiles for an outer (fainter) band, or None to draw a
+                single band. Default ``(2.5, 97.5)`` pairs the 95% band with the 68% inner band.
             file_label: tag in the output filename.
             x_label: x-axis label.
             log_y: log scale on the y-axis. Defaults to ``not apply_log`` (linear when data
@@ -1038,131 +1403,186 @@ class PosteriorPredictiveChecks:
         """
         assert not self.is_cross_probe, "check_cls_marginals is implemented for auto-probe checks only."
 
-        from msi.utils import preprocessing
+        from deep_lss.utils import cls_preprocessing
 
         if log_y is None:
             log_y = not apply_log
 
         flags = self._PROBE_NAME_TO_CLS_FLAGS[self.obs_probe_name]
 
-        LOGGER.info(f"Loading and preprocessing Cls grid from {base_dir}")
-        _, cls_grid, noise_cls, _, grid_i_sobols, _, _, _ = preprocessing.get_reshaped_human_summaries(
-            base_dir,
-            "cls",
-            msfm_conf=self.conf,
-            dlss_conf=dlss_conf,
-            concat_example_dim=False,
-            concat_bin_dim=True,
-            with_fiducial=False,
-            do_plot=False,
-            apply_log=False,
-            standardize=False,
-            **flags,
+        if grid is None:
+            LOGGER.info(f"Loading rebinned Cls grid (cls_n_bins={cls_n_bins}, scales={scales_name}) from {base_dir}")
+            cls_full, real_idx_full, cosmos_full, cosmo_param_names = cls_preprocessing.load_rebinned_cls_grid(
+                data_dir=base_dir,
+                msfm_conf=self.conf,
+                dlss_conf=dlss_conf,
+                cls_n_bins=cls_n_bins,
+                scales_name=scales_name,
+                **flags,
+            )
+        else:
+            cls_full, real_idx_full, cosmos_full, cosmo_param_names = grid
+        # cls_full: (n_cosmo * n_examples, n_cls_dims) linear, bin-major / pair-minor flatten order.
+
+        # Per-pair ell axis (sqrt-spaced bin centers, one block of cls_n_bins per selected pair)
+        # plus each pair's (lmin, lmax) scale-cut range for the bottom-axis annotation.
+        _pair_labels, ell_centers, ell_ranges = cls_preprocessing.get_rebinned_pair_info(
+            self.conf, dlss_conf, cls_n_bins, **flags
         )
-        # cls_grid:      (n_cosmo, n_examples, n_cls_dims) — scale-cut + noise-sigma-scaled
-        # noise_cls:     (N_noise, n_cls_dims) or None     — sigma-scaled pool
-        # grid_i_sobols: (n_cosmo, n_examples)
+        n_pairs = ell_centers.shape[0]
+        n_ell_per_pair = cls_n_bins
+        n_dims = n_pairs * n_ell_per_pair
+        ell_flat = ell_centers.reshape(-1)  # pair-major (pair, bin) -> (n_dims,)
 
-        # Replicate sobol-sort + train/test split used when generating the predictions file
-        i_sort = np.argsort(grid_i_sobols[:, 0])
-        cls_grid = cls_grid[i_sort]
-        i_split = int(train_test_split * cls_grid.shape[1])
-        cls_grid_test = cls_grid[:, i_split:, :]
-        cls_grid_test = np.concatenate([cls_grid_test[i] for i in range(cls_grid_test.shape[0])], axis=0)
-        # (n_cosmo * n_test_per_cosmo, n_cls_dims), aligned with self.s_prior
-
-        assert cls_grid_test.shape[0] == self.s_prior.shape[0], (
-            f"cls_grid test split has {cls_grid_test.shape[0]} rows but self.s_prior has "
-            f"{self.s_prior.shape[0]}; ensure train_test_split={train_test_split} matches "
-            "the split used when generating the predictions file."
+        assert cls_full.shape[1] == n_dims, (
+            f"rebinned Cls grid has {cls_full.shape[1]} columns but the probe selection implies "
+            f"{n_pairs} pairs x {cls_n_bins} bins = {n_dims}."
         )
 
-        from msfm.utils import power_spectra as _ps
-        _ps_conf = self.conf["analysis"]["power_spectra"]
-        _bin_edges_1d = _ps.get_cl_bins(_ps_conf["l_min"], _ps_conf["l_max"], _ps_conf["n_bins"])
-        _ell_centers_1d = (_bin_edges_1d[:-1] + _bin_edges_1d[1:]) / 2    # (n_ell_bins,)
+        # Reorder the flat vectors from the cache's bin-major / pair-minor layout to pair-major
+        # (contiguous cls_n_bins-blocks per pair) so the flat-index panels and ell axis line up.
+        def _to_pair_major(a):
+            a = np.asarray(a)
+            return a.reshape(a.shape[:-1] + (cls_n_bins, n_pairs)).swapaxes(-1, -2).reshape(a.shape[:-1] + (n_dims,))
 
         if cls_obs is None:
-            cls_obs_raw = self._build_cls_obs(dlss_conf=dlss_conf, base_dir=base_dir, apply_log=False)
-            cls_obs = np.log(np.abs(cls_obs_raw)) if apply_log else cls_obs_raw
+            cls_obs_raw = self._build_cls_obs(dlss_conf=dlss_conf, cls_n_bins=cls_n_bins)
         else:
-            cls_obs = np.atleast_1d(np.asarray(cls_obs)).reshape(-1)
-            cls_obs_raw = cls_obs.copy()
-            if apply_log:
-                cls_obs = np.log(np.abs(cls_obs))
-
-        assert cls_obs.shape[0] == cls_grid_test.shape[1], (
-            f"cls_obs has {cls_obs.shape[0]} elements but cls_grid has {cls_grid_test.shape[1]} "
-            "columns; ensure probe/bin selection matches."
+            cls_obs_raw = np.atleast_1d(np.asarray(cls_obs)).reshape(-1)
+        assert cls_obs_raw.shape[0] == n_dims, (
+            f"cls_obs has {cls_obs_raw.shape[0]} elements but the probe selection implies {n_dims}; "
+            "ensure probe/bin selection matches."
         )
+        cls_obs_raw = _to_pair_major(cls_obs_raw)
+        cls_obs = np.log(np.abs(cls_obs_raw)) if apply_log else cls_obs_raw.copy()
 
-        i_picked, _ = self._grid_importance_indices(n_samples)
-        cls_picked = cls_grid_test[i_picked].copy()
+        # --- build the realization pool (sample_set), then importance-sample it ----------------------
+        # Map each prediction-grid realization to its row in the loaded Cls grid by the
+        # (i_sobol, i_signal, i_noise) key (the predictions were aligned on this in __init__).
+        theta_obs = np.asarray(self._theta_obs)
+        pos_of = {tuple(int(v) for v in row): i for i, row in enumerate(real_idx_full)}
+        try:
+            order = np.array([pos_of[tuple(int(v) for v in row)] for row in self.probe1_real_idx])
+        except KeyError as e:
+            raise AssertionError(
+                f"realization {e.args[0]} from self.s_prior not found in the rebinned Cls grid; the "
+                "predictions file and the Cls cache must come from the same simulation grid."
+            )
 
-        if noise_cls is not None:
-            i_noise = self.rng.integers(0, noise_cls.shape[0], cls_picked.shape[0])
-            cls_picked = cls_picked + noise_cls[i_noise]
+        if sample_set == "test":
+            # Only the test realizations; theta is exactly the flow's context_grid.
+            cls_pool = cls_full[order]
+            theta_pool = theta_obs
+            pool_real_idx = self.probe1_real_idx
+        elif sample_set == "all":
+            # Every realization. theta comes from the cache cosmos, column-matched to the flow context
+            # and VERIFIED against context_grid on the test realizations (guards parameter ordering).
+            from msfm.utils import parameters as _msfm_params
 
+            requested = set(_msfm_params.get_parameters(self._obs_params, self.conf))
+            col_idx = [i for i, p in enumerate(cosmo_param_names) if p in requested]
+            assert len(col_idx) == theta_obs.shape[1], (
+                f"matched {len(col_idx)} cosmos columns but the flow context has {theta_obs.shape[1]}; "
+                "parameter sets disagree."
+            )
+            theta_pool = cosmos_full[:, col_idx]
+            cls_pool = cls_full
+            pool_real_idx = real_idx_full
+            assert np.allclose(theta_pool[order], theta_obs, rtol=1e-3, atol=1e-5), (
+                "column-matched cosmos disagree with the flow context on the test realizations; "
+                "parameter ordering mismatch — refusing to weight on misaligned theta."
+            )
+        else:
+            raise ValueError(f"sample_set must be 'test' or 'all', got {sample_set!r}")
+
+        # Astro-aware posterior predictive: weight each realization by p(s_obs | full theta) and draw
+        # proportionally (capped at int(ESS); more just duplicates). Chunk the flow eval to bound memory.
+        x_obs = np.atleast_2d(self.s_obs_rep)
+        log_p_chunks = []
+        for i in range(0, theta_pool.shape[0], 100_000):
+            t = theta_pool[i : i + 100_000]
+            log_p_chunks.append(self.flow.log_likelihood(np.repeat(x_obs, t.shape[0], axis=0), t).cpu().numpy())
+        log_p = np.concatenate(log_p_chunks)
+        log_p -= np.max(log_p)
+        p = np.exp(log_p)
+        p /= np.sum(p)
+        ess = float(1.0 / np.sum(p**2))
+
+        # Parameter-space ESS: a theta-point's noise replicas share the same weight, so the row ESS
+        # above is inflated by the noise multiplicity. Aggregate the row weights to unique
+        # (i_sobol, i_signal) points to report how many distinct (cosmo+astro) points back the band.
+        _tp_key = pool_real_idx[:, 0].astype(np.int64) * (int(pool_real_idx[:, 1].max()) + 1) + pool_real_idx[:, 1]
+        _, _inv = np.unique(_tp_key, return_inverse=True)
+        w_theta = np.bincount(_inv, weights=p)
+        ess_theta = float(1.0 / np.sum(w_theta**2))
+        n_theta = int(w_theta.size)
+
+        if k_top is None:
+            # Importance sampling: the unbiased posterior predictive. Draw realizations proportional
+            # to p (capped at int(ESS); drawing more just duplicates).
+            n_draws = min(int(n_samples), max(1, int(ess)))
+            picked = self.rng.choice(theta_pool.shape[0], size=n_draws, replace=True, p=p)
+            sel_label = "importance"
+        else:
+            # Top-k: the k realizations most consistent with the obs (highest p(s_obs|theta)).
+            # Deterministic, k distinct sims (smooth band even at tiny ESS) but BIASED — it shows the
+            # spread of the best-fit sims, not the posterior-predictive width.
+            k = min(int(k_top), theta_pool.shape[0])
+            picked = np.argsort(log_p)[-k:]
+            n_draws = int(k)
+            sel_label = f"top-{k}"
+
+        cls_picked = _to_pair_major(cls_pool[picked])
         cls_picked_raw = cls_picked.copy()
+        n_unique = int(np.unique(picked).size)
+        LOGGER.info(
+            f"Cls PPD (sample_set={sample_set}, {sel_label}): {n_draws} draws, {n_unique} unique sims, "
+            f"ESS={ess:.1f}/{theta_pool.shape[0]} rows, ESS_theta={ess_theta:.1f}/{n_theta} pts "
+            f"(noise multiplicity ~{ess / ess_theta:.1f})."
+        )
+        if n_unique < 50:
+            LOGGER.warning(
+                f"Only {n_unique} unique sims back the {self.obs_probe_name} Cls PPD; the grid is sparse "
+                "near this posterior. Try sample_set='all' for more astro samples — but a small ESS is "
+                "honest when the data tightly constrains theta."
+            )
 
         if apply_log:
             cls_picked = np.log(np.abs(cls_picked))
 
-        lo_q, hi_q = percentiles
-        lo = np.percentile(cls_picked, lo_q, axis=0)
-        hi = np.percentile(cls_picked, hi_q, axis=0)
-        mid = np.median(cls_picked, axis=0)
-
-        n_dims = cls_picked.shape[1]
         x = np.arange(n_dims)
-        assert n_dims % len(_ell_centers_1d) == 0, (
-            f"n_cls_dims={n_dims} is not a multiple of n_ell_bins={len(_ell_centers_1d)}; "
-            "scale cuts may produce variable-length ell axes across z-bin pairs."
-        )
-        n_ell_per_pair = len(_ell_centers_1d)
-        n_pairs = n_dims // n_ell_per_pair
-        ell_flat = np.tile(_ell_centers_1d, n_pairs)                       # (n_cls_dims,)
+
+        # PPD bands: inner = `percentiles`, optional outer = `outer_percentiles`. Listed outer-first
+        # (fainter, drawn first) so the wide band sits under the narrow one.
+        band_qs = [outer_percentiles, percentiles] if outer_percentiles is not None else [percentiles]
+        band_alphas = [0.15, 0.30] if outer_percentiles is not None else [0.30]
+        band_labels = [f"PPD [{q[0]:g}, {q[1]:g}]%" for q in band_qs]
+
+        def _bands(samples):
+            return [(np.percentile(samples, q[0], axis=0), np.percentile(samples, q[1], axis=0)) for q in band_qs]
+
+        mid = np.median(cls_picked, axis=0)
+        bands_log = _bands(cls_picked)
 
         cls_picked_lcl = ell_flat * cls_picked_raw
-        lo_lcl = np.percentile(cls_picked_lcl, lo_q, axis=0)
-        hi_lcl = np.percentile(cls_picked_lcl, hi_q, axis=0)
         mid_lcl = np.median(cls_picked_lcl, axis=0)
+        bands_lcl = _bands(cls_picked_lcl)
         cls_obs_lcl = ell_flat * cls_obs_raw
 
         mid_raw = np.median(cls_picked_raw, axis=0)
         ppd_std = np.std(cls_picked_raw, axis=0)
         sig_obs = (cls_obs_raw - mid_raw) / np.where(ppd_std > 0, ppd_std, np.nan)
 
-        rel_denom = np.where(np.abs(cls_obs_raw) > 0, np.abs(cls_obs_raw), np.nan)
-        cls_rel_samples = (cls_picked_raw - cls_obs_raw) / rel_denom
-        lo_rel = np.percentile(cls_rel_samples, lo_q, axis=0)
-        hi_rel = np.percentile(cls_rel_samples, hi_q, axis=0)
-        mid_rel = np.median(cls_rel_samples, axis=0)
-
-        # --- pair labels ---
-        _n_z = int(round((-1 + (1 + 8 * n_pairs) ** 0.5) / 2))
-        if _n_z * (_n_z + 1) // 2 == n_pairs:
-            if flags.get("with_lensing") and not flags.get("with_clustering"):
-                _sym = r"\kappa"
-            elif flags.get("with_clustering") and not flags.get("with_lensing"):
-                _sym = r"\delta_g"
-            else:
-                _sym = None
-            if _sym is not None:
-                _pair_labels = [
-                    rf"${_sym}^{{{i + 1}}}\times{_sym}^{{{j + 1}}}$"
-                    for i in range(_n_z) for j in range(i, _n_z)
-                ]
-            else:
-                _pair_labels = [f"pair {k}" for k in range(n_pairs)]
-        else:
-            _pair_labels = [f"pair {k}" for k in range(n_pairs)]
+        # Robust residual: percentile of obs within the PPD per bin (empirical PPD CDF at obs),
+        # bounded in [0, 1] and immune to the cross-z zero-crossings that blow up a relative diff.
+        obs_rank = np.mean(cls_picked_raw < cls_obs_raw[None, :], axis=0)
 
         fig, axes = plt.subplots(4, 1, figsize=(14, 18), sharex=True, constrained_layout=True)
         ax = axes[0]
 
         # --- panel 0: log(|Cl|) or Cl with optional log y-scale ---
-        ax.fill_between(x, lo, hi, alpha=0.3, color="tab:orange", label=f"PPD [{lo_q:g}, {hi_q:g}]%")
+        for (blo, bhi), alpha, lab in zip(bands_log, band_alphas, band_labels):
+            ax.fill_between(x, blo, bhi, alpha=alpha, color="tab:orange", label=lab)
         ax.plot(x, mid, color="tab:orange", lw=1.5, label="PPD median")
         if n_traces > 0:
             ax.plot(x, cls_picked[: min(n_traces, cls_picked.shape[0])].T, color="tab:orange", alpha=0.2, lw=0.5)
@@ -1175,53 +1595,51 @@ class PosteriorPredictiveChecks:
                 ax.set_yscale("log")
 
         title = (
-            f"{self.obs_label}: Cls PPD — {self._setup_descriptor()}, "
-            f"noise={'on' if noise_cls is not None else 'off'}, log={apply_log}"
+            f"{self.obs_label}: rebinned Cls PPD — {self._setup_descriptor()}, scales={scales_name}\n"
+            f"samples={sample_set}, {sel_label}: {n_draws} draws, {n_unique} uniq, "
+            f"ESS={ess:.1f} (ESS$_\\theta$={ess_theta:.1f}/{n_theta} pts)"
         )
         ax.set(ylabel=r"$\log C_\ell$" if apply_log else r"$C_\ell$", title=title)
         ax.yaxis.set_ticklabels([])
         ax.legend(fontsize=8)
 
         # --- panel 1: ℓ·Cl ---
-        axes[1].fill_between(x, lo_lcl, hi_lcl, alpha=0.3, color="tab:orange")
+        for (blo, bhi), alpha in zip(bands_lcl, band_alphas):
+            axes[1].fill_between(x, blo, bhi, alpha=alpha, color="tab:orange")
         axes[1].plot(x, mid_lcl, color="tab:orange", lw=1.5)
         if n_traces > 0:
             axes[1].plot(
-                x, (ell_flat * cls_picked_raw[: min(n_traces, cls_picked_raw.shape[0])]).T,
-                color="tab:orange", alpha=0.2, lw=0.5,
+                x,
+                (ell_flat * cls_picked_raw[: min(n_traces, cls_picked_raw.shape[0])]).T,
+                color="tab:orange",
+                alpha=0.2,
+                lw=0.5,
             )
         axes[1].plot(x, cls_obs_lcl, color="k", lw=1.5)
-        if noise_cls is not None:
-            _noise_lcl = ell_flat * np.std(noise_cls, axis=0)
-            axes[1].plot(x, _noise_lcl, color="gray", lw=1.0, ls="--", label="noise rms")
-            axes[1].legend(fontsize=7)
         axes[1].set(ylabel=r"$\ell \, C_\ell$")
         axes[1].yaxis.set_ticklabels([])
 
-        # --- panel 2: relative PPD/obs difference (zoomed to ±1) ---
-        axes[2].fill_between(x, lo_rel, hi_rel, alpha=0.3, color="tab:orange")
-        axes[2].plot(x, mid_rel, color="tab:orange", lw=1.5)
-        if n_traces > 0:
-            axes[2].plot(
-                x, cls_rel_samples[: min(n_traces, cls_rel_samples.shape[0])].T,
-                color="tab:orange", alpha=0.2, lw=0.5,
-            )
-        axes[2].axhline(0, color="k", lw=1.5)
-        axes[2].set(
-            ylabel=r"$(C_\ell^\mathrm{PPD} - C_\ell^\mathrm{obs})\,/\,C_\ell^\mathrm{obs}$",
-            ylim=(-1, 1),
-        )
+        # --- panel 2: obs percentile within the PPD (robust residual) ---
+        # 0.5 = obs at the PPD median; near 0/1 = obs in the PPD tail. The shaded band marks the
+        # central 68% and the dashed lines the central 95%, so a point leaving them flags tension.
+        axes[2].axhspan(0.16, 0.84, color="tab:orange", alpha=0.12, label="central 68%")
+        axes[2].plot(x, obs_rank, color="tab:orange", lw=1.2)
+        axes[2].axhline(0.5, color="k", lw=1.0)
+        for q in (0.16, 0.84):
+            axes[2].axhline(q, color="tab:orange", lw=0.6, ls=":")
+        for q in (0.025, 0.975):
+            axes[2].axhline(q, color="tab:red", lw=0.8, ls="--")
+        axes[2].set(ylabel=r"obs percentile in PPD", ylim=(0, 1))
 
         # --- panel 3: significance / pull ---
         axes[3].plot(x, sig_obs, color="tab:orange", lw=1.0)
-        axes[3].axhline( 0, color="k",          lw=1.2)
-        axes[3].axhline( 2, color="tab:red",    lw=0.8, ls="--")
-        axes[3].axhline(-2, color="tab:red",    lw=0.8, ls="--")
-        axes[3].axhline( 1, color="tab:orange", lw=0.6, ls=":")
+        axes[3].axhline(0, color="k", lw=1.2)
+        axes[3].axhline(2, color="tab:red", lw=0.8, ls="--")
+        axes[3].axhline(-2, color="tab:red", lw=0.8, ls="--")
+        axes[3].axhline(1, color="tab:orange", lw=0.6, ls=":")
         axes[3].axhline(-1, color="tab:orange", lw=0.6, ls=":")
         axes[3].set(
-            ylabel=r"$(C_\ell^\mathrm{obs} - \mathrm{med}_\mathrm{PPD})\,/\,\sigma_\mathrm{PPD}$",
-            ylim=(-3, 3),
+            ylabel=r"$(C_\ell^\mathrm{obs} - \mathrm{med}_\mathrm{PPD})\,/\,\sigma_\mathrm{PPD}$", ylim=(-3, 3)
         )
 
         # --- segment boundaries ---
@@ -1232,11 +1650,12 @@ class PosteriorPredictiveChecks:
 
         axes[3].set_xlabel(x_label)
 
-        # --- pair labels via secondary top axis ---
+        # --- pair labels (tomographic pair + its ell range) via a secondary top axis ---
+        _tick_labels = [f"{lab}\n[{int(lo)}–{int(hi)}]" for lab, (lo, hi) in zip(_pair_labels, ell_ranges)]
         _ax_top = axes[0].twiny()
         _ax_top.set_xlim(0, n_dims)
         _ax_top.set_xticks([(k + 0.5) * n_ell_per_pair for k in range(n_pairs)])
-        _ax_top.set_xticklabels(_pair_labels, fontsize=8, color="dimgray")
+        _ax_top.set_xticklabels(_tick_labels, fontsize=8, color="dimgray")
         _ax_top.tick_params(axis="x", which="both", length=0, pad=2)
         _ax_top.spines["top"].set_visible(False)
         _ax_top.yaxis.set_visible(False)
@@ -1244,3 +1663,5 @@ class PosteriorPredictiveChecks:
         plot_file = os.path.join(self.out_dir, f"{self.obs_label}_{file_label}_marginals.png")
         LOGGER.info(f"Saving Cls marginals plot to {plot_file}")
         fig.savefig(plot_file, bbox_inches="tight", dpi=100)
+        plt.close(fig)
+        return plot_file
