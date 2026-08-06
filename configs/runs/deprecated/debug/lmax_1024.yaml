@@ -1,0 +1,59 @@
+# Run definitions for the posterior-tension analysis (v16 / rot_in_place).
+#
+# Everything run-related lives here: the trained runs (organized as data representation -> probe),
+# which comparisons to auto-build, and the mock observations to analyze. Method hyperparameters
+# live in configs/tension.yaml instead.
+#
+# Pass via --runs_config to both msi/apps/run_tension_chains.py and run_tension_values.py.
+
+flow_name: ensemble_flow
+
+# `steps` is the production checkpoint used everywhere. `convergence_steps` (optional, default [])
+# lists the additional training-step checkpoints at which the network was evaluated, used only for
+# the training-step convergence diagnostic plot (6b notebook); fill with steps that actually have a
+# `{flow_name}_{steps}/chain_*.npy`. Leave [] to skip the convergence plot for that run.
+runs:
+  maps:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/maps/lensing/v8_cls
+      steps: 300000
+      convergence_steps: [100000, 200000, 300000]
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/maps/clustering/v8_cls
+      steps: 600000
+      convergence_steps: [200000, 400000, 600000]
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/maps/combined/v8_cls
+      steps: 250000
+      convergence_steps: [50000, 100000, 150000, 200000, 250000]
+  cls:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/v35_lmax_1024
+      steps: 1000000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/clustering/v35_lmax_1024
+      steps: 1000000
+      convergence_steps: []
+    2x2pt:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/2x2pt/v35_lmax_1024
+      steps: 1000000
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/combined/v35_lmax_1024
+      steps: 1000000
+      convergence_steps: []
+
+comparisons:
+  probes: true # within each data representation, all probe pairs (e.g. cls: lensing vs clustering, ...)
+  data: true # for each probe present in both, the maps-vs-cls pair (run_1 = maps, run_2 = cls)
+
+obs_labels:
+  - { label: DESy3, lambdaCDM: false }
