@@ -56,7 +56,6 @@ from msfm.utils import logger
 from msi.utils import flow as flow_utils
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow
 
-
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("once", category=UserWarning)

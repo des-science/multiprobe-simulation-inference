@@ -8,7 +8,6 @@ Utils to run the MCMC algorithm to get the chain to be plotted as the parameter 
 import os
 import numpy as np
 
-import emcee
 from emcee import EnsembleSampler
 
 from msfm.utils import prior, parameters, logger
@@ -87,7 +86,7 @@ def run_emcee(
     # get MAP
     if print_MAP:
         MAP_params = chain[np.argmax(log_probs)]
-        LOGGER.info(f"MAP parameters: " + str({p: np.round(v, 3) for p, v in zip(params, MAP_params)}))
+        LOGGER.info("MAP parameters: " + str({p: np.round(v, 3) for p, v in zip(params, MAP_params)}))
 
     # save the result
     if out_dir is not None:
@@ -99,6 +98,6 @@ def run_emcee(
 
         LOGGER.info(f"Saved the MCMC chain to {chain_file}")
     else:
-        LOGGER.warning(f"Not saving the MCMC chain")
+        LOGGER.warning("Not saving the MCMC chain")
 
     return chain

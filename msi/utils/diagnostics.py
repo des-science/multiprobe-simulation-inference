@@ -399,13 +399,17 @@ def plot_tarp_check(
 
     if randoms_dist is None:
         assert not randoms_dependence, "randoms_dependence can only be used if randoms_dist is not None"
-        LOGGER.info(f"TARP random reference points: Using the default")
-        get_randoms = lambda shape: "random"
+        LOGGER.info("TARP random reference points: Using the default")
+
+        def get_randoms(shape):
+            return "random"  # tarp's own sentinel for "draw them yourself"
 
     elif randoms_dist == "constant":
         assert not randoms_dependence, "randoms_dependence can only be used if randoms_dist is not None"
-        LOGGER.info(f"TARP random reference points: Using a constant value")
-        get_randoms = lambda shape: np.ones(shape) * 0.5
+        LOGGER.info("TARP random reference points: Using a constant value")
+
+        def get_randoms(shape):
+            return np.ones(shape) * 0.5
 
     elif randoms_dist == "normal":
         LOGGER.info(f"TARP random reference points: Using a normal distribution, dependence = {randoms_dependence}")

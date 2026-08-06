@@ -113,8 +113,7 @@ def run_mock_contamination(flow, params, msfm_conf, flow_conf, fidu_label="fiduc
         linestyles = ["--"] * len(contam_chains)
 
     LOGGER.info(
-        f"Mock contamination: fiducial={'yes' if fidu_chain is not None else 'no'}, "
-        f"contaminated={contam_labels}"
+        f"Mock contamination: fiducial={'yes' if fidu_chain is not None else 'no'}, " f"contaminated={contam_labels}"
     )
 
     for use_S8, params_plot, ptag in _PARAM_VARIANTS:

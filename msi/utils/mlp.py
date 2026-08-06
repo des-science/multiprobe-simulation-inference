@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 

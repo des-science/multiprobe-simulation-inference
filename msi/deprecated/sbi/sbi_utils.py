@@ -94,6 +94,7 @@ def torch_in_grid_prior(cosmos, conf=None, params=None, device="cpu"):
 
     return in_prior
 
+
 def is_inside_hull(hull_points, query_points):
     hull_points = hull_points.unsqueeze(0)  # shape: (1, n_hull_points, 2)
     query_points = query_points.unsqueeze(1)  # shape: (n_query_points, 1, 2)
@@ -102,10 +103,15 @@ def is_inside_hull(hull_points, query_points):
     vectors_to_query_points = query_points - hull_points  # shape: (n_query_points, n_hull_points, 2)
 
     # Compute vectors from each hull point to the next hull point
-    vectors_to_next_hull_points = torch.roll(hull_points, shifts=-1, dims=1) - hull_points  # shape: (1, n_hull_points, 2)
+    vectors_to_next_hull_points = (
+        torch.roll(hull_points, shifts=-1, dims=1) - hull_points
+    )  # shape: (1, n_hull_points, 2)
 
     # Compute cross product of vectors
-    cross_products = vectors_to_query_points[..., 0] * vectors_to_next_hull_points[..., 1] - vectors_to_query_points[..., 1] * vectors_to_next_hull_points[..., 0]  # shape: (n_query_points, n_hull_points)
+    cross_products = (
+        vectors_to_query_points[..., 0] * vectors_to_next_hull_points[..., 1]
+        - vectors_to_query_points[..., 1] * vectors_to_next_hull_points[..., 0]
+    )  # shape: (n_query_points, n_hull_points)
 
     # Check if all cross products for each query point have the same sign
     is_inside = (cross_products >= 0).all(dim=1) | (cross_products <= 0).all(dim=1)  # shape: (n_query_points,)

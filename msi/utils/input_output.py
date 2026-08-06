@@ -5,7 +5,10 @@ Author: Arne Thomsen
 Utils to load MCMC chains to be plotted.
 """
 
-import os, h5py, yaml, glob
+import os
+
+import h5py
+import yaml
 import numpy as np
 
 from msfm.utils import logger
@@ -36,7 +39,7 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
     # build file name
     if preds_file is None:
         if n_steps is None:
-            preds_file = os.path.join(out_dir, f"preds.h5")
+            preds_file = os.path.join(out_dir, "preds.h5")
         elif file_label is None:
             preds_file = os.path.join(out_dir, f"preds_{n_steps}.h5")
         else:
@@ -61,7 +64,7 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
 
     LOGGER.info(f"Loading predictions from {preds_file}")
     with h5py.File(preds_file, "r") as f:
-        LOGGER.info(f"Array shapes:")
+        LOGGER.info("Array shapes:")
 
         out_dict = {}
         for h5_key in h5_keys:
@@ -120,13 +123,13 @@ def load_human_summaries(
             else:
                 fidu_keys += ["cls/binned", "cls/bin_edges"]
             if return_raw_cls:
-                LOGGER.warning(f"Returning the raw Cls, this is potentially slow")
+                LOGGER.warning("Returning the raw Cls, this is potentially slow")
                 fidu_keys += ["cls/raw"]
         elif summary_type == "peaks":
             fidu_keys += ["peaks"]
 
         with h5py.File(fidu_file, "r") as f:
-            LOGGER.info(f"Array shapes:")
+            LOGGER.info("Array shapes:")
 
             for h5_key in fidu_keys:
                 dict_key = f"fiducial/{h5_key}"

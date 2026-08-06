@@ -139,7 +139,7 @@ class PriorPredictiveMMD:
 
         # 4. Print results
         print(f"\n{'='*60}")
-        print(f"Prior Predictive Check - MMD Test Results")
+        print("Prior Predictive Check - MMD Test Results")
         print(f"{'='*60}")
         print(f"Observed MMD²: {t_obs:.6f}")
         print(f"Null Mean MMD²: {np.mean(null_stats):.6f}")
@@ -147,11 +147,11 @@ class PriorPredictiveMMD:
         print(f"P-value: {p_value:.4f}")
 
         if p_value < 0.001:
-            print(f"Result: REJECT H0 (p < 0.001) - Observation is NOT consistent with prior")
+            print("Result: REJECT H0 (p < 0.001) - Observation is NOT consistent with prior")
         elif p_value < 0.05:
-            print(f"Result: REJECT H0 (p < 0.05) - Observation is NOT consistent with prior")
+            print("Result: REJECT H0 (p < 0.05) - Observation is NOT consistent with prior")
         else:
-            print(f"Result: FAIL TO REJECT H0 - Observation is consistent with prior")
+            print("Result: FAIL TO REJECT H0 - Observation is consistent with prior")
         print(f"{'='*60}\n")
 
         # 5. Create visualization

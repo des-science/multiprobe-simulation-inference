@@ -33,9 +33,7 @@ from msi.utils import tensions
 
 LOGGER = logger.get_logger(__file__)
 
-DEFAULT_MSFM_CONFIG = (
-    "/users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
-)
+DEFAULT_MSFM_CONFIG = "/users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
 
 
 def setup():
@@ -110,7 +108,7 @@ def main():
     # appears in many combinations, so cache per-run data loads and emulators and only train the
     # (pair-specific) residual flow inside the loop. Keyed by pred_dir, which is unique per run.
     data_cache = {}  # pred_dir -> (preds, cosmos_raw, obs_dict, real_idx), row-aligned
-    emu_cache = {}   # (pred_dir, use_lambdaCDM) -> (emu, val_idx, cosmos_processed, params_processed)
+    emu_cache = {}  # (pred_dir, use_lambdaCDM) -> (emu, val_idx, cosmos_processed, params_processed)
 
     def get_data(run):
         key = run["pred_dir"]
@@ -201,9 +199,7 @@ def main():
                     chain_2, names_2 = tensions.process_cosmologies(raw_2, orig_params_2, use_lambdaCDM, use_S8)
                     samples_1 = MCSamples(samples=chain_1, names=names_1)
                     samples_2 = MCSamples(samples=chain_2, names=names_2)
-                    diff_uncorrelated = parameter_diff_chain(
-                        samples_1, samples_2, boost=uncorr_conf.get("boost", 10)
-                    )
+                    diff_uncorrelated = parameter_diff_chain(samples_1, samples_2, boost=uncorr_conf.get("boost", 10))
                     save_chain(
                         diff_uncorrelated.samples,
                         out_dirs,
@@ -229,8 +225,11 @@ def main():
                     # --- triangle plot of both difference chains ---
                     try:
                         plot_files = [
-                            os.path.join(odir, "unblinding_plots",
-                                         tensions.plot_filename(designation, obs_label, S8_string, lambdaCDM_string))
+                            os.path.join(
+                                odir,
+                                "unblinding_plots",
+                                tensions.plot_filename(designation, obs_label, S8_string, lambdaCDM_string),
+                            )
                             for odir in out_dirs
                         ]
                         tensions.plot_diff_chain(

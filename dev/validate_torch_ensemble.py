@@ -65,9 +65,7 @@ def check_sampler(n_walkers=512, n_steps=2000, n_burnin_steps=2000):
     # --- emcee reference, one chain per target ---
     emcee_samples = []
     for mu in means:
-        sampler = emcee.EnsembleSampler(
-            n_walkers, n_dim, lambda t: -neglogp(t - mu), vectorize=True
-        )
+        sampler = emcee.EnsembleSampler(n_walkers, n_dim, lambda t: -neglogp(t - mu), vectorize=True)
         state = sampler.run_mcmc(mu + 1e-3 * np.random.default_rng(2).normal(size=(n_walkers, n_dim)), n_burnin_steps)
         sampler.reset()
         sampler.run_mcmc(state, n_steps)
@@ -90,9 +88,13 @@ def check_sampler(n_walkers=512, n_steps=2000, n_burnin_steps=2000):
     for i, mu in enumerate(means):
         m_emcee, m_torch = emcee_samples[i].mean(0), chain[i].mean(0)
         c_emcee, c_torch = np.cov(emcee_samples[i].T), np.cov(chain[i].T)
-        print(f"[sampler] target {i}: |mean-truth| emcee={np.abs(m_emcee-mu).max():.3f} torch={np.abs(m_torch-mu).max():.3f}")
-        print(f"[sampler] target {i}: max|cov_torch-cov_true|={np.abs(c_torch-cov).max():.3f} "
-              f"max|cov_torch-cov_emcee|={np.abs(c_torch-c_emcee).max():.3f}")
+        print(
+            f"[sampler] target {i}: |mean-truth| emcee={np.abs(m_emcee-mu).max():.3f} torch={np.abs(m_torch-mu).max():.3f}"
+        )
+        print(
+            f"[sampler] target {i}: max|cov_torch-cov_true|={np.abs(c_torch-cov).max():.3f} "
+            f"max|cov_torch-cov_emcee|={np.abs(c_torch-c_emcee).max():.3f}"
+        )
         # both samplers target the same Gaussian; agreement to a few % of the scale is expected
         assert np.abs(m_torch - mu).max() < 0.1, "torch posterior mean off from truth"
         assert np.abs(c_torch - cov).max() < 0.3, "torch posterior covariance off from truth"

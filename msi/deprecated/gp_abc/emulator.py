@@ -5,7 +5,7 @@ Created March 2023
 Author: Arne Thomsen, Janis Fluri
 
 Implements a Gaussian Process regrossor, which is used as an emulator. For details, see Section F in
-https://arxiv.org/pdf/2107.09002.pdf. The GP used is from 
+https://arxiv.org/pdf/2107.09002.pdf. The GP used is from
 https://gpflow.github.io/GPflow/2.4.0/notebooks/advanced/varying_noise.html
 and allows for varying input noise.
 Note that this model is absent from

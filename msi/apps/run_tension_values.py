@@ -56,8 +56,12 @@ def main():
             for use_S8 in (False, True):
                 S8_string, lambdaCDM_string = tensions.string_suffixes(use_S8, use_lambdaCDM)
 
-                results = {"designation": designation, "obs_label": obs_label, "use_lambdaCDM": use_lambdaCDM,
-                           "use_S8": use_S8}
+                results = {
+                    "designation": designation,
+                    "obs_label": obs_label,
+                    "use_lambdaCDM": use_lambdaCDM,
+                    "use_S8": use_S8,
+                }
                 for kind in ("uncorrelated", "correlated"):
                     chain_file = os.path.join(
                         in_dir, tensions.diff_chain_filename(kind, designation, obs_label, S8_string, lambdaCDM_string)

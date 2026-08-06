@@ -221,7 +221,7 @@ class DenseEmulator(tf.keras.Model):
         early_stopping_callback=False,
         learning_rate_callback=False,
     ):
-        """Perform hyperparameter tuning using KerasTuner, see https://keras.io/guides/keras_tuner/getting_started/ 
+        """Perform hyperparameter tuning using KerasTuner, see https://keras.io/guides/keras_tuner/getting_started/
         for more information.
 
         Args:
@@ -239,7 +239,7 @@ class DenseEmulator(tf.keras.Model):
                 Defaults to False, then it is excluded.
 
         Returns:
-            dict: A dictionary containing the best (according to the validation loss) hyperparameters found during 
+            dict: A dictionary containing the best (according to the validation loss) hyperparameters found during
                 training.
         """
 
