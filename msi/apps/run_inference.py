@@ -179,6 +179,25 @@ def setup():
         "pass and write mcmc_samples.h5 for TARP. Requires --mcmc_backend=torch_batched (works for both "
         "a single LikelihoodFlow and an ensemble); otherwise warns and skips.",
     )
+    parser.add_argument(
+        "--sample_flow_members",
+        action="store_true",
+        help="Additionally sample each ensemble member's OWN posterior for the DES observation(s), saved as "
+        "chain_DESy3_flow_{m}.npy next to the ensemble chain. This is the ensemble-convergence / "
+        "out-of-distribution pre-unblinding test: the members agree on data from the training distribution, "
+        "so disagreement on the real data means the summary sits outside it. The ensemble chains are NOT "
+        "affected -- unlike the mcmc.method='individual' + mcmc.store_individual_chains config pair, which "
+        "also replaces every production chain with a pooled-mixture one. Needs --n_flows>1, --include_des "
+        "and --mcmc_backend=torch_batched; otherwise warns and skips.",
+    )
+    parser.add_argument(
+        "--flow_member_obs",
+        nargs="+",
+        default=["DESy3"],
+        help="Observation labels for --sample_flow_members. Defaults to the primary DESy3 data vector; the "
+        "systematics variants (DESy3_no_sys, DESy3_no_psi_rot, ...) are separate observations and have to "
+        "be named to be included.",
+    )
     observations.add_obs_args(parser)
     return parser.parse_args()
 
@@ -344,6 +363,23 @@ def main():
         LOGGER.info(f"[timing] all MCMC chains ({len(obs_dict)} observations): {LOGGER.timer.elapsed('mcmc_total')}")
     except Exception as e:
         print(f"ERROR: run_mcmc failed ({type(e).__name__}: {e})")
+
+    # per-member DES chains for the ensemble-convergence test (independent of the pooled chains above)
+    if args.sample_flow_members:
+        try:
+            LOGGER.timer.start("flow_members")
+            observations.run_member_mcmc(
+                flow,
+                obs_dict,
+                n_walkers=mcmc_conf.get("n_walkers", 1024),
+                n_steps=mcmc_conf.get("n_steps", 1000),
+                n_burnin_steps=mcmc_conf.get("n_burnin_steps", 1000),
+                obs_labels=args.flow_member_obs,
+                backend=args.mcmc_backend,
+            )
+            LOGGER.info(f"[timing] per-member DES chains: {LOGGER.timer.elapsed('flow_members')}")
+        except Exception as e:
+            print(f"ERROR: per-member sampling stage failed ({type(e).__name__}: {e})")
 
     # mock-contamination comparison (uses the per-mock chains from run_mcmc; independent of --sample_posterior)
     if flow_conf.get("diagnostics", {}).get("tests", {}).get("mock_contamination", False):

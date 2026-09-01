@@ -45,10 +45,15 @@ class _EnsembleLogProb(torch.nn.Module):
 
 def _pool_chains(member_chains, weights=None, member_log_probs=None, rng=None):
     """Pool per-member posterior chains into one chain by drawing from the mixture sum_i w_i p_i(theta|x):
-    member i contributes a fraction w_i of the output rows, selected at random from its own chain. With the
-    ensemble weights this reproduces the (weighted) likelihood-level ensemble posterior -- exact under
-    uniform weights, where it is an even split. The output keeps the same number of samples as one member,
-    so it is shape-compatible with the 'ensemble' path's chain.
+    member i contributes a fraction w_i of the output rows, selected at random from its own chain. The output
+    keeps the same number of samples as one member, so it is shape-compatible with the 'ensemble' path's chain.
+
+    NOTE this is an approximation of the 'ensemble' path, not an equivalent of it, uniform weights included.
+    Pooling normalized member posteriors gives sum_i w_i L_i(theta) pi(theta) / Z_i, while the ensemble
+    likelihood gives (sum_i w_i L_i(theta)) pi(theta) / Z -- the same only when the members' evidences Z_i
+    coincide, i.e. when they fit the observation equally well. They diverge exactly where the members
+    disagree, which is why 'individual' must not be switched on to obtain per-member chains: use
+    run_inference --sample_flow_members, which leaves the production chains on the ensemble definition.
 
     Two layouts are supported, distinguished by ndim:
       - single observation:   chain (n_samples, n_params),        log_probs (n_samples,)

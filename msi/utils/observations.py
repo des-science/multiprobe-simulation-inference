@@ -2,6 +2,10 @@ import os
 
 import numpy as np
 
+from msfm.utils import logger
+
+LOGGER = logger.get_logger(__file__)
+
 # Restricted-w0 DES variant: w0 stays a free, sampled parameter but its flat prior is tightened to the
 # non-phantom half, w0 > -1 (lower bound raised to -1, upper kept at the config value). Run automatically
 # for every DES observation as a third chain alongside the wCDM and lambdaCDM (w0 = -1) chains.
@@ -37,6 +41,50 @@ def _ref_prior_kwargs(flow):
     fiducial = flow.conf["analysis"]["fiducial"]
     fixed = {p: fiducial[p] for p in ("bary_Mc", "bary_nu") if p in flow.params}
     return {"gaussian_priors": REF_GAUSSIAN_PRIORS, "fixed_params": fixed}
+
+
+def des_variants(flow):
+    """The DES posterior variants a run samples, as one ordered table.
+
+    Each entry is ``(suffix, model_kwargs, variant_label)``. ``suffix`` names the chain file, and is
+    what the batched path appends itself; ``variant_label`` is the only part the emcee path has to be
+    told, because ``LikelihoodFlow.sample_posterior`` derives the lambdaCDM / w0gt-1 / nla suffix
+    from the kwargs itself, in this same order. The first entry is the unrestricted wCDM chain.
+
+    One table for both sampler backends and for the per-member stage, so a variant cannot exist on
+    one path and not another -- it used to be spelled out once per backend.
+    """
+    params = getattr(flow, "params", [])
+    # bta is not always sampled (v17 fixed it), and `nla` is a no-op without it -- so the suffix must
+    # drop `_nla` too, or the batched path would name a file the emcee path spells differently.
+    nla = NLA_SUFFIX if "bta" in params else ""
+
+    variants = [
+        ("", {}, None),
+        ("_lambdaCDM", {"lambdaCDM": True}, None),
+        (W0_SUFFIX, {"w0_prior": W0_GT_M1_PRIOR}, None),
+    ]
+    if "bta" in params:
+        variants.append((f"{W0_SUFFIX}{nla}", {"w0_prior": W0_GT_M1_PRIOR, "nla": True}, None))
+
+    # Extended-vector flows additionally get the reference-prior (Gower-Street-family) chains: the
+    # w0 > -1 + NLA and lambdaCDM + NLA models with near-delta ns/Obh2/H0 Gaussians and baryons fixed
+    # at the fiducial, matching the analysis choices of the DES Y3 SBI reference papers.
+    ref_kwargs = _ref_prior_kwargs(flow)
+    if ref_kwargs is not None:
+        variants += [
+            (
+                f"{W0_SUFFIX}{nla}{REF_PRIOR_SUFFIX}",
+                {"w0_prior": W0_GT_M1_PRIOR, "nla": True, **ref_kwargs},
+                REF_PRIOR_SUFFIX,
+            ),
+            (
+                f"_lambdaCDM{nla}{REF_PRIOR_SUFFIX}",
+                {"lambdaCDM": True, "nla": True, **ref_kwargs},
+                REF_PRIOR_SUFFIX,
+            ),
+        ]
+    return variants
 
 
 def add_obs_args(parser, mock_labels_default=None):
@@ -170,8 +218,9 @@ def _can_batch(flow, obs_dict, backend):
 
 
 def _save_member_chains(flow, keys, member_chains, member_log_probs, variant_suffix=""):
-    """Persist each ensemble member's own batched chain alongside the pooled one (store_individual_chains).
-    member_chains[i] is that member's (n_obs, n_samples, n_params) array, keyed by observation order."""
+    """Persist each ensemble member's own batched chain, for store_individual_chains and for
+    run_member_mcmc. member_chains[i] is that member's (n_obs, n_samples, n_params) array, keyed by
+    observation order."""
     if flow.model_dir is None:
         return
     for m, (chains_m, lps_m) in enumerate(zip(member_chains, member_log_probs)):
@@ -227,120 +276,89 @@ def _run_mcmc_batched(
                 chains[i], obs_point=obs["cosmo"], obs_label=key, label=key, with_des_chain=False, density=True
             )
 
-    # DES observations additionally get a lambdaCDM (w0 = -1) posterior, like the emcee path; batch them
-    # together so this doesn't degenerate into slow one-at-a-time chains
+    # DES observations additionally get every restricted-model variant in the des_variants table
+    # (lambdaCDM, w0 > -1, +NLA, reference priors). Each variant batches all DES observations
+    # together, so this doesn't degenerate into slow one-at-a-time chains.
     des_keys = [k for k in keys if "des" in k.lower()]
     if des_keys:
-        print(f"\nGPU-batched LambdaCDM sampling of {len(des_keys)} DES observation(s) (method={method})")
         x_des = np.concatenate([np.atleast_2d(obs_dict[k]["pred"]) for k in des_keys], axis=0)
-        result_l = flow.sample_posterior_batched(
-            x_des,
-            n_walkers=n_walkers,
-            n_steps=n_steps,
-            n_burnin_steps=n_burnin_steps,
-            lambdaCDM=True,
-            use_validation_weights=use_validation_weights,
-            method=method,
-            **({"return_members": True} if want_members else {}),
-        )
-        if want_members:
-            chains_l, log_probs_l, member_chains_l, member_log_probs_l = result_l
-            _save_member_chains(flow, des_keys, member_chains_l, member_log_probs_l, variant_suffix="_lambdaCDM")
-        else:
-            chains_l, log_probs_l = result_l
-        for i, key in enumerate(des_keys):
-            if flow.model_dir is not None:
-                np.save(os.path.join(flow.model_dir, f"chain_{key}_lambdaCDM.npy"), chains_l[i])
-                np.save(os.path.join(flow.model_dir, f"log_probs_{key}_lambdaCDM.npy"), log_probs_l[i])
-
-        # DES observations additionally get a restricted-w0 (w0 > -1) posterior, with w0 still a free
-        # sampled parameter (full-dimensional chain), batched together like the lambdaCDM block above
-        print(
-            f"\nGPU-batched restricted-w0 (w0 > -1) sampling of {len(des_keys)} DES observation(s) (method={method})"
-        )
-        result_w = flow.sample_posterior_batched(
-            x_des,
-            n_walkers=n_walkers,
-            n_steps=n_steps,
-            n_burnin_steps=n_burnin_steps,
-            w0_prior=W0_GT_M1_PRIOR,
-            use_validation_weights=use_validation_weights,
-            method=method,
-            **({"return_members": True} if want_members else {}),
-        )
-        if want_members:
-            chains_w, log_probs_w, member_chains_w, member_log_probs_w = result_w
-            _save_member_chains(flow, des_keys, member_chains_w, member_log_probs_w, variant_suffix=W0_SUFFIX)
-        else:
-            chains_w, log_probs_w = result_w
-        for i, key in enumerate(des_keys):
-            if flow.model_dir is not None:
-                np.save(os.path.join(flow.model_dir, f"chain_{key}{W0_SUFFIX}.npy"), chains_w[i])
-                np.save(os.path.join(flow.model_dir, f"log_probs_{key}{W0_SUFFIX}.npy"), log_probs_w[i])
-
-        # DES observations of an IA probe additionally get the combined w0 > -1 AND NLA (bta = 0)
-        # posterior: the closest analogue to a standard DES-Y3-like model. bta is dropped from the
-        # sampled space, so this chain is in the reduced (bta-dropped) parameter ordering.
-        if "bta" in getattr(flow, "params", []):
-            suffix_wn = f"{W0_SUFFIX}{NLA_SUFFIX}"
-            print(
-                f"\nGPU-batched w0 > -1 + NLA (bta = 0) sampling of {len(des_keys)} "
-                f"DES observation(s) (method={method})"
-            )
-            result_wn = flow.sample_posterior_batched(
+        for suffix, model_kwargs, _ in des_variants(flow)[1:]:
+            print(f"\nGPU-batched sampling of variant '{suffix}' for {len(des_keys)} DES obs (method={method})")
+            result_v = flow.sample_posterior_batched(
                 x_des,
                 n_walkers=n_walkers,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
-                w0_prior=W0_GT_M1_PRIOR,
-                nla=True,
                 use_validation_weights=use_validation_weights,
                 method=method,
+                **model_kwargs,
                 **({"return_members": True} if want_members else {}),
             )
             if want_members:
-                chains_wn, log_probs_wn, member_chains_wn, member_log_probs_wn = result_wn
-                _save_member_chains(flow, des_keys, member_chains_wn, member_log_probs_wn, variant_suffix=suffix_wn)
+                chains_v, log_probs_v, member_chains_v, member_log_probs_v = result_v
+                _save_member_chains(flow, des_keys, member_chains_v, member_log_probs_v, variant_suffix=suffix)
             else:
-                chains_wn, log_probs_wn = result_wn
+                chains_v, log_probs_v = result_v
             for i, key in enumerate(des_keys):
                 if flow.model_dir is not None:
-                    np.save(os.path.join(flow.model_dir, f"chain_{key}{suffix_wn}.npy"), chains_wn[i])
-                    np.save(os.path.join(flow.model_dir, f"log_probs_{key}{suffix_wn}.npy"), log_probs_wn[i])
+                    np.save(os.path.join(flow.model_dir, f"chain_{key}{suffix}.npy"), chains_v[i])
+                    np.save(os.path.join(flow.model_dir, f"log_probs_{key}{suffix}.npy"), log_probs_v[i])
 
-        # Extended-vector flows additionally get the reference-prior (Gower-Street-family) chains: the
-        # w0 > -1 + NLA and lambdaCDM + NLA models with near-delta ns/Obh2/H0 Gaussians and baryons fixed
-        # at the fiducial, matching the analysis choices of the DES Y3 SBI reference papers.
-        ref_kwargs = _ref_prior_kwargs(flow)
-        if ref_kwargs is not None:
-            for model_kwargs, suffix_ref in (
-                ({"w0_prior": W0_GT_M1_PRIOR, "nla": True}, f"{W0_SUFFIX}{NLA_SUFFIX}{REF_PRIOR_SUFFIX}"),
-                ({"lambdaCDM": True, "nla": True}, f"_lambdaCDM{NLA_SUFFIX}{REF_PRIOR_SUFFIX}"),
-            ):
-                print(
-                    f"\nGPU-batched reference-prior sampling ({suffix_ref}) of {len(des_keys)} "
-                    f"DES observation(s) (method={method})"
-                )
-                result_r = flow.sample_posterior_batched(
-                    x_des,
-                    n_walkers=n_walkers,
-                    n_steps=n_steps,
-                    n_burnin_steps=n_burnin_steps,
-                    use_validation_weights=use_validation_weights,
-                    method=method,
-                    **model_kwargs,
-                    **ref_kwargs,
-                    **({"return_members": True} if want_members else {}),
-                )
-                if want_members:
-                    chains_r, log_probs_r, member_chains_r, member_log_probs_r = result_r
-                    _save_member_chains(flow, des_keys, member_chains_r, member_log_probs_r, variant_suffix=suffix_ref)
-                else:
-                    chains_r, log_probs_r = result_r
-                for i, key in enumerate(des_keys):
-                    if flow.model_dir is not None:
-                        np.save(os.path.join(flow.model_dir, f"chain_{key}{suffix_ref}.npy"), chains_r[i])
-                        np.save(os.path.join(flow.model_dir, f"log_probs_{key}{suffix_ref}.npy"), log_probs_r[i])
+
+def run_member_mcmc(
+    flow,
+    obs_dict,
+    n_walkers=1024,
+    n_steps=1000,
+    n_burnin_steps=1000,
+    obs_labels=("DESy3",),
+    backend="torch_batched",
+):
+    """Sample each ensemble member's OWN posterior for the DES observation(s).
+
+    This is the ensemble-convergence test of the blinding strategy: the members agree by
+    construction on data drawn from the training distribution, so a disagreement on the real data is
+    evidence that the summary lies outside it (the flows do not extrapolate).
+
+    Writes ``chain_{obs}_flow_{m}.npy`` and ``log_probs_{obs}_flow_{m}.npy`` beside the ensemble's
+    own ``chain_{obs}.npy`` and touches nothing else. In particular the pooled chain that
+    ``method="individual"`` returns is **discarded rather than saved**, so the production chains keep
+    the ensemble-likelihood definition -- which is the whole reason this is a separate stage instead
+    of the ``mcmc.method``/``store_individual_chains`` config pair.
+
+    Only the unrestricted wCDM model is sampled, i.e. no model kwargs, which is the baseline entry
+    of ``des_variants``: the restricted-prior variants answer a different question, and each one
+    would multiply the cost by ``n_flows``.
+    """
+    if not hasattr(flow, "flows"):
+        LOGGER.warning("--sample_flow_members needs a LikelihoodFlowEnsemble (--n_flows>1); skipping.")
+        return
+    # The emcee store_individual_chains path saves into flow_{m}/ and writes no member log_probs, so
+    # it is not an equivalent fallback; the batched path is the one supported layout.
+    if backend != "torch_batched" or not hasattr(flow, "sample_posterior_batched"):
+        LOGGER.warning("--sample_flow_members requires --mcmc_backend=torch_batched; skipping.")
+        return
+
+    keys = [k for k in obs_labels if k in obs_dict]
+    for missing in [k for k in obs_labels if k not in obs_dict]:
+        LOGGER.warning(f"--sample_flow_members: '{missing}' is not among the sampled observations; skipping it.")
+    if not keys:
+        LOGGER.warning("--sample_flow_members: no requested observation present (need --include_des); skipping.")
+        return
+
+    x_batch = np.concatenate([np.atleast_2d(obs_dict[k]["pred"]) for k in keys], axis=0)
+    print(f"\nGPU-batched per-member sampling of {len(keys)} observation(s) over {flow.n_flows} flows")
+    _, _, member_chains, member_log_probs = flow.sample_posterior_batched(
+        x_batch,
+        n_walkers=n_walkers,
+        n_steps=n_steps,
+        n_burnin_steps=n_burnin_steps,
+        use_validation_weights=False,  # a member posterior is its own, unweighted
+        method="individual",
+        return_members=True,
+    )
+    _save_member_chains(flow, keys, member_chains, member_log_probs)
+    LOGGER.info(f"Saved {flow.n_flows} per-member chains for {keys} in {flow.model_dir}")
 
 
 def run_mcmc(
@@ -392,58 +410,19 @@ def run_mcmc(
                 density=True,
             )
         if "des" in key.lower():
-            print(f"\nStarting LambdaCDM run for {key}")
-            flow.sample_posterior(
-                obs["pred"],
-                label=key,
-                n_walkers=n_walkers,
-                n_steps=n_steps,
-                n_burnin_steps=n_burnin_steps,
-                lambdaCDM=True,
-                method=method,
-                use_validation_weights=use_validation_weights,
-                **extra,
-            )
-            print(f"\nStarting restricted-w0 (w0 > -1) run for {key}")
-            flow.sample_posterior(
-                obs["pred"],
-                label=key,
-                n_walkers=n_walkers,
-                n_steps=n_steps,
-                n_burnin_steps=n_burnin_steps,
-                w0_prior=W0_GT_M1_PRIOR,
-                method=method,
-                use_validation_weights=use_validation_weights,
-                **extra,
-            )
-            if "bta" in getattr(flow, "params", []):
-                print(f"\nStarting w0 > -1 + NLA (bta = 0) run for {key}")
+            # same variant table as the batched path; sample_posterior derives the matching filename
+            # suffix from model_kwargs itself, so only variant_label has to be passed through
+            for suffix, model_kwargs, variant_label in des_variants(flow)[1:]:
+                print(f"\nStarting variant '{suffix}' run for {key}")
                 flow.sample_posterior(
                     obs["pred"],
                     label=key,
                     n_walkers=n_walkers,
                     n_steps=n_steps,
                     n_burnin_steps=n_burnin_steps,
-                    w0_prior=W0_GT_M1_PRIOR,
-                    nla=True,
+                    variant_label=variant_label,
                     method=method,
                     use_validation_weights=use_validation_weights,
+                    **model_kwargs,
                     **extra,
                 )
-            ref_kwargs = _ref_prior_kwargs(flow)
-            if ref_kwargs is not None:
-                for model_kwargs in ({"w0_prior": W0_GT_M1_PRIOR, "nla": True}, {"lambdaCDM": True, "nla": True}):
-                    print(f"\nStarting reference-prior run ({model_kwargs}) for {key}")
-                    flow.sample_posterior(
-                        obs["pred"],
-                        label=key,
-                        n_walkers=n_walkers,
-                        n_steps=n_steps,
-                        n_burnin_steps=n_burnin_steps,
-                        variant_label=REF_PRIOR_SUFFIX,
-                        method=method,
-                        use_validation_weights=use_validation_weights,
-                        **model_kwargs,
-                        **ref_kwargs,
-                        **extra,
-                    )

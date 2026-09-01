@@ -15,6 +15,7 @@ Run bookkeeping is driven by a runs config (e.g. ``configs/runs/v17/baseline/t2_
 top-level ``flow_name``.
 """
 
+import glob
 import os
 
 import numpy as np
@@ -222,24 +223,39 @@ def plot_comparison(
 # ----------------------------------------------------------------------------------------
 # training-step convergence (chains shifted jointly with a single MAP anchor)
 # ----------------------------------------------------------------------------------------
+def _anchor(run, obs_label, test_params, msfm_conf, steps=None):
+    """The blinding offset that lands one reference chain's MAP on the fiducial.
+
+    Returns ``(offset, fidu)`` with ``offset = fiducial - MAP``, so any number of chains are blinded
+    by ``chain + offset``. **The offset must never be printed, logged or written out while the
+    analysis is blinded**: it is the blinded quantity itself, since the MAP is recoverable from it as
+    ``fiducial - offset``. Use the shifted chains; do not report the shift.
+
+    Factored out because every multi-chain overlay here -- across training steps, across ensemble
+    members -- has to use ONE anchor for the whole figure: a per-chain anchor would move each chain
+    onto the fiducial and erase the differences the figure exists to show.
+    """
+    ref_chain, ref_log_probs = _load_chain_slice(run, obs_label, test_params, steps=steps)
+    fidu = parameters.get_fiducials(test_params, msfm_conf)
+    return fidu - plotting.find_MAP(ref_chain, ref_log_probs, test_params, test_params), fidu
+
+
 def load_shifted_chain_at_steps(run, obs_label, test_params, steps_list, msfm_conf, ref_steps=None):
     """Load the chain at each training step, all shifted by ONE common (reference-step) MAP.
 
     Comparing posteriors across training steps is a convergence diagnostic, not a physically
-    meaningful re-blinding, so a single ``map_shift`` (from ``ref_steps``, default the largest step)
-    is applied to every step. Returns ``(chains_by_step, fidu)``.
+    meaningful re-blinding, so a single anchor (from ``ref_steps``, default the largest step) is
+    applied to every step. Returns ``(chains_by_step, fidu)``.
     """
     if ref_steps is None:
         ref_steps = max(steps_list)
 
-    ref_chain, ref_log_probs = _load_chain_slice(run, obs_label, test_params, steps=ref_steps)
-    map_shift = plotting.find_MAP(ref_chain, ref_log_probs, test_params, test_params)
-    fidu = parameters.get_fiducials(test_params, msfm_conf)
+    offset, fidu = _anchor(run, obs_label, test_params, msfm_conf, steps=ref_steps)
 
     chains = {}
     for steps in steps_list:
         chain, _ = _load_chain_slice(run, obs_label, test_params, steps=steps)
-        chains[steps] = chain - map_shift + fidu
+        chains[steps] = chain + offset
     return chains, fidu
 
 
@@ -278,5 +294,101 @@ def plot_convergence(run, obs_label, test_params, steps_list, msfm_conf, plot_di
         os.makedirs(agg_dir, exist_ok=True)
         tag = f"{run['data']}_{run['probe']}"
         agg_file = os.path.join(agg_dir, f"6_convergence_{tag}_{'_'.join(test_params)}_{obs_label}.png")
+        tri.fig.savefig(agg_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
+        LOGGER.info(f"saved {agg_file}")
+
+
+# ----------------------------------------------------------------------------------------
+# flow-ensemble convergence (per-member chains, shifted jointly with a single MAP anchor)
+# ----------------------------------------------------------------------------------------
+def find_member_chains(run, obs_label, steps=None):
+    """Ensemble member indices that have a per-member chain on disk, ascending.
+
+    Written by ``msi.apps.run_inference --sample_flow_members`` as ``chain_{obs}_flow_{m}.npy`` in
+    the ensemble's own flow directory. Empty if that stage has not been run for this observation.
+    """
+    prefix = os.path.join(flow_dir(run, steps), f"chain_{obs_label}_flow_")
+    members = []
+    for path in glob.glob(f"{prefix}*.npy"):
+        tail = path[len(prefix) : -len(".npy")]
+        if tail.isdigit():
+            members.append(int(tail))
+    return sorted(members)
+
+
+def load_shifted_member_chains(run, obs_label, test_params, msfm_conf, steps=None):
+    """Every ensemble member's chain plus the ensemble's own, ALL shifted by one common anchor.
+
+    The anchor is the MAP of the ensemble chain, i.e. the production posterior. That blinds the
+    absolute location while leaving every member-to-member offset exactly as inferred, which is the
+    quantity this test is about: the members agree by construction on data drawn from the training
+    distribution, so a visible spread on the real data says the summary lies outside it.
+
+    Returns ``(chains_by_member, ensemble_chain, fidu)``, with ``chains_by_member`` empty when
+    ``--sample_flow_members`` has not been run.
+    """
+    offset, fidu = _anchor(run, obs_label, test_params, msfm_conf, steps=steps)
+    ensemble, _ = _load_chain_slice(run, obs_label, test_params, steps=steps)
+
+    chains = {}
+    for m in find_member_chains(run, obs_label, steps=steps):
+        chain, _ = _load_chain_slice(run, f"{obs_label}_flow_{m}", test_params, steps=steps)
+        chains[m] = chain + offset
+    return chains, ensemble + offset, fidu
+
+
+def plot_members(run, obs_label, test_params, msfm_conf, plot_dir=None, agg_dir=None, steps=None):
+    """Blinded triangle overlay of each ensemble member's posterior against the ensemble's own."""
+    import matplotlib.pyplot as plt
+    from trianglechain import TriangleChain
+
+    chains, ensemble, fidu = load_shifted_member_chains(run, obs_label, test_params, msfm_conf, steps=steps)
+    if not chains:
+        LOGGER.warning(
+            f"no per-member chains for {run['data']}/{run['probe']} {obs_label}; "
+            "run run_inference.py with --sample_flow_members first"
+        )
+        return
+
+    cmap = plt.cm.viridis_r
+    colors = [cmap(i / max(len(chains) - 1, 1)) for i in range(len(chains))]
+
+    tri = TriangleChain(
+        names=test_params,
+        labels=[plotting.param_label_dict[p] for p in test_params],
+        ranges=dict(zip(test_params, parameters.get_prior_intervals(test_params, msfm_conf))),
+        fill=False,
+        show_legend=True,
+        axlines_kwargs={"linestyle": "--"},
+        progress_bar=False,
+    )
+    # ensemble first so it renders behind the members it is the reference for
+    tri.contour_cl(ensemble, names=test_params, label="ensemble", color="k")
+    for (m, chain), color in zip(chains.items(), colors):
+        tri.contour_cl(chain, names=test_params, label=f"flow {m}", color=color)
+    tri.axlines(fidu[np.newaxis], names=test_params, color="k", label="fiducial")
+
+    # per-member FoM, which is the number that says whether a wider member is also a shifted one
+    title = [f"{run['data']}/{run['probe']} {obs_label}"]
+    for i, p1 in enumerate(test_params):
+        for j, p2 in enumerate(test_params):
+            if i > j:
+                foms = [f"{int(diagnostics.FoM_from_chain(c, test_params, p1, p2))}" for c in chains.values()]
+                title.append(f"FoM({p1},{p2}) per flow = {', '.join(foms)}")
+    tri.fig.suptitle("\n".join(title), fontsize=9)
+
+    if plot_dir is None:
+        plot_dir = unblinding_plot_dir(run)
+    fname = f"6_flow_members_{'_'.join(test_params)}_{obs_label}.png"
+    os.makedirs(plot_dir, exist_ok=True)
+    out_file = os.path.join(plot_dir, fname)
+    tri.fig.savefig(out_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
+    LOGGER.info(f"saved {out_file}")
+
+    # data_type/probe-qualified copy in the flat aggregation dir (avoids collisions across runs)
+    if agg_dir is not None:
+        os.makedirs(agg_dir, exist_ok=True)
+        tag = f"{run['data']}_{run['probe']}"
+        agg_file = os.path.join(agg_dir, f"6_flow_members_{tag}_{'_'.join(test_params)}_{obs_label}.png")
         tri.fig.savefig(agg_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         LOGGER.info(f"saved {agg_file}")
