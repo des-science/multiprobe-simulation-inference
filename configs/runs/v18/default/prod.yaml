@@ -1,0 +1,174 @@
+# Production run set for v18/default: the two neural architectures the paper contrasts, on all
+# three probes, plus the Cls two-point baseline and a ConvNeXt-GCNN comparison track. Pass via --runs_config to
+# msi/apps/run_tension_chains.py, run_tension_values.py and run_ppc.py.
+#
+# Supersedes v1.yaml, which points at the single bench_v7 `full` ConvNeXt GCNN under
+# maps/<probe>/v1. That tree is untouched and still loads; this file is the architecture-aware
+# successor and does not overwrite any of it.
+#
+# ---------------------------------------------------------------------------------------------
+# THE NAMING SCHEME -- and why the architecture is a DATA-REPRESENTATION directory rather than a
+# run name. This is a code constraint, not taste:
+#
+#     runs/v18/default/<representation>/<probe>/v1
+#
+#   maps_gcnn/         classic-block DeepSphere GCNN  (configs/maps/prod/deepsphere/<probe>/)
+#   maps_transformer/  nested hierarchical transformer (configs/maps/prod/transformer/<probe>/)
+#   maps_convnext/     staged all-ConvNeXt GCNN, comparison track only
+#                                     (configs/maps/prod/deepsphere_convnext/<probe>/)
+#   cls/               the two-point baseline, unchanged from v1.yaml
+#
+# msi.utils.tensions.get_identifier() derives a run's identity from the TWO DIRECTORY LEVELS ABOVE
+# the run dir -- `parts[-3]_parts[-2]` -- and never from the run dir's own name. So
+# maps/lensing/gcnn and maps/lensing/transformer would BOTH be `maps_lensing`, every designation
+# would collide, and diff_chain_*_maps_lensing_vs_cls_lensing_*.npy would be written twice into the
+# same cls flow dir, the second silently overwriting the first. Putting the architecture one level
+# up gives `maps_gcnn_lensing` / `maps_transformer_lensing` / `cls_lensing`, all distinct, and the
+# designations still read exactly like v1.yaml's. Do not "tidy" this into maps/<probe>/<arch>.
+#
+# ---------------------------------------------------------------------------------------------
+# !! SIX RUNS DO NOT EXIST YET -- see the `steps: PENDING` entries. !!
+# Only combined is populated, in all three maps representations, as copies of the measured
+# bench_v12 arms (classic_nodrop -> maps_gcnn, transformer -> maps_transformer,
+# staged_nodrop -> maps_convnext), which all remain in place under maps/combined/ under their
+# original names. Lensing and clustering have to be trained for each (6 runs; jobs 3293619/20,
+# 3293621/2, 3293798/9). Because they are `n_steps: auto` under a wall-clock budget, the final
+# checkpoint is an OUTPUT of the run and is not knowable in advance: fill each `steps` from the
+# run's own throughput.json / the highest ensemble_flow_<steps> directory once it lands.
+#
+# A representation set to Null is dropped, so this one file slices three ways without editing the
+# comparisons: `cls: Null` leaves the GCNN-vs-transformer contrast alone, and nulling either maps
+# entry reproduces a v1.yaml-shaped maps-vs-Cls analysis.
+
+flow_name: ensemble_flow
+
+# Scale cut the networks were trained with (defines the rebinned-Cls cache used by the Cls-space
+# PPD in run_ppc.py). Tied to the runs, so it lives here, not in ppc.yaml.
+scales_config: /users/athomsen/dlss/repos/y3-deep-lss/configs/scales/8wl,32gc.yaml
+
+# `steps` is the production checkpoint used everywhere. `convergence_steps` lists additional
+# checkpoints that actually have a `{flow_name}_{steps}/chain_*.npy`, used only for the
+# training-step convergence diagnostic plot; [] skips it for that run.
+runs:
+
+  # --- Classic-block DeepSphere GCNN --------------------------------------------------------
+  # bench_v12 `classic_nodrop`: the best-performing GCNN measured, either block family. Drops the
+  # ConvNeXt block, DropPath and residual attention versus the bench_v7 `full` stack behind
+  # v1.yaml. Measured on COMBINED ONLY -- lensing and clustering are that result transplanted.
+  maps_gcnn:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/lensing/v1
+      steps: PENDING  # run not trained yet
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/clustering/v1
+      steps: PENDING  # run not trained yet
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/combined/v1
+      steps: 229900  # copy of maps/combined/bench_v12_classic_nodrop (jobs 3242160/1)
+      convergence_steps: [176600]  # the job-1 checkpoint, already has its own flow
+
+  # --- Nested hierarchical local-window transformer -----------------------------------------
+  # bench_v12 `transformer`: head dropout ON (0.1), body DropPath off. Note the head-dropout call
+  # is the OPPOSITE of the GCNN's on the same shared regression head -- both measured, both kept.
+  maps_transformer:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/lensing/v1
+      steps: PENDING  # run not trained yet
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/clustering/v1
+      steps: PENDING  # run not trained yet
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/combined/v1
+      steps: 365900  # copy of maps/combined/bench_v12_transformer (jobs 3242166/7)
+      convergence_steps: [182500]  # the job-1 checkpoint, already has its own flow
+
+  # --- Staged all-ConvNeXt DeepSphere GCNN (COMPARISON TRACK) -------------------------------
+  # bench_v12 `staged_nodrop`: ConvNeXt blocks throughout, strided-PseudoConv stage layout.
+  # Differs from maps_gcnn ONLY in network.kwargs -- same dataloader, optimizer, budget,
+  # smoothing, input_norm, mean readout and Cls branch (verified by resolved-config diff).
+  # Configs: configs/maps/prod/deepsphere_convnext/<probe>/.
+  #
+  # It LOSES to maps_gcnn on combined -- paired FoM 0.956, Q4 DES/fid 0.549 vs 0.659 -- but the
+  # FoM gap is INSIDE the 0.049 seed floor, so classic holds prod by the tie rule, not by a
+  # resolved margin. This track exists to test that call on lensing and clustering too, and
+  # because it is the layout paper_2_tex/figures/architectures.tex would want if the paper wants
+  # one consistent block type. Set to Null to drop it (and restore the 18-combination count).
+  maps_convnext:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/lensing/v1
+      steps: PENDING  # job 3293798, submitted 2026-09-04
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/clustering/v1
+      steps: PENDING  # job 3293799, submitted 2026-09-04
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/combined/v1
+      steps: 261800  # copy of maps/combined/bench_v12_staged_nodrop (jobs 3245093/4)
+      convergence_steps: [167700]  # the job-1 checkpoint, already has its own flow
+
+  # --- Cls two-point baseline ---------------------------------------------------------------
+  # Unchanged from v1.yaml, same run dirs. 2x2pt is deliberately out of the analysis (the paper
+  # does not show it) and is omitted rather than filtered downstream; it never had a maps
+  # counterpart, so it contributes no maps-vs-Cls pair either way.
+  #
+  # NOT STALE -- re-verified 2026-09-04, no re-run needed:
+  #   * mock pairing: real_idx in mcmc_samples.h5 is BYTE-IDENTICAL to the maps runs, 1000/1000,
+  #     for all three probes. The coverage inference postdates msi 68210dd, so the maps-vs-Cls
+  #     aliasing is not in play and --intersect must NOT be passed. Ranking route is
+  #     run_comparison --cross_modality with --reference on the Cls side.
+  #   * recipe: MLP + configs/cls/mlp/default.yaml, still cls_training.sh's own default
+  #     (NET=mlp CLS_CONFIG=default). Same dataset, same 8wl,32gc scales and the same
+  #     rebinned_nb16_8wl,32gc.h5 cache the maps+cls runs read.
+  #   * cls/<probe>/bench_v7 is a SEED TWIN of these, not a newer recipe: the two configs differ
+  #     in exactly 4 keys, all msfm data-file RENAMES from the 2026-08-07 data reorganization.
+  #     It also pairs 1000/1000. Point at it instead only to gauge Cls seed scatter.
+  #
+  # The one live alternative is the Cls TRANSFORMER (configs/cls/transformer/default.yaml,
+  # d128_L2), which measured +4.5% FoM over the MLP on v17 lensing -- about 1.1 pooled-sd, i.e.
+  # inside seed noise, which is why it was never adopted for v18. Adopting it would make the
+  # two-point baseline slightly stronger and the maps-vs-Cls gain correspondingly more
+  # conservative. It is a ~1 h job for all probes, not a 12 h one.
+  cls:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/lensing/v1
+      steps: 1000000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/clustering/v1
+      steps: 1000000
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/combined/v1
+      steps: 1000000
+      convergence_steps: []
+
+# probes: within each representation, all probe pairs      -> 4 x 3 = 12
+# data:   per probe, all representation pairs              -> 3 x 6 = 18
+#                                                             total  = 30 combinations,
+# each of which trains an emulator plus a residual flow. `data` is what yields maps-vs-Cls (gain
+# over two-point), gcnn-vs-transformer (two compressions of the same data) and classic-vs-ConvNeXt.
+# Null out a representation to shrink it: `maps_convnext: Null` restores the 18 combinations this
+# file had before the ConvNeXt track was added, and `cls: Null` leaves only architecture contrasts.
+comparisons:
+  probes: true
+  data: true
+
+obs_labels:
+  - { label: DESy3, lambdaCDM: false }
