@@ -27,14 +27,16 @@
 # designations still read exactly like v1.yaml's. Do not "tidy" this into maps/<probe>/<arch>.
 #
 # ---------------------------------------------------------------------------------------------
-# !! SIX RUNS DO NOT EXIST YET -- see the `steps: PENDING` entries. !!
-# Only combined is populated, in all three maps representations, as copies of the measured
-# bench_v12 arms (classic_nodrop -> maps_gcnn, transformer -> maps_transformer,
-# staged_nodrop -> maps_convnext), which all remain in place under maps/combined/ under their
-# original names. Lensing and clustering have to be trained for each (6 runs; jobs 3293619/20,
-# 3293621/2, 3293798/9). Because they are `n_steps: auto` under a wall-clock budget, the final
-# checkpoint is an OUTPUT of the run and is not knowable in advance: fill each `steps` from the
-# run's own throughput.json / the highest ensemble_flow_<steps> directory once it lands.
+# ALL NINE MAPS RUNS EXIST. Combined is a copy of the measured bench_v12 arm in each of the three
+# representations (classic_nodrop -> maps_gcnn, transformer -> maps_transformer, staged_nodrop ->
+# maps_convnext), still in place under maps/combined/ under its original name. Lensing and
+# clustering were trained 2026-09-04/05 (jobs 3293619/20, 3293621/2, 3293798/9), all six COMPLETED
+# on a 1 x 12 h budget, each consuming its 39600 s to within 21 s and writing one checkpoint --
+# hence `convergence_steps: []` on all six. `steps` was read back from each run's throughput.json;
+# under `n_steps: auto` it is an OUTPUT of the wall-clock budget, never something set in advance.
+#
+# The Cls entries below are still the v1 MLP baseline. A matched-encoder v2 (see the note there)
+# could not be trained: data/v18/default/cls/grid_cls.h5 no longer exists on disk.
 #
 # A representation set to Null is dropped, so this one file slices three ways without editing the
 # comparisons: `cls: Null` leaves the GCNN-vs-transformer contrast alone, and nulling either maps
@@ -59,12 +61,12 @@ runs:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
       pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/lensing/v1
-      steps: PENDING  # run not trained yet
+      steps: 126000  # job 3293619, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
       pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/clustering/v1
-      steps: PENDING  # run not trained yet
+      steps: 126500  # job 3293620, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
@@ -79,12 +81,12 @@ runs:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
       pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/lensing/v1
-      steps: PENDING  # run not trained yet
+      steps: 202600  # job 3293621, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
       pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/clustering/v1
-      steps: PENDING  # run not trained yet
+      steps: 247400  # job 3293622, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
@@ -107,12 +109,12 @@ runs:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
       pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/lensing/v1
-      steps: PENDING  # job 3293798, submitted 2026-09-04
+      steps: 140900  # job 3293798, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
       pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/clustering/v1
-      steps: PENDING  # job 3293799, submitted 2026-09-04
+      steps: 141300  # job 3293799, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
