@@ -92,8 +92,6 @@ def add_obs_args(parser, mock_labels_default=None):
     parser.add_argument("--include_grid", action="store_true")
     parser.add_argument("--n_grid_examples", type=int, default=16)
     parser.add_argument("--include_des", action="store_true")
-    parser.add_argument("--include_buzzard", action="store_true")
-    parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
     parser.add_argument("--include_mocks", action="store_true")
     parser.add_argument(
         "--mock_labels",
@@ -114,10 +112,10 @@ def add_obs_args(parser, mock_labels_default=None):
 def discover_mock_labels(obs_pred_dict):
     """All mock labels in a preds file: those with BOTH {L}_mean and {L}_stack.
 
-    That mean+stack pair is the structural signature written only by evaluate_obs_benchmark /
-    evaluate_mock_cls, so the three observation sources stay cleanly disjoint by structure (not by
-    name): grid (grid_*) and DES (DESy3*) have neither key; Buzzard writes only Buzzard_mean (no
-    _stack) and is excluded too. Only the {L}_mean summary is sampled (one chain per mock); the
+    That mean+stack pair is the structural signature written only by evaluate_obs_mocks /
+    evaluate_mock_cls, so the observation sources stay cleanly disjoint by structure (not by
+    name): grid (grid_*) and DES (DESy3*) have neither key. The Buzzard flock is a mock like any
+    other and is picked up here. Only the {L}_mean summary is sampled (one chain per mock); the
     _stack is the discovery signal, sampled only under --mock_realizations.
     """
     suf = "_stack"
@@ -142,17 +140,6 @@ def get_des_observations(obs_pred_dict):
     obs_dict = {}
     for label in sorted(k for k in obs_pred_dict if k == "DESy3" or k.startswith("DESy3_")):
         obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": None}
-    return obs_dict
-
-
-def get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, labels):
-    obs_dict = {}
-    for label in labels:
-        if label not in obs_pred_dict:
-            print(f"Warning: '{label}' not found in predictions, skipping.")
-            continue
-        cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
-        obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": cosmo}
     return obs_dict
 
 
@@ -186,8 +173,6 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
         obs_dict.update(get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, args.n_grid_examples))
     if args.include_des:
         obs_dict.update(get_des_observations(obs_pred_dict))
-    if args.include_buzzard:
-        obs_dict.update(get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, args.buzzard_labels))
     if args.include_mocks:
         obs_dict.update(
             get_mock_observations(
