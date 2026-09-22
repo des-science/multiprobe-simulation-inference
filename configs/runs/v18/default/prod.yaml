@@ -44,17 +44,13 @@
 # comparisons: `cls: Null` leaves the GCNN-vs-transformer contrast alone, and nulling either maps
 # entry reproduces a bench_v7.yaml-shaped maps-vs-Cls analysis.
 
-# THE PROJECT STORE IS THE PRODUCTION LOCATION, not scratch (2026-09-22). Scratch is purged and is
-# the PRUNED copy -- the store is the fuller one and holds runs scratch no longer has. Inference now
-# reads preds_<steps>.h5 and writes its flow directory under /capstor/..., so a scratch -> store
-# rsync can never overwrite a production chain. All fifteen preds files were verified present there.
-#
 # EVERY PRE-2026-09-22 FLOW IS ARCHIVED, not overwritten. Each run dir's former inference output --
 # the unextended ten-parameter flows, chains, PPC and tension values, plus the round 5 sweep arms --
-# moved to <pred_dir>/archive/, which every app ignores (run_comparison globs <run_dir>/*flow_*/, one
-# level). Those posteriors are the `all_long` arm round 5 measured as overconfident and must not be
-# mixed with anything below; see the README in each archive/. The re-run therefore writes a clean
-# <flow_name>_<steps>/ and refuse_incompatible_retrain has nothing left to collide with.
+# moved to <pred_dir>/archive/, on scratch and the project store alike. Those posteriors are the
+# `all_long` arm round 5 measured as overconfident and must not be mixed with anything below; see the
+# README in each archive/. So the re-run writes a clean <flow_name>_<steps>/ at the run-dir top
+# level, run_comparison (which globs <run_dir>/*flow_*/, one level) sees only the current flow, and
+# refuse_incompatible_retrain has nothing left to collide with.
 
 flow_name: ensemble_flow
 
@@ -74,17 +70,17 @@ runs:
   maps_gcnn:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_gcnn/lensing/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/lensing/v1
       steps: 126000  # job 3293619, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_gcnn/clustering/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/clustering/v1
       steps: 126500  # job 3293620, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_gcnn/combined/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/combined/v1
       steps: 229900  # copy of maps/combined/bench_v12_classic_nodrop (jobs 3242160/1)
       convergence_steps: []  # was [176600]; that flow is archived and unextended, see the header
 
@@ -94,17 +90,17 @@ runs:
   maps_transformer:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_transformer/lensing/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/lensing/v1
       steps: 202600  # job 3293621, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_transformer/clustering/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/clustering/v1
       steps: 247400  # job 3293622, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_transformer/combined/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/combined/v1
       steps: 365900  # copy of maps/combined/bench_v12_transformer (jobs 3242166/7)
       convergence_steps: []  # was [182500]; that flow is archived and unextended, see the header
 
@@ -122,17 +118,17 @@ runs:
   maps_convnext:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_convnext/lensing/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/lensing/v1
       steps: 140900  # job 3293798, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_convnext/clustering/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/clustering/v1
       steps: 141300  # job 3293799, 1 x 12 h budget (39600 s), single checkpoint
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/maps_convnext/combined/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_convnext/combined/v1
       steps: 261800  # copy of maps/combined/bench_v12_staged_nodrop (jobs 3245093/4)
       convergence_steps: []  # was [167700]; that flow is archived and unextended, see the header
 
@@ -190,17 +186,17 @@ runs:
   cls:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/cls/lensing/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/lensing/v1
       steps: 1000000
       convergence_steps: []
     clustering:
       params: [Om, s8, w0, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/cls/clustering/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/clustering/v1
       steps: 1000000
       convergence_steps: []
     combined:
       params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
-      pred_dir: /capstor/store/cscs/swissai/a0158/athomsen/deep_lss/runs/v18/default/cls/combined/v1
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/combined/v1
       steps: 1000000
       convergence_steps: []
 
