@@ -1,0 +1,93 @@
+# SUPERSEDED by prod.yaml -- kept as the frozen record of the FIRST v18/default analysis, whose
+# tension and PPC outputs are still on disk in the run dirs below.
+#
+# RENAMED 2026-09-08, from v1.yaml. The old name meant "the run called v1 in every tree", and that
+# stopped being true the moment cls/<probe>/v1 was reassigned to the matched-encoder run: this file
+# would have gone on loading, silently pairing bench_v7 maps against a Cls run that did not exist
+# when it was written. It is now named for the maps generation it actually pins, and its Cls entries
+# are pinned to cls/<probe>/v1_mlp_pca_aug6 -- the same runs it always meant, under their new names.
+#
+# Run definitions: which trained runs to analyse, organised as data representation -> probe, plus the
+# comparisons to auto-build and the observations to analyse. Method hyperparameters live elsewhere --
+# configs/tension/tension.yaml and configs/ppc/ppc.yaml.
+#
+# Pass via --runs_config to msi/apps/run_tension_chains.py, run_tension_values.py and run_ppc.py.
+# A data representation set to Null (e.g. `cls: Null`) is dropped, so one file can be sliced to just
+# maps or just Cls without editing the comparisons.
+#
+# v18/default is the first dataset built with source clustering back in the shape noise. It is
+# extended-NLA (`extended_nla: True`), so every lensing-bearing probe carries `bta` -- unlike the
+# v17/baseline configs next door, whose runs were trained on standard-NLA data without it.
+#
+# The maps runs are `maps/<probe>/v1` -- the bench_v7 `full` ConvNeXt GCNN. That WAS the production
+# default when this file was written and no longer is: bench_v12 `classic_nodrop` replaced it on
+# 2026-09-04 and prod.yaml carries it as `maps_gcnn`. A `v2` seed replica of the same recipe has
+# since finished on all three probes; it is a reproducibility check, not a new architecture, so
+# point this file at it only to compare, never as a silent replacement. There is no maps 2x2pt run,
+# so the maps-vs-Cls comparison covers lensing, clustering and combined only.
+#
+# The Cls runs are the 2026-08-06 MLP+PCA baseline, renamed `v1` -> `v1_mlp_pca_aug6` when the
+# matched encoder took the `v1` name. Their scratch flow dirs are PRUNED -- DESy3 chains,
+# mcmc_samples.h5 and preds only, no grid and no fiducial_bench chains -- so tension and PPC
+# reproduce from here, but the run_diagnostics robustness and des-fom tables do not.
+
+flow_name: ensemble_flow
+
+# Scale cut the networks were trained with (defines the rebinned-Cls cache used by
+# the Cls-space PPD in run_ppc.py). Tied to the runs, so it lives here, not in ppc.yaml.
+scales_config: /users/athomsen/dlss/repos/y3-deep-lss/configs/scales/8wl,32gc.yaml
+
+# `steps` is the production checkpoint used everywhere. `convergence_steps` (optional, default [])
+# lists the additional training-step checkpoints at which the network was evaluated, used only for
+# the training-step convergence diagnostic plot (6b notebook); fill with steps that actually have a
+# `{flow_name}_{steps}/chain_*.npy`. Leave [] to skip the convergence plot for that run.
+runs:
+  maps:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps/lensing/v1
+      steps: 130000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps/clustering/v1
+      steps: 130000
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps/combined/v1
+      steps: 250000
+      convergence_steps: []
+  cls:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/lensing/v1_mlp_pca_aug6
+      steps: 1000000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/clustering/v1_mlp_pca_aug6
+      steps: 1000000
+      convergence_steps: []
+    # 2x2pt is deliberately out of the analysis: the paper does not show it, so it is dropped here
+    # rather than filtered downstream. Commented rather than deleted -- the run itself is fine, and
+    # this is the only record of where it lives. Re-enabling it adds three tension pairs (vs lensing,
+    # clustering and combined) and, unless configs/ppc/ppc.yaml keeps `skip_probes: [2x2pt]`, one
+    # auto PPC. It never had a maps counterpart, so it contributes no maps-vs-Cls pair either way.
+    # 2x2pt:
+    #   params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+    #   pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/2x2pt/v1_mlp_pca_aug6
+    #   steps: 1000000
+    #   convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/cls/combined/v1_mlp_pca_aug6
+      steps: 1000000
+      convergence_steps: []
+
+comparisons:
+  probes: true # within each data representation, all probe pairs (e.g. cls: lensing vs clustering, ...)
+  data: true # for each probe present in both, the maps-vs-cls pair (run_1 = maps, run_2 = cls)
+
+obs_labels:
+  - { label: DESy3, lambdaCDM: false }

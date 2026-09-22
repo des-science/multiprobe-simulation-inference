@@ -2,9 +2,9 @@
 # three probes, plus the Cls two-point baseline and a ConvNeXt-GCNN comparison track. Pass via --runs_config to
 # msi/apps/run_tension_chains.py, run_tension_values.py and run_ppc.py.
 #
-# Supersedes v1.yaml, which points at the single bench_v7 `full` ConvNeXt GCNN under
-# maps/<probe>/v1. That tree is untouched and still loads; this file is the architecture-aware
-# successor and does not overwrite any of it.
+# Supersedes bench_v7.yaml (renamed from v1.yaml on 2026-09-08), which points at the single
+# bench_v7 `full` ConvNeXt GCNN under maps/<probe>/v1. That tree is untouched and still loads;
+# this file is the architecture-aware successor and does not overwrite any of it.
 #
 # ---------------------------------------------------------------------------------------------
 # THE NAMING SCHEME -- and why the architecture is a DATA-REPRESENTATION directory rather than a
@@ -16,7 +16,7 @@
 #   maps_transformer/  nested hierarchical transformer (configs/maps/prod/transformer/<probe>/)
 #   maps_convnext/     staged all-ConvNeXt GCNN, comparison track only
 #                                     (configs/maps/prod/deepsphere_convnext/<probe>/)
-#   cls/               the two-point baseline, unchanged from v1.yaml
+#   cls/               the two-point baseline, matched-encoder MLP (see the note there)
 #
 # msi.utils.tensions.get_identifier() derives a run's identity from the TWO DIRECTORY LEVELS ABOVE
 # the run dir -- `parts[-3]_parts[-2]` -- and never from the run dir's own name. So
@@ -24,7 +24,8 @@
 # would collide, and diff_chain_*_maps_lensing_vs_cls_lensing_*.npy would be written twice into the
 # same cls flow dir, the second silently overwriting the first. Putting the architecture one level
 # up gives `maps_gcnn_lensing` / `maps_transformer_lensing` / `cls_lensing`, all distinct, and the
-# designations still read exactly like v1.yaml's. Do not "tidy" this into maps/<probe>/<arch>.
+# designations still read exactly like bench_v7.yaml's. Do not "tidy" this into
+# maps/<probe>/<arch>.
 #
 # ---------------------------------------------------------------------------------------------
 # ALL NINE MAPS RUNS EXIST. Combined is a copy of the measured bench_v12 arm in each of the three
@@ -35,12 +36,13 @@
 # hence `convergence_steps: []` on all six. `steps` was read back from each run's throughput.json;
 # under `n_steps: auto` it is an OUTPUT of the wall-clock budget, never something set in advance.
 #
-# The Cls entries below are still the v1 MLP baseline. A matched-encoder v2 (see the note there)
-# could not be trained: data/v18/default/cls/grid_cls.h5 no longer exists on disk.
+# The Cls entries below are the MATCHED-ENCODER baseline, trained 2026-09-08 and promoted into
+# cls/<probe>/v1 (see the note there). It replaces the 2026-08-06 MLP+PCA run, which is still on
+# disk as cls/<probe>/v1_mlp_pca_aug6 and is what bench_v7.yaml now points at.
 #
 # A representation set to Null is dropped, so this one file slices three ways without editing the
 # comparisons: `cls: Null` leaves the GCNN-vs-transformer contrast alone, and nulling either maps
-# entry reproduces a v1.yaml-shaped maps-vs-Cls analysis.
+# entry reproduces a bench_v7.yaml-shaped maps-vs-Cls analysis.
 
 flow_name: ensemble_flow
 
@@ -56,7 +58,7 @@ runs:
   # --- Classic-block DeepSphere GCNN --------------------------------------------------------
   # bench_v12 `classic_nodrop`: the best-performing GCNN measured, either block family. Drops the
   # ConvNeXt block, DropPath and residual attention versus the bench_v7 `full` stack behind
-  # v1.yaml. Measured on COMBINED ONLY -- lensing and clustering are that result transplanted.
+  # bench_v7.yaml. Measured on COMBINED ONLY -- lensing and clustering are that result transplanted.
   maps_gcnn:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
@@ -123,27 +125,56 @@ runs:
       convergence_steps: [167700]  # the job-1 checkpoint, already has its own flow
 
   # --- Cls two-point baseline ---------------------------------------------------------------
-  # Unchanged from v1.yaml, same run dirs. 2x2pt is deliberately out of the analysis (the paper
-  # does not show it) and is omitted rather than filtered downstream; it never had a maps
-  # counterpart, so it contributes no maps-vs-Cls pair either way.
+  # PROMOTED 2026-09-08. cls/<probe>/v1 is now the MATCHED-ENCODER run, not the MLP+PCA one it
+  # was under bench_v7.yaml. Its encoder is ClsBranchMLP (configs/cls/branch/default.yaml:
+  # 4 x 512 embedding, dropout 0.1 per layer, pca_components: null) -- the same stack the maps+cls
+  # networks already run on their own Cls branch. That is the point of the swap: the maps-vs-Cls
+  # ratio is then a statement about the MAPS, not about two unrelated Cls compressions. Each run
+  # dir's saved configs.yaml still records `model_name: v2b`, the name it trained under; nothing
+  # reads that key back, and it is left standing as honest provenance.
   #
-  # NOT STALE -- re-verified 2026-09-04, no re-run needed:
-  #   * mock pairing: real_idx in mcmc_samples.h5 is BYTE-IDENTICAL to the maps runs, 1000/1000,
-  #     for all three probes. The coverage inference postdates msi 68210dd, so the maps-vs-Cls
-  #     aliasing is not in play and --intersect must NOT be passed. Ranking route is
-  #     run_comparison --cross_modality with --reference on the Cls side.
-  #   * recipe: MLP + configs/cls/mlp/default.yaml, still cls_training.sh's own default
-  #     (NET=mlp CLS_CONFIG=default). Same dataset, same 8wl,32gc scales and the same
-  #     rebinned_nb16_8wl,32gc.h5 cache the maps+cls runs read.
-  #   * cls/<probe>/bench_v7 is a SEED TWIN of these, not a newer recipe: the two configs differ
-  #     in exactly 4 keys, all msfm data-file RENAMES from the 2026-08-07 data reorganization.
-  #     It also pairs 1000/1000. Point at it instead only to gauge Cls seed scatter.
+  # 2x2pt is deliberately out of the analysis (the paper does not show it) and is omitted rather
+  # than filtered downstream; it never had a maps counterpart, so it contributes no maps-vs-Cls
+  # pair either way. The trained run exists at cls/2x2pt/v1.
+  #
+  # THE SWAP COSTS NOTHING MEASURABLE, and is not a constraining-power result -- do not quote it
+  # as one. Against `mlp_ref` (the old MLP+PCA recipe retrained on the same repaired cache, so the
+  # encoder is the only difference and it is the only valid like-for-like), measured 2026-09-08:
+  #     paired FoM   lensing 0.972   clustering 1.045   combined 0.987   -- all inside the
+  #                  0.049 seed floor, all reported `=`
+  #     paired Q3    lensing -0.0069  clustering +0.0089  combined +0.0030  -- every CI spans 0
+  # The one resolved difference is on 2x2pt (FoM 0.935, a real 6.5% loss, against a Q3 HPD gain
+  # of +0.0404), and 2x2pt is not in the analysis. So: interpretability bought at no measured cost.
+  #
+  # GAIN OVER TWO-POINT on this baseline (run_comparison --cross_modality, --reference on the Cls
+  # side), 2026-09-08 -- this is the headline number the paper reports:
+  #                  maps_gcnn   maps_transformer   maps_convnext
+  #     lensing          2.409              2.464           2.094
+  #     clustering       1.365              1.241           1.112
+  #     combined         1.450              1.519           1.388
+  #
+  # MOCK PAIRING re-verified 2026-09-08: real_idx in mcmc_samples.h5 is row-for-row identical to
+  # all three maps representations, 1000/1000, on all three probes. Compare VALUES, not bytes --
+  # the Cls runs store it int32 and the maps runs int64. The inference postdates msi 68210dd, so
+  # the maps-vs-Cls aliasing is not in play and --intersect must NOT be passed.
+  #
+  # THE OTHER Cls RUNS ON DISK, none of which belong in this file:
+  #   mlp_ref            the MLP+PCA comparand above, on the same repaired cache. The ONLY valid
+  #                      like-for-like against v1 -- not the two below, which predate the repair.
+  #   v1_mlp_pca_aug6    the 2026-08-06 MLP+PCA run this replaced, and what bench_v7.yaml points
+  #                      at. Carries the completed tension/PPC outputs. Its scratch flow dir is
+  #                      PRUNED: DESy3 chains only, no grid and no fiducial_bench chains.
+  #   bench_v7           a seed twin of v1_mlp_pca_aug6 -- the two configs differ in exactly 4
+  #                      keys, all msfm data-file renames from the 2026-08-07 reorganization.
+  #                      Point at it only to gauge Cls seed scatter.
+  #   TAINTED_*          trained against a desynchronized rebinned-Cls cache and meaningless. See
+  #                      .claude/memory/project_tainted_results_log.md. Never point at these.
   #
   # The one live alternative is the Cls TRANSFORMER (configs/cls/transformer/default.yaml,
   # d128_L2), which measured +4.5% FoM over the MLP on v17 lensing -- about 1.1 pooled-sd, i.e.
-  # inside seed noise, which is why it was never adopted for v18. Adopting it would make the
-  # two-point baseline slightly stronger and the maps-vs-Cls gain correspondingly more
-  # conservative. It is a ~1 h job for all probes, not a 12 h one.
+  # inside seed noise. It is a ~1 h job for all probes, not a 12 h one. It would make the
+  # two-point baseline slightly stronger and every gain above correspondingly more conservative,
+  # but it would also give up the matched-encoder argument, which is the reason v1 is what it is.
   cls:
     lensing:
       params: [Om, s8, w0, Aia, n_Aia, bta]
@@ -161,16 +192,30 @@ runs:
       steps: 1000000
       convergence_steps: []
 
-# probes: within each representation, all probe pairs      -> 4 x 3 = 12
-# data:   per probe, all representation pairs              -> 3 x 6 = 18
-#                                                             total  = 30 combinations,
-# each of which trains an emulator plus a residual flow. `data` is what yields maps-vs-Cls (gain
-# over two-point), gcnn-vs-transformer (two compressions of the same data) and classic-vs-ConvNeXt.
-# Null out a representation to shrink it: `maps_convnext: Null` restores the 18 combinations this
-# file had before the ConvNeXt track was added, and `cls: Null` leaves only architecture contrasts.
+# probes:     within each representation, all probe pairs          -> 4 x 3 = 12
+# data:       per probe, all representation pairs                   -> 3 x 6 = 18
+# data_pairs: ...restricted to the pairs involving cls              -> 3 x 3 =  9
+#                                                                      total  = 21 combinations,
+# each of which trains a residual flow (the per-run emulators are cached across pairs).
+#
+# WHY data_pairs. The unrestricted `data` family also enumerates the three maps-vs-maps pairs per
+# probe -- gcnn-vs-transformer, gcnn-vs-convnext, transformer-vs-convnext. Those ask whether two
+# COMPRESSIONS OF THE SAME SKY disagree, which is not a question this analysis puts to the data:
+# the architectures are compared on constraining power (run_comparison) and robustness
+# (run_diagnostics), not by a tension test. Dropping them takes 30 combinations to 21. Set
+# `data_pairs: null` to get all 30 back.
+#
+# What survives is the maps-vs-Cls pair for each of the three maps representations, which is the
+# gain-over-two-point statement, plus every within-representation probe pair.
+# Null out a representation to shrink it further: `maps_convnext: Null` drops 3 probe pairs and
+# 1 data pair per probe; `cls: Null` leaves only the probe pairs.
 comparisons:
   probes: true
   data: true
+  data_pairs:
+    - [maps_gcnn, cls]
+    - [maps_transformer, cls]
+    - [maps_convnext, cls]
 
 obs_labels:
   - { label: DESy3, lambdaCDM: false }

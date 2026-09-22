@@ -45,6 +45,9 @@ def build_combinations(runs_conf):
       (run_1, run_2 in config dict order).
     * ``data``: for every probe present in >= 2 data representations, every unordered pair of
       data representations (run_1 = earlier-listed representation, e.g. maps; run_2 = cls).
+      ``comparisons['data_pairs']`` optionally restricts this to an allowlist of representation
+      pairs (``null`` -> all), mirroring ``cross_pairs`` in the PPC config. Use it when several
+      representations are analysed but not every pair of them is a question worth asking.
 
     Returns
     -------
@@ -79,10 +82,27 @@ def build_combinations(runs_conf):
 
     if comparisons.get("data", False):
         data_types = list(runs.keys())
+        # Allowlist of representation pairs; None (the default) keeps every pair.
+        pairs_conf = comparisons.get("data_pairs")
+        allowed = None
+        if pairs_conf is not None:
+            if not isinstance(pairs_conf, list):
+                raise ValueError("comparisons.data_pairs must be a list of pairs or null")
+            allowed = []
+            for pair in pairs_conf:
+                if (not isinstance(pair, (list, tuple)) or len(pair) != 2
+                        or not all(isinstance(name, str) for name in pair) or pair[0] == pair[1]):
+                    raise ValueError(f"Expected two distinct representation names, got {pair!r}")
+                unknown = set(pair) - set(runs_conf["runs"])
+                if unknown:
+                    raise ValueError(f"comparisons.data_pairs names unknown representations: {sorted(unknown)}")
+                allowed.append(set(pair))
         all_probes = {p for probes in runs.values() for p in probes}
-        for probe in all_probes:
+        for probe in sorted(all_probes):
             present = [d for d in data_types if probe in runs[d]]
             for data_1, data_2 in itertools.combinations(present, 2):
+                if allowed is not None and {data_1, data_2} not in allowed:
+                    continue
                 run_1, run_2 = _run(data_1, probe), _run(data_2, probe)
                 combinations.append((make_designation(run_1, run_2), run_1, run_2))
 
