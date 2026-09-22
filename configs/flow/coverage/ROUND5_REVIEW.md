@@ -1,7 +1,7 @@
 # Round 5 review — 2026-09-22
 
 Reviewed completed outputs in
-`/users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/flow_round5`.
+`/users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/archive/flow_round5`.
 No jobs submitted, checkpoints changed, or frozen source/configuration files edited
 during this review. All repositories checked remain on main; changes are uncommitted.
 

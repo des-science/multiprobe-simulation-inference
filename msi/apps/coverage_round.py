@@ -20,9 +20,7 @@ import yaml
 
 from msi.utils.grid_weighting import COSMO_PARAMS, design_weights, lookup_coordinates
 
-
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_PREDS = Path("/users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/preds_229900.h5")
 ARMS = {
     "all_short": ("all", "short", []),
     "all_long": ("all", "long", []),
@@ -89,14 +87,14 @@ def prepare(preds, output, seed=7, arms=None):
     wide_set = table["sobol_index"][table["id_param"] < 1250]
     wide = np.isin(ids[:, 0], wide_set)
     signals = np.unique(ids[:, 1])
-    train = np.isin(ids[:, 1], signals[:int(0.9 * len(signals))])
+    train = np.isin(ids[:, 1], signals[: int(0.9 * len(signals))])
     batch_size = 10000
     steps = {"all": int(train.sum()) // batch_size, "wide": int((train & wide).sum()) // batch_size}
     multiple = steps["all"] * steps["wide"] // math.gcd(steps["all"], steps["wide"])
     budgets = {"short": math.ceil(2400 / multiple) * multiple, "long": math.ceil(5100 / multiple) * multiple}
     available = ids[~train & wide]
     available = available[np.lexsort((available[:, 2], available[:, 1], available[:, 0]))]
-    mocks = available[::len(available) // 1000][:1000]
+    mocks = available[:: len(available) // 1000][:1000]
     if len(mocks) != 1000 or len(np.unique(mocks[:, 0])) != 1000:
         raise ValueError("Expected 1000 distinct coverage cosmologies")
 
@@ -120,7 +118,9 @@ def prepare(preds, output, seed=7, arms=None):
     base["seed"] = seed
     base["training"].update(group_by="signal", grid_wide_fraction=0.5)
     base["diagnostics"].update(
-        mock_ids_file=str(output / "mock_ids.npy"), sampling_seed=12, subsample_seed=17,
+        mock_ids_file=str(output / "mock_ids.npy"),
+        sampling_seed=12,
+        subsample_seed=17,
         n_likelihood_samples=1000,
     )
     # Store the entire setup before a job starts. Input files are linked read-only in usage;
@@ -131,10 +131,20 @@ def prepare(preds, output, seed=7, arms=None):
     np.save(output / "mock_ids.npy", mocks)
     (output / "arms").mkdir()
     manifest = {
-        "checkpoint": checkpoint, "prediction_file": str(preds), "metadata_file": str(meta), "seed": seed, "n_flows": 8,
-        "base_params": params, "prior_intervals": {p: priors[p] for p in params + ["ns", "Ob", "H0"]},
-        "training_rows": int(train.sum()), "wide_training_rows": int((train & wide).sum()),
-        "steps_per_epoch": steps, "budgets": budgets, "audit": audit, "arms": {}, "hashes": {},
+        "checkpoint": checkpoint,
+        "prediction_file": str(preds),
+        "metadata_file": str(meta),
+        "seed": seed,
+        "n_flows": 8,
+        "base_params": params,
+        "prior_intervals": {p: priors[p] for p in params + ["ns", "Ob", "H0"]},
+        "training_rows": int(train.sum()),
+        "wide_training_rows": int((train & wide).sum()),
+        "steps_per_epoch": steps,
+        "budgets": budgets,
+        "audit": audit,
+        "arms": {},
+        "hashes": {},
     }
     for name in selected_arms:
         mode, budget, extension = ARMS[name]
@@ -144,22 +154,58 @@ def prepare(preds, output, seed=7, arms=None):
         config["training"].update(train_prior=mode, n_epochs=epochs, expected_updates=updates)
         config_path = output / "arms" / f"{name}.yaml"
         config_path.write_text(yaml.safe_dump(config, sort_keys=False))
-        manifest["arms"][name] = {"config": str(config_path), "extend_params": extension,
-                                  "n_epochs": epochs, "updates": updates}
-    tracked = [preds, meta, output / "configs.yaml", output / "mock_ids.npy",
-               *sorted((output / "arms").glob("*.yaml")),
-               REPO / "msi/apps/coverage_round.py", REPO / "msi/apps/run_inference.py",
-               REPO / "msi/utils/grid_weighting.py", REPO / "msi/utils/flow.py",
-               REPO / "msi/utils/coverage.py", REPO / "msi/flow_conductor/likelihood_flow.py",
-               REPO / "msi/apps/score_coverage_round.py", REPO / "msi/likelihood_base.py",
-               REPO / "msi/flow_conductor/architecture.py", REPO / "msi/utils/extended_params.py",
-               REPO / "msi/utils/torch_ensemble.py",
-               Path(msfm.__file__).resolve().parent / "utils/prior.py"]
+        manifest["arms"][name] = {
+            "config": str(config_path),
+            "extend_params": extension,
+            "n_epochs": epochs,
+            "updates": updates,
+        }
+    tracked = [
+        preds,
+        meta,
+        output / "configs.yaml",
+        output / "mock_ids.npy",
+        *sorted((output / "arms").glob("*.yaml")),
+        REPO / "msi/apps/coverage_round.py",
+        REPO / "msi/apps/run_inference.py",
+        REPO / "msi/utils/grid_weighting.py",
+        REPO / "msi/utils/flow.py",
+        REPO / "msi/utils/coverage.py",
+        REPO / "msi/flow_conductor/likelihood_flow.py",
+        REPO / "msi/apps/score_coverage_round.py",
+        REPO / "msi/likelihood_base.py",
+        REPO / "msi/flow_conductor/architecture.py",
+        REPO / "msi/utils/extended_params.py",
+        REPO / "msi/utils/torch_ensemble.py",
+        Path(msfm.__file__).resolve().parent / "utils/prior.py",
+    ]
     manifest["hashes"] = {str(p): sha256(p) for p in tracked}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(json.dumps({"output": str(output), "steps": steps, "budgets": budgets, "audit": audit,
-                      "arms": manifest["arms"]}, indent=2))
+    print(
+        json.dumps(
+            {"output": str(output), "steps": steps, "budgets": budgets, "audit": audit, "arms": manifest["arms"]},
+            indent=2,
+        )
+    )
     return manifest
+
+
+def manifest_checkpoint(manifest, round_dir):
+    """The training checkpoint this round was frozen against.
+
+    Rounds prepared before `checkpoint` became a manifest key carry it only in the frozen
+    ``prediction_file`` name, which is exact -- unlike a hardcoded default, which would name one
+    round's output directory after another round's checkpoint.
+    """
+    if "checkpoint" in manifest:
+        return int(manifest["checkpoint"])
+    stem = Path(manifest.get("prediction_file", "")).stem
+    if stem.startswith("preds_") and stem[6:].isdigit():
+        return int(stem[6:])
+    raise ValueError(
+        f"{round_dir}/manifest.json records neither `checkpoint` nor a preds_<checkpoint>.h5 "
+        f"`prediction_file`; prepare a fresh round directory."
+    )
 
 
 def run_arm(round_dir, arm, dry_run=False):
@@ -170,13 +216,28 @@ def run_arm(round_dir, arm, dry_run=False):
         if sha256(path) != expected:
             raise ValueError(f"Prepared input or code changed: {path}. Prepare a fresh round directory.")
     settings = manifest["arms"][arm]
-    checkpoint = manifest.get("checkpoint", 229900)
+    checkpoint = manifest_checkpoint(manifest, round_dir)
     result = round_dir / f"{arm}_ensemble_flow_{checkpoint}"
     if result.exists():
         raise FileExistsError(f"Refusing to overwrite existing arm {result}")
-    command = [sys.executable, "-m", "msi.apps.run_inference", "--out_dir", str(round_dir.parent),
-               "--model_name", round_dir.name, "--n_steps", str(checkpoint), "--n_flows", str(manifest["n_flows"]),
-               "--flow_config", settings["config"], "--flow_label", arm, "--sample_posterior"]
+    command = [
+        sys.executable,
+        "-m",
+        "msi.apps.run_inference",
+        "--out_dir",
+        str(round_dir.parent),
+        "--model_name",
+        round_dir.name,
+        "--n_steps",
+        str(checkpoint),
+        "--n_flows",
+        str(manifest["n_flows"]),
+        "--flow_config",
+        settings["config"],
+        "--flow_label",
+        arm,
+        "--sample_posterior",
+    ]
     if settings["extend_params"]:
         command += ["--extend_params", *settings["extend_params"]]
     print(json.dumps(command), flush=True)
@@ -197,10 +258,15 @@ def run_arm(round_dir, arm, dry_run=False):
             raise ValueError("Incomplete posterior sample array")
         for key in ("theta_sample", "log_prob_sample", "theta_true", "log_prob_true"):
             for start in range(0, len(f[key]), 100):
-                if not np.isfinite(f[key][start:start + 100]).all():
+                if not np.isfinite(f[key][start : start + 100]).all():
                     raise ValueError(f"Nonfinite output in {key}")
-    for name in ("1_likelihood_hpd.png", "1_likelihood_tarp.png", "2_posterior_hpd.png",
-                 "2_posterior_tarp.png", "2_posterior_tarp_marginals.png"):
+    for name in (
+        "1_likelihood_hpd.png",
+        "1_likelihood_tarp.png",
+        "2_posterior_hpd.png",
+        "2_posterior_tarp.png",
+        "2_posterior_tarp_marginals.png",
+    ):
         if not (result / "unblinding_plots" / name).is_file():
             raise FileNotFoundError(f"Missing diagnostic plot: {name}")
     (round_dir / f"{arm}.complete").write_text("Validated required outputs\n")
@@ -210,7 +276,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
     prep = subs.add_parser("prepare")
-    prep.add_argument("--preds", type=Path, default=DEFAULT_PREDS)
+    # Required: a round is one experiment against one checkpoint, and a default preds file would
+    # silently attach a new round to whichever run happened to be production when this was written.
+    prep.add_argument("--preds", type=Path, required=True)
     prep.add_argument("--output", type=Path, required=True)
     prep.add_argument("--seed", type=int, default=7)
     prep.add_argument("--arms", nargs="+", choices=list(ARMS))

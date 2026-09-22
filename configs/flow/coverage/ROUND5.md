@@ -1,6 +1,6 @@
 # Round 5: likelihood target versus training budget
 
-Input: `/users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/preds_229900.h5`.
+Input: `/users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/preds_229900.h5`.
 The combined round has completed; see ROUND5_REVIEW.md. Individual-probe confirmation
 is described in ROUND5_PROBES.md.
 The compression network stays fixed. No DES observation is sampled.
@@ -182,7 +182,8 @@ From `/users/athomsen/dlss/repos`, preparation in the existing environment:
 
 ```bash
 .claude/bin/plot.sh python -m msi.apps.coverage_round prepare \
-  --output /users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/flow_round5
+  --preds /users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/preds_229900.h5 \
+  --output /users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/archive/flow_round5
 ```
 
 Preparation refuses an existing output directory. It writes eight complete YAML
@@ -196,7 +197,7 @@ Review the command for one arm without training:
 
 ```bash
 .claude/bin/plot.sh python -m msi.apps.coverage_round run \
-  --round /users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/flow_round5 \
+  --round /users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/archive/flow_round5 \
   --arm joint_long --dry-run
 ```
 
@@ -206,17 +207,17 @@ arm sets are disjoint, job ids namespace the logs, and the per-arm `.started`
 marker is created `O_EXCL`, so the two cannot collide.
 
 ```bash
-R=/users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/flow_round5
+R=/users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/archive/flow_round5
 S=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/experiments/coverage_round.sh
 
 # job 1 -- the target question: does correcting the implicit nuisance
 # marginalization fix coverage, and is the projected correction enough?
-ROUND_DIR=$R ARMS="all_long projected_long joint_long conditional_long" \
+ROUNDS="$R:all_long,projected_long,joint_long,conditional_long" \
   sbatch --job-name=round5_target "$S"
 
 # job 2 -- the budget question, plus the route that conditions explicitly on the
 # previously marginalized nuisance parameters.
-ROUND_DIR=$R ARMS="all_short wide_short wide_long extended_long" \
+ROUNDS="$R:all_short,wide_short,wide_long,extended_long" \
   sbatch --job-name=round5_budget "$S"
 ```
 
@@ -243,8 +244,8 @@ After completion:
 
 ```bash
 .claude/bin/plot.sh python -m msi.apps.score_coverage_round \
-  --round /users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/flow_round5 \
-  --output /users/athomsen/dlss/scratch/runs/v18/default/maps_gcnn/combined/v1/flow_round5/scores.json
+  --round /users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/archive/flow_round5 \
+  --output /users/athomsen/dlss/storage/runs/v18/default/maps_gcnn/combined/v1/archive/flow_round5/scores.json
 ```
 
 Tests (small CPU fixtures, not experiments on these summaries):

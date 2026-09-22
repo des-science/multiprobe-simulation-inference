@@ -2,19 +2,27 @@
 
 Run `all_long` and `extended_long` for each of:
 
-| Probe | Input under `scratch/runs/v18/default/maps_gcnn` | Summary dimension | Extended context dimension |
+| Probe | Input under `storage/runs/v18/default/maps_gcnn` | Summary dimension | Extended context dimension |
 |---|---|---:|---:|
 | lensing | `lensing/v1/preds_126000.h5` | 6 | 9 |
 | clustering | `clustering/v1/preds_126500.h5` | 7 | 10 |
 
-Prepared outputs are in each probe's `v1/flow_round5_probes_clean` directory.
+Prepared outputs are in each probe's `v1/archive/flow_round5_probes_clean` directory.
 Both arms use all simulations, eight MAF members, seed 7, 304 epochs and
 5,168 updates/member. Architecture and sampling settings match the combined
 round; the extension appends `ns, Ob, H0` with their wide analysis priors.
 The baseline provides a matched comparison for each probe. All 1,000 mock
 identities and their order match the combined round exactly.
 
-The launcher is in `y3-deep-lss/submissions/clariden/experiments/coverage_probes.sh`.
+The launcher is `y3-deep-lss/submissions/clariden/experiments/coverage_round.sh`, which took
+over from the retired `coverage_probes.sh` on 2026-09-22:
+
+```bash
+R=/users/athomsen/dlss/storage/runs/v18/default/maps_gcnn
+ROUNDS="$R/lensing/v1/archive/flow_round5_probes_clean:all_long,extended_long \
+        $R/clustering/v1/archive/flow_round5_probes_clean:all_long,extended_long" \
+  SCORE=1 sbatch y3-deep-lss/submissions/clariden/experiments/coverage_round.sh
+```
 It launches four concurrent one-GPU steps on one four-GPU node and scores both
 completed pairs afterward. Each prepared manifest records hashes of inputs,
 configuration and source code. Preparation and execution reject overwrites.
@@ -78,7 +86,7 @@ mixing check of finding 4, are still open.
 
 The initial job 3474356 was cancelled after detecting that Slurm inherited all
 four GPUs into its first step, serializing the arms. Its partial outputs remain
-in `flow_round5_probes`. The replacement explicitly requests four task slots in
+in `v1/archive/flow_round5_probes`. The replacement explicitly requests four task slots in
 the allocation and one GPU per node/task in each exact-sized step. It uses fresh
 manifests and the cleaned source; retained training paths matched the original
 source exactly on seeded CPU fixtures (weighted/unweighted, sequential/fused).
