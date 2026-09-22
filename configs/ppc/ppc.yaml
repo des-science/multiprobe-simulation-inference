@@ -38,9 +38,22 @@ checks:
 
 # Rebinned-Cls-space PPD (auto-probe + DESy3 only). The scale cut is tied to the runs, so the runs
 # config sets `scales_config` (e.g. configs/scales/8wl,32gc.yaml); cls_n_bins is read from the cache.
+# base_dir moves to v18/default because the v16 and v17 data trees were cleared.
+#
+# Disabled, and NOT because its inputs are missing -- re-verified 2026-09-22, they are all present:
+# {base_dir}/cls/grid_cls.h5 (226 GB, 2026-09-06), the rebinned_nb16_8wl,32gc.h5 cache that
+# load_rebinned_cls_grid actually reads, and the catalog-derived maps _build_cls_obs needs, which
+# come from msfm's data/cache/desy3_{metacal,maglim}_*.npy and so never touch the catalogs.
+#
+# It is off because it has not been re-validated against v18, and it does NOT fail soft: run_ppc.py
+# guards only the cache resolution, so a crash lands mid-job and takes the rest of the PPC with it.
+# The last two runs, on v17 in July, both died inside it on parameter-count asserts (15 stored cosmo
+# columns vs 14 from get_parameters; mock theta dim 5 vs 6 obs params) -- schema mismatches between
+# the stored grid and the probe's parameter list, which v18 may or may not still have. Re-enabling
+# is a one-line flip, but check those asserts on a single run first, not in a full job.
 cls_marginals:
-  enabled: true
-  base_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/data/v16/rot_in_place
+  enabled: false
+  base_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/data/v18/default
   # cls_n_bins: only if {base_dir}/cls/ holds >1 rebinned cache for the runs' scales_config
   # sample_set: realizations to draw from. "test" (default, theta == flow context) or "all"
   # (train+test, ~5x more astro samples -> higher ESS; train/val flow losses are close so it's fine).
