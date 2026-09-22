@@ -1140,14 +1140,20 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Loaded {x_true.shape[0]} mock posteriors from {path}")
         return x_true, theta_sample, x_true_rep
 
-    def _calibration_pvals(self, s_rep, context_star, s_obs_rep, stats, n_bootstrap, n_ref):
-        """Compute ``{stat: (p, t_score)}`` for one (s_rep, s_obs) pair using the pure helpers."""
+    def _calibration_pvals(self, s_rep, context_star, s_obs_rep, stats, n_bootstrap, n_ref, deltas=None):
+        """Compute ``{stat: (p, t_score)}`` for one (s_rep, s_obs) pair using the pure helpers.
+
+        ``deltas``, when a dict is passed, also collects ``log_prob``'s per-draw paired differences
+        under that key: the histogram the p-value is the tail of, which is otherwise discarded.
+        """
         out = {}
         for stat in stats:
             if stat == "log_prob":
                 # log_prob uses the full PPD cloud (no bootstrap); n_bootstrap applies only to the
                 # distance/kernel stats below. Parity holds since both legs draw n_samples_neural.
-                p, score, _ = self._pval_log_prob(s_rep, s_obs_rep, context_star)
+                p, score, t_diff = self._pval_log_prob(s_rep, s_obs_rep, context_star)
+                if deltas is not None:
+                    deltas[stat] = t_diff
             else:
                 # quiet inside the calibration loop: the per-mock kernel-bandwidth line would
                 # otherwise repeat once per mock and swamp the log.
@@ -1155,7 +1161,9 @@ class PosteriorPredictiveChecks:
             out[stat] = (float(p), float(score))
         return out
 
-    def run_calibration(self, n_sim="all", n_samples_neural=10_000, n_bootstrap=2_000, n_ref=1_000, stats=None):
+    def run_calibration(
+        self, n_sim="all", n_samples_neural=10_000, n_bootstrap=2_000, n_ref=1_000, stats=None, save=True
+    ):
         """Doux Eq. 9 calibration of the PPC p-values for the current observation (auto AND cross).
 
         ``n_sim`` is the number of mock observations forming the null: ``"all"`` (default) uses every
@@ -1174,6 +1182,14 @@ class PosteriorPredictiveChecks:
         ``_load_mock_posteriors``), so the calibrated cross p̃ respects the probe correlation.
         Requires ``real_idx`` in ``mcmc_samples.h5`` (re-run inference --sample_posterior); skipped
         with a warning otherwise.
+
+        Returns ``{"stats": summary, "null_p": ..., "null_score": ..., "obs_delta": ...}``, the last
+        three keyed by statistic: the null itself, not only its summary. p̃ IS a rank in that null,
+        so anything that re-draws the calibration (a paper figure) needs the array rather than the
+        three numbers, and a GPU minute of it was previously thrown away with only a diagnostic PNG
+        to show for it. ``save`` writes the JSON summary, the PNG and an ``_calibration_null.npz``
+        beside them; pass ``save=False`` to compute without touching the run directory, so
+        re-deriving a calibration cannot overwrite the record of the one the analysis quotes.
         """
         stats = tuple(stats) if stats is not None else self._CALIB_STATS
         mocks = self._load_mock_posteriors()
@@ -1198,7 +1214,8 @@ class PosteriorPredictiveChecks:
 
         # obs leg, at the SAME reduced settings as the mocks (parity)
         s_rep_obs, ctx_obs = self._sample_neural(self.theta_post, n_samples_neural, s_obs=self.s_obs)
-        obs = self._calibration_pvals(s_rep_obs, ctx_obs, self.s_obs_rep, stats, n_bootstrap, n_ref)
+        obs_delta = {}
+        obs = self._calibration_pvals(s_rep_obs, ctx_obs, self.s_obs_rep, stats, n_bootstrap, n_ref, deltas=obs_delta)
 
         # null leg: one mock at a time. (Sampling is NOT batched across mocks -- enflows batches the
         # num_samples dimension, not the context rows, so a single flow.sample call over all mocks'
@@ -1224,12 +1241,14 @@ class PosteriorPredictiveChecks:
             p_tilde_cont = float(np.mean(null_score[s] >= score_obs))
             summary[s] = dict(p_obs=p_obs, p_tilde=p_tilde, p_tilde_continuous=p_tilde_cont)
             LOGGER.info(f"calibration[{s}]: p_obs={p_obs:.4f}  p̃={p_tilde:.4f}  p̃_cont={p_tilde_cont:.4f}")
-            self._plot_calibration(s, null_p[s], p_obs, p_tilde, null_score[s], score_obs, p_tilde_cont, n_sim)
+            if save:
+                self._plot_calibration(s, null_p[s], p_obs, p_tilde, null_score[s], score_obs, p_tilde_cont, n_sim)
 
-        self._save_calibration_summary(
-            summary, dict(n_sim=n_sim, n_samples_neural=n_samples_neural, n_bootstrap=n_bootstrap, n_ref=n_ref)
-        )
-        return summary
+        meta = dict(n_sim=n_sim, n_samples_neural=n_samples_neural, n_bootstrap=n_bootstrap, n_ref=n_ref)
+        if save:
+            self._save_calibration_summary(summary, meta)
+            self._save_calibration_null(null_p, null_score, obs_delta)
+        return dict(stats=summary, null_p=null_p, null_score=null_score, obs_delta=obs_delta, meta=meta)
 
     def _plot_calibration(self, stat, null_p, p_obs, p_tilde, null_score, score_obs, p_tilde_cont, n_sim):
         """Two-panel calibration figure for one statistic.
@@ -1263,6 +1282,21 @@ class PosteriorPredictiveChecks:
         LOGGER.info(f"Saving calibration plot to {plot_file}")
         fig.savefig(plot_file, bbox_inches="tight", dpi=plotting.PLOT_DPI)
         plt.close(fig)
+
+    def _save_calibration_null(self, null_p, null_score, obs_delta):
+        """Write the null arrays to ``{obs}_calibration_null.npz``, beside the summary JSON.
+
+        Same basename, so the two are read as one record: the JSON is p̃, this is what p̃ is a rank
+        in. ``obs_delta_log_prob`` is the observed leg's paired differences at the calibration's own
+        ``n_samples_neural``, i.e. the histogram whose tail is the ``p_obs`` the JSON quotes -- not
+        the ``run_checks`` one, which is drawn at a different sample count.
+        """
+        arrays = {f"null_p_{s}": v for s, v in null_p.items()}
+        arrays.update({f"null_score_{s}": v for s, v in null_score.items()})
+        arrays.update({f"obs_delta_{s}": v for s, v in obs_delta.items()})
+        out_file = os.path.join(self.out_dir, f"{self.obs_label}_calibration_null.npz")
+        np.savez_compressed(out_file, **arrays)
+        LOGGER.info(f"Saved calibration null arrays to {out_file}")
 
     def _save_calibration_summary(self, summary, meta):
         """Write the per-statistic {p_obs, p_tilde, p_tilde_continuous} table to JSON."""
