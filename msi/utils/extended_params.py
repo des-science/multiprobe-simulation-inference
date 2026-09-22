@@ -3,8 +3,12 @@
 The CosmoGridV1 grid varies more parameters than the standard 6-dim inferred vector
 (Om, s8, w0, Aia, n_Aia, bta): ns, Ob, H0 and -- for the baryonified grid -- bary_Mc,
 bary_nu take a different value at every Sobol point. A flow conditioned only on the 6-dim
-vector therefore implicitly marginalizes the others with the full flat grid prior. The
-helpers here look those recorded values up per grid row (via i_sobol) so the flow can be
+vector therefore implicitly marginalizes the others, and not over a flat prior: the narrow
+Sobol half (id_param >= 1250) restricts ns, Ob and H0 to about an eighth of the wide half's
+ranges, so the implicit prior is discontinuous. That is the measured cause of the production
+flow's posterior overconfidence -- see configs/flow/maf.yaml.
+
+The helpers here look those recorded values up per grid row (via i_sobol) so the flow can be
 retrained on the extended conditioning vector WITHOUT recomputing the network summaries,
 and the marginalization can instead be controlled at MCMC time (see the reference-prior
 variant in msi.utils.observations and the fixed_params / gaussian_priors arguments of
@@ -28,7 +32,8 @@ LOGGER = logger.get_logger(__file__)
 # single source of truth in msfm.utils.parameters (shared with the label-gather conversions)
 _LOG10_PARAMS = parameters.LOG10_PARAMS
 
-DEFAULT_EXTEND_PARAMS = ["ns", "Ob", "H0", "bary_Mc", "bary_nu"]
+# The parameters the two Sobol halves disagree about; the baryon ones do not, so they are not here.
+DEFAULT_EXTEND_PARAMS = ["ns", "Ob", "H0"]
 
 
 def load_grid_param_table(msfm_conf):

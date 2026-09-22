@@ -44,6 +44,12 @@
 # comparisons: `cls: Null` leaves the GCNN-vs-transformer contrast alone, and nulling either maps
 # entry reproduces a bench_v7.yaml-shaped maps-vs-Cls analysis.
 
+# EVERY RUN BELOW PREDATES THE EXTENDED CONDITIONING VECTOR. Their flows, chains, PPC and tension
+# outputs come from the unextended ten-parameter likelihood, i.e. the `all_long` arm that round 5
+# measured as overconfident. configs/flow/maf.yaml is now the extended default, so re-running
+# inference here produces a different posterior; msi.utils.flow.refuse_incompatible_retrain stops it
+# overwriting these directories in place. Decide per run whether to re-infer and under which name.
+
 flow_name: ensemble_flow
 
 # Scale cut the networks were trained with (defines the rebinned-Cls cache used by the Cls-space

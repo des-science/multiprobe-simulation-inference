@@ -154,12 +154,15 @@ def setup():
         default=None,
         help="Condition the flow on an EXTENDED parameter vector: append these CosmoGrid grid parameters "
         "(recorded per grid cosmology in the metainfo, looked up via i_sobol -- no summary recomputation) "
-        "to the training params, e.g. 'ns Ob H0 bary_Mc bary_nu' (also the default when the flag is given "
-        "without values). The otherwise implicit wide flat marginalization over these parameters then "
-        "becomes explicit and controllable at MCMC time: DES observations automatically get additional "
-        "reference-prior chains (near-delta ns/Obh2/H0 Gaussians + fixed baryons, the Gower-Street-family "
-        "analysis choices of the DES Y3 SBI papers; see msi.utils.observations). Unless --flow_label is "
-        "given, it defaults to 'ext' so the extended flow does not clobber the baseline checkpoint.",
+        "to the training params, e.g. 'ns Ob H0' (also the default when the flag is given without values). "
+        "The otherwise implicit -- and, across CosmoGrid's two Sobol halves, DISCONTINUOUS -- marginalization "
+        "over these parameters then becomes explicit and controllable at MCMC time: DES observations "
+        "automatically get additional reference-prior chains (near-delta ns/Obh2/H0 Gaussians + fixed "
+        "baryons, the Gower-Street-family analysis choices of the DES Y3 SBI papers; see "
+        "msi.utils.observations). OVERRIDES the flow config's own `extend_params`, which is what "
+        "production uses; pass the flag with no values to reset to the default set, or use a config with "
+        "`extend_params: []` for an unextended flow. Unless --flow_label is given, a CLI extension "
+        "defaults it to 'ext' so an experiment does not clobber the baseline checkpoint.",
     )
     parser.add_argument(
         "--mcmc_backend",
@@ -227,11 +230,12 @@ def main():
     # an ensemble is used for >1 seed-clone members or for any heterogeneous config list
     is_ensemble = args.n_flows > 1 or is_hetero
 
-    # extended conditioning vector: [] (flag without values) means the default extension set. Default the
-    # flow label so the extended flow trains/saves alongside -- not over -- the baseline checkpoint.
-    if args.extend_params is not None and len(args.extend_params) == 0:
-        args.extend_params = list(extended_params.DEFAULT_EXTEND_PARAMS)
-    if args.extend_params and not args.flow_label:
+    # The conditioning vector comes from the flow config in production; --extend_params overrides it
+    # and marks the run as an experiment, which is why only that path defaults the label to 'ext'.
+    args.extend_params, from_cli = flow_utils.resolve_extend_params(args.extend_params, flow_confs or [flow_conf])
+    if args.extend_params:
+        print(f"Extended conditioning vector from {'--extend_params' if from_cli else 'the flow config'}")
+    if args.extend_params and from_cli and not args.flow_label:
         args.flow_label = "ext"
         print("--extend_params: defaulting --flow_label to 'ext'")
 

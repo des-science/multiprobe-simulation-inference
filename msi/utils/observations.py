@@ -21,10 +21,12 @@ NLA_SUFFIX = "_nla"
 # Reference-prior DES variant, only possible for a flow conditioned on the EXTENDED parameter vector
 # (run_inference --extend_params): replaces the implicit wide flat CosmoGrid marginalization of
 # ns / Obh2 / H0 with the near-delta Gaussians shared by the DES Y3 SBI reference papers (the Gower
-# Street analysis family: Jeffrey+24 2403.02314, Gatti+24 2405.10881, Williamson+26), and fixes
-# baryonification at the fiducial (the references do not marginalize baryons). Run automatically for
-# every DES observation when ns/Ob/H0 are among the flow's params, as w0 > -1 + NLA and lambdaCDM +
-# NLA chains -- the closest apples-to-apples analogues to the references' wCDM and LCDM results.
+# Street analysis family: Jeffrey+24 2403.02314, Gatti+24 2405.10881, Williamson+26). Run
+# automatically for every DES observation when ns/Ob/H0 are among the flow's params, as w0 > -1 + NLA
+# and lambdaCDM + NLA chains -- the closest apples-to-apples analogues to the references' wCDM and
+# LCDM results.
+# Baryons are fixed at the fiducial only if the flow is also conditioned on them, which the
+# production config is not; the references do not marginalize them at all.
 REF_GAUSSIAN_PRIORS = {
     "ns": (0.9649, 0.0063),
     "Obh2": (0.02237, 0.00015),  # derived Ob * (H0/100)^2

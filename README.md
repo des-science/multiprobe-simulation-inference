@@ -96,6 +96,14 @@ python msi/apps/run_inference.py \
 `--sample_posterior` adds the posterior-level coverage stage: it samples the posterior for the
 held-out mock observations in one batched pass and writes `mcmc_samples.h5` for TARP.
 
+The flow config also fixes the **conditioning vector**. `configs/flow/maf.yaml` sets
+`extend_params: [ns, Ob, H0]`, so the production flow conditions on those three weakly
+constrained parameters rather than marginalizing them implicitly. It has to: CosmoGridV1's grid
+is two Sobol sequences, and the narrow half restricts ns, Ob and H0 to roughly an eighth of the
+wide half's ranges, which makes the implicit prior discontinuous and the posterior
+correspondingly overconfident. Conditioning on them hands the marginalization to the MCMC.
+`configs/flow/coverage/ROUND5.md` has the measurement; `configs/flow/maf.yaml` the summary.
+
 ## Usage
 
 ### Entry points
@@ -104,7 +112,7 @@ All in [`msi/apps/`](msi/apps/).
 
 | App | What it does |
 |---|---|
-| `run_inference.py` | The main driver. Trains a `LikelihoodFlow` (or an ensemble) on the network summaries and samples the posterior by MCMC. Also supports joint two-run setups (`--out_dir_2`), combining summaries across training steps (`--n_steps_multi`, `--n_steps_all`, with optional `--pca_compress`), extended conditioning vectors (`--extend_params`), and reloading a trained flow (`--load_flow`). |
+| `run_inference.py` | The main driver. Trains a `LikelihoodFlow` (or an ensemble) on the network summaries and samples the posterior by MCMC. Also supports joint two-run setups (`--out_dir_2`), combining summaries across training steps (`--n_steps_multi`, `--n_steps_all`, with optional `--pca_compress`), overriding the config's conditioning vector (`--extend_params`), and reloading a trained flow (`--load_flow`). |
 | `run_ppc.py` | Posterior predictive checks, in two families: **auto**, a per-run goodness of fit, and **cross**, the cross-probe consistency test of Doux et al. 2021, evaluated in both directions. Checkpoint-aware — a re-run recovers trained flows from disk. |
 | `run_tension_chains.py` | Tension, stage A (PyTorch): builds the parameter-difference chains for each run pair and mock observation, both uncorrelated (independently sampled chains) and correlated (the shared-parameter shift of the joint residual posterior). |
 | `run_tension_values.py` | Tension, stage B (TensorFlow): turns those difference chains into an n-sigma significance and writes it out as YAML. |
@@ -173,6 +181,11 @@ included as a worked example, not as a portable script set.
 - **Flow training is checkpointed.** Re-running an app recovers trained flows from disk rather
   than retraining; pass `--retrain_flows` (PPC) or omit `--load_flow` on a fresh directory to
   force new training.
+- **The conditioning vector belongs to the flow config, not the command line.** `extend_params`
+  is a property of the density being estimated, so it lives beside the architecture and is
+  recorded in the run directory. `--extend_params` overrides it for one invocation and then
+  defaults `--flow_label` to `ext`, so an experiment cannot overwrite the checkpoint it is
+  being compared against.
 - **Write scientific-notation floats with an explicit decimal point.** In YAML, a bare `1e-3`
   parses as a *string*; `1.0e-3` parses as a float. The string silently propagates.
 

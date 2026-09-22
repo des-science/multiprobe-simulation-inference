@@ -5,6 +5,7 @@ import re
 import h5py
 import numpy as np
 import torch
+import yaml
 
 from msi.flow_conductor import architecture
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
@@ -319,14 +320,36 @@ def _extract_train_kwargs(flow_conf: dict) -> dict:
     )
 
 
+def resolve_extend_params(cli_value, flow_confs):
+    """Settle the flow's extended conditioning vector, and say whether the CLI asked for it.
+
+    The production vector lives in the flow config (``extend_params``); ``--extend_params`` overrides
+    it per invocation, with the bare flag meaning ``DEFAULT_EXTEND_PARAMS``. The second return value
+    is what run_inference uses to decide whether to default ``--flow_label`` to 'ext': an experiment
+    run from the CLI must not overwrite the baseline checkpoint it is measured against, whereas the
+    configured vector IS the baseline and owns the unprefixed directory.
+
+    Returns:
+        tuple: (list of parameter names, True if it came from the command line).
+    """
+    from msi.utils.extended_params import DEFAULT_EXTEND_PARAMS
+
+    if cli_value is not None:
+        return list(cli_value) if cli_value else list(DEFAULT_EXTEND_PARAMS), True
+    configured = [list(conf.get("extend_params") or []) for conf in flow_confs]
+    if any(c != configured[0] for c in configured[1:]):
+        raise ValueError(f"Flow configs disagree about extend_params: {configured}")
+    return configured[0], False
+
+
 TRAIN_PRIOR_MODES = ("all", "wide", "reweight_projected", "reweight_joint", "reweight_conditional")
 
 
 def train_prior_mode(flow_conf: dict):
     """Select all rows, the wide subset, or a deterministic grid-weighting control.
 
-    These controls support the coverage experiments. Production NLE can retain all
-    rows and explicitly condition on the nuisance parameters via --extend_params.
+    These controls support the coverage experiments. Production keeps every row and
+    conditions on the nuisance parameters explicitly, via the flow config's extend_params.
     """
     v = flow_conf.get("training", {}).get("train_prior", "all")
     if v not in TRAIN_PRIOR_MODES:
@@ -428,6 +451,33 @@ def resolve_group_ids(flow_conf: dict, i_signal, i_sobol=None, msfm_conf=None):
         f"cosmologies (all held-out are wide-prior)"
     )
     return rank[i_sobol]
+
+
+def refuse_incompatible_retrain(flow, flow_conf):
+    """Refuse to retrain over a directory whose flow used a different conditioning vector.
+
+    Training saves with ``exist_ok=True``, so a re-run would leave the previous analysis's chains,
+    PPC and tension outputs beside a flow that no longer matches them, and nothing downstream
+    re-checks. Compares the saved ``flow_config.yaml``, not the checkpoint, because the v18
+    production flows were pruned once their chains existed. No saved config means no conflict.
+    """
+    saved_file = os.path.join(flow.model_dir, "flow_config.yaml")
+    if not os.path.exists(saved_file):
+        return
+    try:
+        with open(saved_file) as f:
+            saved = list(yaml.safe_load(f).get("extend_params") or [])
+    except Exception as e:  # noqa: BLE001 -- an unreadable config is not a conflict
+        print(f"WARNING: could not read {saved_file} ({type(e).__name__}: {e}); not checking")
+        return
+    current = list(flow_conf.get("extend_params") or [])
+    if saved != current:
+        raise ValueError(
+            f"{flow.model_dir} holds a flow trained with extend_params={saved or '[]'}, but this run "
+            f"would train with {current or '[]'} and overwrite it in place, leaving the chains, PPC and "
+            f"tension outputs beside it stale. Pass --flow_label to train alongside it, or move the "
+            f"old directory away."
+        )
 
 
 def build_flow(
@@ -561,6 +611,8 @@ def build_flow(
             torch_seed=seed,
         )
         print("Fitting flow...")
+
+    refuse_incompatible_retrain(flow, base_conf)
 
     fit_kwargs = _extract_train_kwargs(base_conf)
     if member_train_kwargs is not None:

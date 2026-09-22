@@ -1,4 +1,31 @@
+# Production normalizing-flow likelihood. Eight MAF members, trained on every grid row, with the
+# weakly constrained nuisance parameters ns, Ob and H0 carried explicitly in the conditioning
+# vector (`extend_params` below).
+#
+# WHY THE EXTENSION IS THE DEFAULT. CosmoGridV1's grid is two Sobol sequences, and the narrow half
+# (id_param >= 1250) restricts all six of Om, s8, w0, ns, Ob, H0 -- the nuisance ranges about 8x
+# tighter than the wide half's. A flow conditioned only on the summary parameters therefore
+# estimates a likelihood marginalized over a DISCONTINUOUS implicit nuisance prior: sharper inside
+# the narrow box than outside it. That is a property of the training design, not of the summaries,
+# and capacity or regularization does not fix it. Conditioning on ns, Ob and H0 makes the
+# marginalization explicit and hands it to the MCMC, where the analysis prior is applied.
+#
+# Measured on 1,000 shared held-out mocks per probe: RMSE / RMS posterior sd within 0.03 of one and
+# equal-tail 68% coverage within 0.02 of nominal on Om, s8 and w0, on all three probes, against
+# 1.09-1.15 in Om for the unextended baseline. No HPD or TARP test rejects at 0.01 after a Holm
+# adjustment. It is also the only route that keeps every training row: reweighting the grid back to
+# the wide prior costs effective sample size, and training on the wide half alone discards half the
+# simulations for no measured gain. Numbers and the arms that were compared are in
+# configs/flow/coverage/ROUND5.md and ROUND5_PROBES.md; open caveats in ROUND5_REVIEW.md, of which
+# sampler mixing on the extended chains is the one that bears on this choice.
+
 seed: 7
+
+# Appended to the summary parameters to form the conditioning vector, looked up per grid cosmology
+# via i_sobol -- no summary recomputation, no retraining of the compression network. Set to [] for
+# the unextended flow. bary_Mc and bary_nu are deliberately absent: both Sobol halves give them the
+# same range, so they carry none of the inconsistency this corrects.
+extend_params: [ns, Ob, H0]
 
 context_embedding:
   dim: 16
@@ -33,9 +60,12 @@ mcmc:
   use_validation_weights: false
   store_individual_chains: false
 
+# n_likelihood_samples must exceed plot_eecp_check's 100 confidence levels AFTER the ensemble
+# splits it n_samples // n_flows ways, or the likelihood HPD plot dies on a zero slice step -- which
+# the stage's try/except swallows, leaving the run silently short of 1_likelihood_hpd.png.
 diagnostics:
   n_obs: 1000
-  n_likelihood_samples: 100
+  n_likelihood_samples: 1000
   prior_selection: wide
   tests:
     hpd: true

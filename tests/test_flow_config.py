@@ -20,6 +20,57 @@ class FlowConfigTests(unittest.TestCase):
             self.assertEqual(result['batch_size'], 10000)
             self.assertEqual(result['scheduler_type'], 'cosine')
 
+    def test_extend_params_resolution(self):
+        from msi.utils.extended_params import DEFAULT_EXTEND_PARAMS
+        from msi.utils.flow import resolve_extend_params
+        prod = {'extend_params': ['ns', 'Ob', 'H0']}
+        # the config is the production source; no CLI flag means no 'ext' label
+        self.assertEqual(resolve_extend_params(None, [prod]), (['ns', 'Ob', 'H0'], False))
+        # a config without the key, or with it emptied, trains the unextended flow
+        self.assertEqual(resolve_extend_params(None, [{}]), ([], False))
+        self.assertEqual(resolve_extend_params(None, [{'extend_params': []}]), ([], False))
+        # the CLI wins, and is flagged so run_inference protects the baseline checkpoint
+        self.assertEqual(resolve_extend_params([], [prod]), (list(DEFAULT_EXTEND_PARAMS), True))
+        self.assertEqual(resolve_extend_params(['ns'], [prod]), (['ns'], True))
+        # a heterogeneous ensemble cannot have members with different conditioning vectors
+        with self.assertRaises(ValueError):
+            resolve_extend_params(None, [prod, {'extend_params': ['ns']}])
+
+    def test_production_flow_config_carries_the_validated_setup(self):
+        import pathlib
+        import yaml
+        root = pathlib.Path(__file__).resolve().parents[1]
+        conf = yaml.safe_load((root / 'configs/flow/maf.yaml').read_text())
+        self.assertEqual(conf['extend_params'], ['ns', 'Ob', 'H0'])
+        # plot_eecp_check slices 100 confidence levels out of n_samples // n_flows; 8 members need
+        # >= 800 or the likelihood HPD plot dies on a zero-length slice step
+        self.assertGreaterEqual(conf['diagnostics']['n_likelihood_samples'], 800)
+        self.assertIsInstance(conf['training']['learning_rate'], float)
+
+    def test_retrain_guard_protects_a_differently_conditioned_run_dir(self):
+        import tempfile
+        from pathlib import Path
+        import yaml
+        from msi.utils.flow import refuse_incompatible_retrain
+
+        class FakeFlow:
+            def __init__(self, model_dir):
+                self.model_dir = model_dir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            flow = FakeFlow(tmp)
+            # no saved config yet -> a fresh directory, never a conflict
+            refuse_incompatible_retrain(flow, {'extend_params': ['ns']})
+            # the v18 production dirs have no extend_params key at all
+            Path(tmp, 'flow_config.yaml').write_text(yaml.safe_dump({'seed': 7}))
+            with self.assertRaisesRegex(ValueError, 'overwrite it in place'):
+                refuse_incompatible_retrain(flow, {'extend_params': ['ns', 'Ob', 'H0']})
+            refuse_incompatible_retrain(flow, {})
+            Path(tmp, 'flow_config.yaml').write_text(yaml.safe_dump({'extend_params': ['ns', 'Ob', 'H0']}))
+            refuse_incompatible_retrain(flow, {'extend_params': ['ns', 'Ob', 'H0']})
+            with self.assertRaises(ValueError):
+                refuse_incompatible_retrain(flow, {})
+
     def test_cosmology_split_holds_out_only_wide_cosmologies(self):
         import numpy as np
         from unittest.mock import patch
