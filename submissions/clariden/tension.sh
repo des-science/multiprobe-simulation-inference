@@ -55,8 +55,12 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/${SLURM_JOB_ID}"
 
 # --- stage A: difference chains (PyTorch / torch_env) ---------------------------------------------
+# --cpu-bind=none is required for a step that sub-allocates inside an --exclusive batch step:
+# without it the step asks to bind more CPUs than its own 72-CPU allocation holds and dies in
+# seconds with "CPU binding outside of job step allocation", leaving a 0-byte stage log. Jobs
+# 3478116/3478117 died exactly there on 2026-09-22; maps/rerun/inference.sh carries the same flag.
 srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
-    --uenv=pytorch/v2.9.1:v2 --view=default \
+    --cpu-bind=none --uenv=pytorch/v2.9.1:v2 --view=default \
     --output="${LOG}_chains.log" \
     bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_tension_chains.py \
         --runs_config=\"$RUNS_CONFIG\" \
@@ -67,7 +71,7 @@ srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --m
 
 # --- stage B: numerical tension values (TensorFlow / tensorflow env) ------------------------------
 srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
-    --environment=tensorflow --gpu-bind=none \
+    --environment=tensorflow --cpu-bind=none --gpu-bind=none \
     --output="${LOG}_values.log" \
     python $MSI/msi/apps/run_tension_values.py \
         --runs_config="$RUNS_CONFIG" \
