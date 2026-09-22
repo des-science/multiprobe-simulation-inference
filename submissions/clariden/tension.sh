@@ -13,6 +13,9 @@
 #   2. tensorflow: run tensiometer's flow estimator to assign the numerical tension value (stage B)
 # Both stages loop internally over the run combinations and mock observations defined in the configs.
 
+set -euo pipefail
+ulimit -c 0
+
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
@@ -20,10 +23,30 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 REPOS="/users/athomsen/dlss/repos"
 MSI="$REPOS/multiprobe-simulation-inference"
 
-RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t2_v3.yaml"
-# RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t1_v3.yaml"
-TENSION_CONFIG="$MSI/configs/tension/tension.yaml"
-MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/v17/baseline.yaml"
+# --- Overridable defaults ------------------------------------------------------------------------
+#
+# The three configs are derived from (VERSION, SUBVERSION, RUNS_NAME) so that switching datasets
+# needs no edit to this file. Both layouts already follow the convention:
+#   configs/runs/<VERSION>/<SUBVERSION>/<RUNS_NAME>.yaml   (msi, run definitions)
+#   configs/<VERSION>/<SUBVERSION>.yaml                    (msfm, priors for the residual MCMC)
+# Older v17 combinations stay reachable, e.g.
+#   VERSION=v17 SUBVERSION=baseline RUNS_NAME=t1_v3 sbatch tension.sh
+# Any of the three full paths can still be overridden directly.
+VERSION="${VERSION:-v18}"
+SUBVERSION="${SUBVERSION:-default}"
+# Default is the production set. It was `v1` until 2026-09-08, when that file was renamed
+# bench_v7.yaml -- see its header; `RUNS_NAME=bench_v7` still reaches it.
+RUNS_NAME="${RUNS_NAME:-prod}"
+
+RUNS_CONFIG="${RUNS_CONFIG:-$MSI/configs/runs/$VERSION/$SUBVERSION/$RUNS_NAME.yaml}"
+TENSION_CONFIG="${TENSION_CONFIG:-$MSI/configs/tension/tension.yaml}"
+MSFM_CONFIG="${MSFM_CONFIG:-$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml}"
+
+# Both stages loop over every run pair the runs config implies, so wall clock scales with the
+# number of combinations: ~2.3 min per pair in stage A, ~2.8 min per pair in stage B (4 flow fits).
+# The two v17 t2_v3 jobs (12 pairs, ~65 min of work) both died at the 1 h default with stage B
+# half done -- give a run with many pairs more than the header requests:
+#   sbatch --time=02:00:00 tension.sh
 
 LOG_DIR="$MSI/submissions/clariden/slurm"
 mkdir -p "$LOG_DIR"
@@ -39,7 +62,6 @@ srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --m
         --msfm_config=\"$MSFM_CONFIG\" \
         --device=cuda"
 
-sleep 30
 
 # --- stage B: numerical tension values (TensorFlow / tensorflow env) ------------------------------
 srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \

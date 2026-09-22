@@ -15,20 +15,35 @@
 # TensorFlow stage is needed. The app loops internally over the runs / comparisons / observations
 # defined in the configs. Walltime scales with the number of runs (auto) and pairs (cross); adjust.
 
+set -euo pipefail
+ulimit -c 0
+
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 REPOS="/users/athomsen/dlss/repos"
 MSI="$REPOS/multiprobe-simulation-inference"
 
-RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t2_v3.yaml"
-# RUNS_CONFIG="$MSI/configs/runs/v17/baseline/t1_v3.yaml"
+# --- Overridable defaults ------------------------------------------------------------------------
+#
+# Same (VERSION, SUBVERSION, RUNS_NAME) interface as tension.sh, so switching datasets needs no edit
+# to this file. Both layouts already follow the convention:
+#   configs/runs/<VERSION>/<SUBVERSION>/<RUNS_NAME>.yaml   (msi, run definitions)
+#   configs/<VERSION>/<SUBVERSION>.yaml                    (msfm, parameter definitions / priors)
+# The msfm config must match the dataset the runs were trained on: v17 dropped bta, so pointing a
+# v18 runs config at configs/v17/baseline.yaml fails the PPC's parameter-dimension asserts.
+# Older combinations stay reachable, e.g.
+#   VERSION=v17 SUBVERSION=baseline RUNS_NAME=t2_v3 sbatch ppc.sh
+VERSION="${VERSION:-v18}"
+SUBVERSION="${SUBVERSION:-default}"
+# Default is the production set. It was `v1` until 2026-09-08, when that file was renamed
+# bench_v7.yaml -- see its header; `RUNS_NAME=bench_v7` still reaches it.
+RUNS_NAME="${RUNS_NAME:-prod}"
 
-PPC_CONFIG="$MSI/configs/ppc/ppc.yaml"
+RUNS_CONFIG="${RUNS_CONFIG:-$MSI/configs/runs/$VERSION/$SUBVERSION/$RUNS_NAME.yaml}"
 # ppc_quick.yaml trims everything but the Cls-space PPD; short enough for --partition=debug.
-# PPC_CONFIG="$MSI/configs/ppc/ppc_quick.yaml"
-
-MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/v17/baseline.yaml"
+PPC_CONFIG="${PPC_CONFIG:-$MSI/configs/ppc/ppc.yaml}"
+MSFM_CONFIG="${MSFM_CONFIG:-$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml}"
 
 # Flow training is checkpoint-aware by default: each PPC flow is recovered from disk when one exists.
 # Force a retrain from scratch (e.g. after an architecture change) with
