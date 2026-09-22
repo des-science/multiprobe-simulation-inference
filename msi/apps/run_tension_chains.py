@@ -170,9 +170,11 @@ def main():
             for obs_label in obs_for_group:
                 LOGGER.info(f"Processing obs_label: {obs_label}")
 
-                # load the two independent inference chains once (native sigma8 space)
-                raw_1 = np.load(tensions.chain_path(run_1, obs_label, lambdaCDM_string))
-                raw_2 = np.load(tensions.chain_path(run_2, obs_label, lambdaCDM_string))
+                # load the two independent inference chains once (native sigma8 space). load_chain
+                # marginalizes over the flow's extension parameters (ns/Ob/H0) and returns the column
+                # names the file actually carries.
+                raw_1, cols_1 = tensions.load_chain(run_1, obs_label, lambdaCDM_string, orig_params_1)
+                raw_2, cols_2 = tensions.load_chain(run_2, obs_label, lambdaCDM_string, orig_params_2)
 
                 # run the (expensive) joint residual-posterior MCMC once in native sigma8 space
                 joint_obs = np.concatenate([obs_dict_1[obs_label], obs_dict_2[obs_label]], axis=0)
@@ -195,8 +197,11 @@ def main():
                     S8_string, _ = tensions.string_suffixes(use_S8, use_lambdaCDM)
 
                     # --- uncorrelated: parameter difference of the two independent chains ---
-                    chain_1, names_1 = tensions.process_cosmologies(raw_1, orig_params_1, use_lambdaCDM, use_S8)
-                    chain_2, names_2 = tensions.process_cosmologies(raw_2, orig_params_2, use_lambdaCDM, use_S8)
+                    # cols_* already reflect the reduction the saved file carries, so the lambdaCDM
+                    # drop is NOT re-applied here -- doing so deletes w0 by index from a chain that
+                    # no longer has it and shifts every later parameter.
+                    chain_1, names_1 = tensions.process_cosmologies(raw_1, cols_1, False, use_S8)
+                    chain_2, names_2 = tensions.process_cosmologies(raw_2, cols_2, False, use_S8)
                     samples_1 = MCSamples(samples=chain_1, names=names_1)
                     samples_2 = MCSamples(samples=chain_2, names=names_2)
                     diff_uncorrelated = parameter_diff_chain(samples_1, samples_2, boost=uncorr_conf.get("boost", 10))

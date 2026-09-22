@@ -483,6 +483,22 @@ class PosteriorPredictiveChecks:
         if check_linf:
             self._check_one_sample(stat="linf")
 
+    @staticmethod
+    def _load_posterior_chain(flow_dir, obs_label, params):
+        """Load ``chain_<obs_label>.npy`` and marginalize over the flow's extension parameters.
+
+        The PPC flow is conditioned on the summaries' own parameter vector, which comes from the
+        (unextended) grid cosmologies in the preds file. A chain from an extended inference flow is
+        wider than that by ns/Ob/H0 and would not fit the context it is fed into, so it is reduced
+        to the base vector here -- which for a set of samples is exactly marginalizing over them.
+        """
+        from msi.utils import extended_params
+
+        path = os.path.join(flow_dir, f"chain_{obs_label}.npy")
+        chain = np.load(path)
+        extend = extended_params.flow_extend_params(flow_dir)
+        return extended_params.marginalize_extension(chain, params, extend, source=path)
+
     def _set_observation(self, obs_label=None, s_obs=None, theta_post=None, s_obs_rep=None, theta_post_rep=None):
         """Set up the observation data and configuration for the PPC."""
 
@@ -508,7 +524,7 @@ class PosteriorPredictiveChecks:
         self.s_obs = s_obs
 
         if theta_post is None:
-            theta_post = np.load(os.path.join(obs_flow_dir, f"chain_{obs_label}.npy"))
+            theta_post = self._load_posterior_chain(obs_flow_dir, obs_label, self._obs_params)
         self.theta_post = theta_post
 
         # rep_probe
@@ -521,7 +537,7 @@ class PosteriorPredictiveChecks:
                 s_obs_rep = rep_obs_dict[obs_label]
 
             if theta_post_rep is None:
-                theta_post_rep = np.load(os.path.join(rep_flow_dir, f"chain_{obs_label}.npy"))
+                theta_post_rep = self._load_posterior_chain(rep_flow_dir, obs_label, self._rep_params)
         else:
             s_obs_rep = s_obs
             theta_post_rep = theta_post
@@ -1083,6 +1099,8 @@ class PosteriorPredictiveChecks:
         """
         import h5py
 
+        from msi.utils import extended_params
+
         path = os.path.join(self._obs_flow_dir, "mcmc_samples.h5")
         if not os.path.exists(path):
             LOGGER.warning(
@@ -1095,6 +1113,16 @@ class PosteriorPredictiveChecks:
             x_true = f["x_true"][:]
             theta_sample = f["theta_sample"][:]
             real_idx = f["real_idx"][:] if "real_idx" in f else None
+
+        # Same reduction as the DES chain above: the coverage stage samples the inference flow, so its
+        # posteriors carry the extension columns too and must be marginalized before the dimension
+        # assert below -- which is the check that would otherwise fire.
+        theta_sample = extended_params.marginalize_extension(
+            theta_sample,
+            self._obs_params,
+            extended_params.flow_extend_params(self._obs_flow_dir),
+            source=path,
+        )
 
         assert x_true.shape[1] == self._s_obs_grid.shape[1], (
             f"mock x_true summary dim {x_true.shape[1]} != obs-probe summary dim "

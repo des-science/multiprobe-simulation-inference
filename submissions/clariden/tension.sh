@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=01:00:00
+#SBATCH --time=03:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
@@ -44,9 +44,11 @@ MSFM_CONFIG="${MSFM_CONFIG:-$REPOS/multiprobe-simulation-forward-model/configs/$
 
 # Both stages loop over every run pair the runs config implies, so wall clock scales with the
 # number of combinations: ~2.3 min per pair in stage A, ~2.8 min per pair in stage B (4 flow fits).
-# The two v17 t2_v3 jobs (12 pairs, ~65 min of work) both died at the 1 h default with stage B
-# half done -- give a run with many pairs more than the header requests:
-#   sbatch --time=02:00:00 tension.sh
+# The header was 1 h until 2026-09-22 and that was never enough for a production set: the two v17
+# t2_v3 jobs (12 pairs) both died there with stage B half done, and job 3328338 -- v18/default prod,
+# the 21 combinations this file now defaults to -- took 1:58:29 (stage A 52:56, stage B 1:04:54).
+# 3 h carries that with margin. A SMALLER set can be given less:
+#   sbatch --time=01:00:00 tension.sh
 
 LOG_DIR="$MSI/submissions/clariden/slurm"
 mkdir -p "$LOG_DIR"
@@ -70,3 +72,17 @@ srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --m
     python $MSI/msi/apps/run_tension_values.py \
         --runs_config="$RUNS_CONFIG" \
         --tension_config="$TENSION_CONFIG"
+
+
+# --- what actually landed -------------------------------------------------------------------------
+# Neither stage fails on a missing input: stage B logs "Missing <kind> chain, skipping" and stage A
+# catches plot errors, so exit 0 does NOT mean the analysis is complete. Count the outputs here.
+# This is the check that was absent when two v17 pairs ended up with difference chains and no
+# significance, and it costs nothing next to a 2 h job.
+echo "=== tension summary (job ${SLURM_JOB_ID}) ==="
+printf 'stage A  difference chains saved : %s\n' "$(grep -c 'Saved chain to' "${LOG}_chains.log" || true)"
+printf 'stage A  plot failures           : %s\n' "$(grep -c 'plotting failed' "${LOG}_chains.log" || true)"
+printf 'stage B  significances saved     : %s\n' "$(grep -c 'Saved tension results to' "${LOG}_values.log" || true)"
+printf 'stage B  chains missing          : %s\n' "$(grep -c 'chain, skipping' "${LOG}_values.log" || true)"
+grep -n 'chain, skipping\|plotting failed\|Traceback' "${LOG}_chains.log" "${LOG}_values.log" \
+    || echo "no skips, plot failures or tracebacks"

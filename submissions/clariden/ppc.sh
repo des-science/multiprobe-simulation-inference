@@ -65,3 +65,18 @@ srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --m
         --msfm_config=\"$MSFM_CONFIG\" \
         $RETRAIN_FLOWS \
         --device=cuda"
+
+
+# --- what actually landed -------------------------------------------------------------------------
+# run_ppc skips rather than fails when an input is missing -- the calibration returns None with a
+# warning when mcmc_samples.h5 (or its real_idx) is absent, and the Cls-space PPD is disabled with a
+# warning when its cache cannot be resolved. Exit 0 therefore does NOT mean every check ran, so
+# count what landed instead of trusting the job state.
+echo "=== ppc summary (job ${SLURM_JOB_ID}) ==="
+printf 'auto runs processed     : %s\n' "$(grep -c '=== auto:' "${LOG}_ppc.log" || true)"
+printf 'cross pairs processed   : %s\n' "$(grep -c '=== cross:' "${LOG}_ppc.log" || true)"
+printf 'calibrations saved      : %s\n' "$(grep -c 'Saved calibration summary to' "${LOG}_ppc.log" || true)"
+printf 'calibration nulls saved : %s\n' "$(grep -c 'Saved calibration null arrays to' "${LOG}_ppc.log" || true)"
+printf 'warnings                : %s\n' "$(grep -c ' WAR ' "${LOG}_ppc.log" || true)"
+grep -n 'skipping p-value calibration\|disabled:\|Traceback' "${LOG}_ppc.log" \
+    || echo "no skipped calibrations, disabled checks or tracebacks"

@@ -1,0 +1,65 @@
+# Pre-flight PPC config: exercises every code path the full ppc.yaml uses, on the cheapest possible
+# slice, so a schema or dimension problem surfaces in ~15 min on --partition=debug instead of hours
+# into the 6 h production job.
+#
+#   VERSION=v18 SUBVERSION=default PPC_CONFIG=<this file> \
+#       sbatch --partition=debug --time=00:30:00 ppc.sh
+#
+# WHAT IT COVERS, and why each trim is safe:
+#   * auto only, lensing only -- the auto loop is where the DES chain is loaded and where the
+#     calibration reads mcmc_samples.h5, i.e. both places a chain's width has to reconcile against
+#     the run's parameter list. The cross loop loads chains the same way, through the same helper.
+#   * check_log_prob on -- the primary statistic, and the one that actually samples the PPC flow, so
+#     a context-dimension mismatch between the flow and the posterior chain shows up here.
+#   * calibration on with n_sim: 50 -- the p̃ from 50 mocks is meaningless and MUST NOT be quoted;
+#     the point is only that mcmc_samples.h5 loads, reconciles and pairs. The full job does 1000.
+#   * cls_marginals off, matching ppc.yaml -- it has not been re-validated against v18 and does not
+#     fail soft, so it would be testing something other than what this file is for.
+#
+# The PPC flow trained here is SMALL and is written to the same {flow_dir}/ppc/ path the production
+# job uses. Delete those flows (or pass RETRAIN_FLOWS=--retrain_flows) before the real run, or it
+# will recover this undersized checkpoint instead of training the real one.
+
+cosmo_params: [Om, s8, w0]
+seed: 111
+
+run_auto: true
+run_cross: false
+
+independent_cross: false
+# Everything but lensing: one probe is enough to prove the shapes reconcile, and the parameter list
+# is per probe, so lensing is the shortest one that still carries nuisances (Aia, n_Aia, bta).
+skip_probes: [clustering, combined, 2x2pt]
+cross_pairs:
+  - [lensing, clustering]
+cross_same_probe: false
+
+flow_config: /users/athomsen/dlss/repos/multiprobe-simulation-inference/configs/flow/maf_ppc.yaml
+n_flows: 1
+# Undersized on purpose: 5 epochs is nowhere near converged and the resulting p-values are not
+# results. It is the only knob that separates a 15 min pre-flight from a multi-hour job.
+flow_fit: { n_epochs: 5, run_c2st: false }
+
+sampling:
+  n_samples_neural: 10000
+  n_samples_grid: 1000
+  k_highest_grid: null
+
+checks:
+  plot_param_posterior: false
+  check_data_marginals: true
+  check_log_prob: true
+  check_kernel: false
+  check_mahalanobis: false
+  check_l1: false
+  check_l2: false
+  check_linf: false
+
+cls_marginals:
+  enabled: false
+  base_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/data/v18/default
+
+calibration:
+  enabled: true
+  n_sim: 50
+  n_samples_neural: 1000

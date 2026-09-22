@@ -90,8 +90,12 @@ def build_combinations(runs_conf):
                 raise ValueError("comparisons.data_pairs must be a list of pairs or null")
             allowed = []
             for pair in pairs_conf:
-                if (not isinstance(pair, (list, tuple)) or len(pair) != 2
-                        or not all(isinstance(name, str) for name in pair) or pair[0] == pair[1]):
+                if (
+                    not isinstance(pair, (list, tuple))
+                    or len(pair) != 2
+                    or not all(isinstance(name, str) for name in pair)
+                    or pair[0] == pair[1]
+                ):
                     raise ValueError(f"Expected two distinct representation names, got {pair!r}")
                 unknown = set(pair) - set(runs_conf["runs"])
                 if unknown:
@@ -178,6 +182,44 @@ def chain_path(probe_dict, obs_label, lambdaCDM_string):
 # ----------------------------------------------------------------------------------------
 # data loading + row alignment + cosmology processing (numpy / h5py only)
 # ----------------------------------------------------------------------------------------
+# Chain variants that DROP a parameter column rather than fixing it, so the saved file is narrower
+# than the run's parameter list. msi writes them that way (``likelihood_base.py``), and the reduced
+# space is exactly w0 for lambdaCDM and bta for nla. Mirrors deep_lss's
+# ``run_diagnostics.VARIANT_FIXED`` and dlss_plot's ``runs.VARIANT_FIXED`` -- keep the three in step.
+VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",)}
+
+
+def chain_columns(params, variant=""):
+    """The base column names of ``chain_<obs><variant>.npy``, which is NOT always ``params``.
+
+    Qualifiers are matched as whole underscore-separated tokens rather than as substrings, so a
+    label that merely contains one does not silently lose a column.
+    """
+    tokens = set((variant or "").split("_"))
+    dropped = {p for q, fixed in VARIANT_FIXED.items() if q in tokens for p in fixed}
+    return [p for p in params if p not in dropped]
+
+
+def load_chain(probe_dict, obs_label, lambdaCDM_string, params):
+    """Load an inference chain and marginalize over the flow's extension parameters.
+
+    Returns ``(chain, columns)``. ``columns`` names the columns that are actually there, so callers
+    must NOT re-apply the variant reduction: a lambdaCDM chain arrives with w0 already gone, and
+    deleting it again by index shifts every parameter after it (see ``chain_columns``).
+
+    ns/Ob/H0 are always marginalized away here. The flow conditions on them to fix the discontinuous
+    implicit prior over CosmoGrid's two Sobol halves; the tension analysis is a statement about the
+    shared cosmology and nuisance vector, and dropping columns from a chain marginalizes exactly.
+    """
+    from msi.utils import extended_params
+
+    path = chain_path(probe_dict, obs_label, lambdaCDM_string)
+    chain = np.load(path)
+    columns = chain_columns(params, lambdaCDM_string)
+    extend = extended_params.flow_extend_params(os.path.dirname(path))
+    return extended_params.marginalize_extension(chain, columns, extend, source=path), columns
+
+
 def load_probe_data(probe_dict):
     """Load grid predictions, cosmologies, observation dict and realization indices for a run.
 

@@ -109,3 +109,55 @@ def extend_obs_cosmo_dict(obs_cosmo_dict, params, extend_params, msfm_conf, tabl
         extra = extend_cols[i_min] if dist[i_min] < 1e-4 else fid_extra
         extended[label] = np.concatenate([cosmo, extra])
     return extended
+
+
+# ------------------------------------------------------------------------------------------------
+# downstream: marginalizing the extension away again
+#
+# Only the flow conditions on the extended vector. Every diagnostic downstream of it -- PPC, the
+# tension chains, the deep_lss coverage/FoM tables, dlss_plot -- works in the base parameter space
+# the network was trained on, and infers that space from a config that does not know the flow was
+# extended. Chains are then wider than the parameter list naming their columns, which is a silent
+# mislabeling in the best case and an opaque shape error in the worst.
+# ------------------------------------------------------------------------------------------------
+def flow_extend_params(flow_dir):
+    """The parameters the flow in ``flow_dir`` was conditioned on BEYOND the network's own list.
+
+    Recorded per run in the flow dir's own ``flow_config.yaml``, so it is a property of the chains
+    sitting next to it rather than of whatever config a caller happens to hold. The key is absent
+    from every pre-2026-09-22 flow, which is why a missing file or key is ``[]`` and not an error.
+    """
+    from msfm.utils.input_output import read_yaml
+
+    path = os.path.join(flow_dir, "flow_config.yaml")
+    if not os.path.isfile(path):
+        return []
+    try:
+        conf = read_yaml(path) or {}
+    except Exception as e:  # noqa: BLE001 -- an unreadable config must not take a diagnostic down
+        LOGGER.warning(f"could not read {path} ({type(e).__name__}: {e}); assuming no extension")
+        return []
+    return list(conf.get("extend_params") or [])
+
+
+def marginalize_extension(theta, base_params, extend_params, source=""):
+    """Drop the extension columns from posterior samples, i.e. marginalize over them.
+
+    ``run_inference`` APPENDS the extension, so the leading ``len(base_params)`` columns are the base
+    vector unchanged and discarding the rest is exact marginalization for a set of samples -- no
+    reweighting, no recomputation. The width is reconciled first, so a chain that is neither the base
+    nor the extended shape raises instead of being silently truncated to something plausible.
+    """
+    n_base, n_found = len(base_params), theta.shape[-1]
+    if n_found == n_base:
+        return theta
+    expected = n_base + len(extend_params)
+    if n_found != expected:
+        raise ValueError(
+            f"{source or 'chain'}: {n_found} columns, but the run declares {n_base} parameters "
+            f"{list(base_params)} and the flow records extend_params={list(extend_params) or '[]'} "
+            f"({expected} columns). The column order cannot be established, so nothing read out of "
+            f"this file would be trustworthy."
+        )
+    LOGGER.info(f"Marginalizing over {list(extend_params)}: {n_found} -> {n_base} columns ({source})")
+    return theta[..., :n_base]
