@@ -221,6 +221,9 @@ def main():
     is_hetero = flow_confs is not None
     flow_conf = flow_confs[0] if is_hetero else (read_yaml(args.flow_config) if args.flow_config else {})
 
+    for config in flow_confs or [flow_conf]:
+        flow_utils.validate_training_config(config)
+
     # an ensemble is used for >1 seed-clone members or for any heterogeneous config list
     is_ensemble = args.n_flows > 1 or is_hetero
 
@@ -289,6 +292,18 @@ def main():
         params = params + extend
         print(f"Extended conditioning vector: {params}")
 
+    # Keep grid rows and weights aligned for training and both coverage stages.
+    train_prior = flow_utils.train_prior_mode(flow_conf)
+    if train_prior == "wide":
+        grid_preds, grid_cosmos, i_signal, i_sobol, i_noise = flow_utils.restrict_to_wide_prior(
+            grid_preds, grid_cosmos, i_signal, i_sobol, i_noise, msfm_conf
+        )
+    row_weights = None
+    if train_prior.startswith("reweight_"):
+        row_weights = flow_utils.full_grid_train_weights(i_sobol, grid_cosmos, params, msfm_conf, flow_conf)
+
+    group_ids = flow_utils.resolve_group_ids(flow_conf, i_signal, i_sobol=i_sobol, msfm_conf=msfm_conf)
+
     if args.load_flow:
         print("Loading flow from checkpoint...")
         flow_cls = LikelihoodFlowEnsemble if is_ensemble else LikelihoodFlow
@@ -308,9 +323,10 @@ def main():
             grid_cosmos,
             flow_conf,
             prefix=prefix,
-            i_signal=i_signal,
+            group_ids=group_ids,
             n_flows=args.n_flows,
             flow_confs=flow_confs,
+            row_weights=row_weights,
         )
 
     LOGGER.info(f"[timing] flow {'loaded' if args.load_flow else 'trained'}: {LOGGER.timer.elapsed('flow')}")
@@ -336,7 +352,16 @@ def main():
     # likelihood-level coverage stage (cheap, no MCMC): HPD/TARP on x ~ p(x|theta) for the held-out mocks,
     try:
         LOGGER.timer.start("likelihood_coverage")
-        coverage.run_likelihood_coverage(flow, grid_preds, grid_cosmos, i_signal, flow_conf)
+        coverage.run_likelihood_coverage(
+            flow,
+            grid_preds,
+            grid_cosmos,
+            i_signal,
+            flow_conf,
+            group_ids=group_ids,
+            i_sobol=i_sobol,
+            i_noise=i_noise,
+        )
         LOGGER.info(f"[timing] likelihood coverage: {LOGGER.timer.elapsed('likelihood_coverage')}")
     except Exception as e:
         print(f"ERROR: likelihood coverage stage failed ({type(e).__name__}: {e})")
@@ -347,22 +372,29 @@ def main():
         LOGGER.info(f"Auto-discovered {len(args.mock_labels)} mock(s): {args.mock_labels}")
 
     obs_dict = observations.collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
-    try:
-        LOGGER.timer.start("mcmc_total")
-        observations.run_mcmc(
-            flow,
-            obs_dict,
-            n_walkers=mcmc_conf.get("n_walkers", 1024),
-            n_steps=mcmc_conf.get("n_steps", 1000),
-            n_burnin_steps=mcmc_conf.get("n_burnin_steps", 1000),
-            method=mcmc_conf.get("method", "ensemble"),
-            use_validation_weights=mcmc_conf.get("use_validation_weights", True),
-            backend=args.mcmc_backend,
-            store_individual_chains=mcmc_conf.get("store_individual_chains", False),
-        )
-        LOGGER.info(f"[timing] all MCMC chains ({len(obs_dict)} observations): {LOGGER.timer.elapsed('mcmc_total')}")
-    except Exception as e:
-        print(f"ERROR: run_mcmc failed ({type(e).__name__}: {e})")
+    if not obs_dict:
+        # every --include_* switched off: a benchmarking run that only wants the coverage stage below,
+        # which reads the held-out mocks directly and never touches these chains
+        LOGGER.info("No observation chains requested (--include_grid/--include_des/--include_mocks all off)")
+    else:
+        try:
+            LOGGER.timer.start("mcmc_total")
+            observations.run_mcmc(
+                flow,
+                obs_dict,
+                n_walkers=mcmc_conf.get("n_walkers", 1024),
+                n_steps=mcmc_conf.get("n_steps", 1000),
+                n_burnin_steps=mcmc_conf.get("n_burnin_steps", 1000),
+                method=mcmc_conf.get("method", "ensemble"),
+                use_validation_weights=mcmc_conf.get("use_validation_weights", True),
+                backend=args.mcmc_backend,
+                store_individual_chains=mcmc_conf.get("store_individual_chains", False),
+            )
+            LOGGER.info(
+                f"[timing] all MCMC chains ({len(obs_dict)} observations): {LOGGER.timer.elapsed('mcmc_total')}"
+            )
+        except Exception as e:
+            print(f"ERROR: run_mcmc failed ({type(e).__name__}: {e})")
 
     # per-member DES chains for the ensemble-convergence test (independent of the pooled chains above)
     if args.sample_flow_members:
@@ -407,6 +439,7 @@ def main():
                     i_sobol=i_sobol,
                     msfm_conf=msfm_conf,
                     i_noise=i_noise,
+                    group_ids=group_ids,
                 )
                 LOGGER.info(f"[timing] coverage sampling + tests: {LOGGER.timer.elapsed('coverage')}")
             except Exception as e:

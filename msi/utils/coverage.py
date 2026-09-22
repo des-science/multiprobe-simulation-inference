@@ -64,24 +64,30 @@ def wide_prior_sobol_indices(msfm_conf):
     return params_info["sobol_index"][params_info["id_param"] < n_cosmos // 2]
 
 
-def _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf):
-    """Reproduce the flow's deterministic, signal-grouped held-out validation split and return
+def _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf, group_ids=None):
+    """Reproduce the flow's deterministic, group-aware held-out validation split and return
     (x_vali, theta_vali) as torch tensors.
 
     Shared by the likelihood- and posterior-level coverage stages so both judge calibration on the
     identical held-out mocks (seen by neither the compression network nor the flow -- see
     sample_coverage_posteriors for the 80%/20%/10% split chain). Works for a single LikelihoodFlow and a
     LikelihoodFlowEnsemble (whose _prepare_data exposes vali_dset on the ensemble).
+
+    `group_ids` must be the SAME array the flow was fitted with (`flow_utils.resolve_group_ids`), or
+    this reproduces a different split and selects mocks the flow trained on -- silently, since a
+    wrong split still yields a plausible coverage curve. Defaults to `i_signal`, the historical
+    grouping, which is what `training.group_by: signal` resolves to.
     """
     vali_split = flow_conf.get("training", {}).get("vali_split", 0.1)
-    flow._prepare_data(x=grid_preds, theta=grid_cosmos, batch_size=10000, vali_split=vali_split, group_ids=i_signal)
+    group_ids = i_signal if group_ids is None else group_ids
+    flow._prepare_data(x=grid_preds, theta=grid_cosmos, batch_size=10000, vali_split=vali_split, group_ids=group_ids)
     x_vali = flow.vali_dset.dataset.tensors[0][flow.vali_dset.indices]
     theta_vali = flow.vali_dset.dataset.tensors[1][flow.vali_dset.indices]
     return x_vali, theta_vali
 
 
 def sample_coverage_posteriors(
-    flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=None, msfm_conf=None, i_noise=None
+    flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=None, msfm_conf=None, i_noise=None, group_ids=None
 ):
     """Sample the posterior for the held-out mock observations and write flow.model_dir/mcmc_samples.h5.
 
@@ -116,8 +122,8 @@ def sample_coverage_posteriors(
     n_sims = flow_conf.get("diagnostics", {}).get("n_obs", 1000)
     n_samples_out = min(10000, n_steps * n_walkers)
 
-    # reproduce the exact held-out validation split (deterministic, grouped by signal realization)
-    x_vali, theta_vali = _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf)
+    # reproduce the exact held-out validation split the flow was fitted with (see _held_out_split)
+    x_vali, theta_vali = _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf, group_ids=group_ids)
 
     # Track per-row realization indices through the SAME selection as x_vali (-> wide mask -> stride),
     # so the saved mocks carry their (i_sobol, i_signal, i_noise) identity for cross-probe pairing.
@@ -181,10 +187,22 @@ def sample_coverage_posteriors(
     if n_cosmos < n_sims:
         LOGGER.warning(f"only {n_cosmos} held-out mocks available; reducing n_obs from {n_sims} to {n_cosmos}")
         n_sims = n_cosmos
-    x_true = x_vali[:: n_cosmos // n_sims][:n_sims]
-    theta_true = theta_vali[:: n_cosmos // n_sims][:n_sims]
+    selected = np.arange(n_cosmos)[:: n_cosmos // n_sims][:n_sims]
+    mock_file = flow_conf.get("diagnostics", {}).get("mock_ids_file")
+    if mock_file:
+        from msi.utils.grid_weighting import match_mock_rows
+
+        if not save_real_idx:
+            raise ValueError("mock_ids_file requires all three realization indices")
+        requested = np.load(mock_file, allow_pickle=False)
+        if len(requested) != n_sims:
+            raise ValueError("mock_ids_file count differs from diagnostics.n_obs")
+        selected = match_mock_rows(real_idx_vali, requested)
+    selected_t = torch.as_tensor(selected, device=x_vali.device)
+    x_true = x_vali[selected_t]
+    theta_true = theta_vali[selected_t]
     if save_real_idx:
-        real_idx_true = real_idx_vali[:: n_cosmos // n_sims][:n_sims]
+        real_idx_true = real_idx_vali[selected]
     LOGGER.info(f"Coverage sampling {n_sims} held-out mock observations in a single batched pass")
 
     # one batched run over all mock observations (batch size = n_sims, fits a single GPU)
@@ -195,6 +213,7 @@ def sample_coverage_posteriors(
         n_burnin_steps=n_burnin_steps,
         use_validation_weights=use_validation_weights,
         method=method,
+        seed=flow_conf.get("diagnostics", {}).get("sampling_seed", 12),
     )  # (n_sims, n_steps * n_walkers, n_params)
 
     # raw flow log-likelihood of the true cosmology for each observation (batched). use_validation_weights
@@ -207,9 +226,11 @@ def sample_coverage_posteriors(
     n_params = chain.shape[-1]
     theta_sample = np.empty((n_samples_out, n_sims, n_params), dtype=np.float32)
     log_prob_sample = np.empty((n_samples_out, n_sims), dtype=np.float32)
+    sample_seed = flow_conf.get("diagnostics", {}).get("subsample_seed")
+    sample_rng = np.random if sample_seed is None else np.random.default_rng(sample_seed)
     for i in range(n_sims):
         # too many samples make the test slow and are not needed
-        sel = np.random.choice(chain.shape[1], n_samples_out, replace=False)
+        sel = sample_rng.choice(chain.shape[1], n_samples_out, replace=False)
         samples = chain[i][sel]
         theta_sample[:, i] = samples
         x_rep = np.repeat(x_true_np[i][None, :], n_samples_out, axis=0)
@@ -230,6 +251,7 @@ def sample_coverage_posteriors(
 
     out_file = os.path.join(flow.model_dir, "mcmc_samples.h5")
     with h5py.File(out_file, "w") as f:
+        f.attrs["params"] = np.asarray(flow.params, dtype=h5py.string_dtype())
         for key, value in samples.items():
             f.create_dataset(key, data=value)
     LOGGER.info(f"Saved coverage samples to {out_file}")
@@ -377,7 +399,10 @@ def run_likelihood_coverage_tests(
             LOGGER.warning(f"likelihood TARP check failed ({type(e).__name__}: {e})")
 
 
-def run_likelihood_coverage(flow, grid_preds, grid_cosmos, i_signal, flow_conf, n_likelihood_samples=100):
+def run_likelihood_coverage(
+    flow, grid_preds, grid_cosmos, i_signal, flow_conf, n_likelihood_samples=100, group_ids=None,
+    i_sobol=None, i_noise=None,
+):
     """Orchestrate the likelihood-level coverage stage: sample p(x|theta) for the held-out mock
     observations and run the HPD (EECP) and TARP diagnostics, with plots saved as 1_likelihood_*.png under
     flow.model_dir/unblinding_plots.
@@ -392,7 +417,7 @@ def run_likelihood_coverage(flow, grid_preds, grid_cosmos, i_signal, flow_conf, 
         LOGGER.info("Likelihood coverage: hpd and tarp both disabled; skipping stage.")
         return
 
-    x_vali, theta_vali = _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf)
+    x_vali, theta_vali = _held_out_split(flow, grid_preds, grid_cosmos, i_signal, flow_conf, group_ids=group_ids)
     x_true = np.asarray(x_vali.cpu())
     theta_true = np.asarray(theta_vali.cpu())
 
@@ -401,8 +426,19 @@ def run_likelihood_coverage(flow, grid_preds, grid_cosmos, i_signal, flow_conf, 
     # thin to n_obs, matching sample_coverage_posteriors so the 1_ and 2_ plots cover the same mocks
     n_obs = min(flow_conf.get("diagnostics", {}).get("n_obs", 1000), x_true.shape[0])
     step = x_true.shape[0] // n_obs
-    x_true = x_true[::step][:n_obs]
-    theta_true = theta_true[::step][:n_obs]
+    selected = np.arange(len(x_true))[::step][:n_obs]
+    mock_file = flow_conf.get("diagnostics", {}).get("mock_ids_file")
+    if mock_file:
+        from msi.utils.grid_weighting import match_mock_rows
+
+        if i_sobol is None or i_noise is None:
+            raise ValueError("mock_ids_file requires all three realization indices")
+        available = np.column_stack([i_sobol, i_signal, i_noise])[flow.vali_dset.indices]
+        requested = np.load(mock_file, allow_pickle=False)
+        if len(requested) != n_obs:
+            raise ValueError("mock_ids_file count differs from diagnostics.n_obs")
+        selected = match_mock_rows(available, requested)
+    x_true, theta_true = x_true[selected], theta_true[selected]
     LOGGER.info(f"Likelihood coverage on {n_obs} held-out mock observations, {n_likelihood_samples} samples each")
 
     grid_preds_sample = flow.sample_likelihood(
@@ -534,6 +570,7 @@ def run_coverage(
     i_sobol=None,
     msfm_conf=None,
     i_noise=None,
+    group_ids=None,
 ):
     """Orchestrate the full posterior-coverage stage: GPU-batched sampling of held-out mock observations,
     then the coverage diagnostics, with plots saved under flow.model_dir/unblinding_plots.
@@ -543,7 +580,15 @@ def run_coverage(
     required only when flow_conf enables diagnostics.prior_selection='wide'.
     """
     samples = sample_coverage_posteriors(
-        flow, grid_preds, grid_cosmos, i_signal, flow_conf, i_sobol=i_sobol, msfm_conf=msfm_conf, i_noise=i_noise
+        flow,
+        grid_preds,
+        grid_cosmos,
+        i_signal,
+        flow_conf,
+        i_sobol=i_sobol,
+        msfm_conf=msfm_conf,
+        i_noise=i_noise,
+        group_ids=group_ids,
     )
 
     plot_dir = os.path.join(flow.model_dir, "unblinding_plots")

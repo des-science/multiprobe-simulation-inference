@@ -95,6 +95,22 @@ def _pool_chains(member_chains, weights=None, member_log_probs=None, rng=None):
     return chain_out
 
 
+def group_split_indices(group_ids, vali_split):
+    """Deterministic group-aware train/vali row split.
+
+    Shared by data preparation and the experiment update-budget check.
+
+    Returns:
+        tuple: (train_idx, vali_idx, train_ids, vali_ids)
+    """
+    unique_ids = np.unique(group_ids)
+    split = int((1 - vali_split) * len(unique_ids))
+    train_ids, vali_ids = unique_ids[:split], unique_ids[split:]
+    train_idx = np.where(np.isin(group_ids, train_ids))[0]
+    vali_idx = np.where(np.isin(group_ids, vali_ids))[0]
+    return train_idx, vali_idx, train_ids, vali_ids
+
+
 class LikelihoodFlow(Flow, LikelihoodBase):
     """Normalizing flow implementing a likelihood function p(x|theta), where x is some summary statistic vector and
     theta a vector of cosmological/astrophysical parameters to be constrained.
@@ -249,6 +265,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         save_model=True,
         seed=None,
         group_ids=None,
+        row_weights=None,
         run_c2st=False,
         c2st_hidden_dim=64,
         c2st_n_epochs=50,
@@ -301,7 +318,15 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 f"scale = {self._embedding_net.context_scale.cpu().numpy()}"
             )
 
-        self._prepare_data(x, theta, batch_size, vali_split, seed=seed, group_ids=group_ids)
+        self._prepare_data(
+            x,
+            theta,
+            batch_size,
+            vali_split,
+            seed=seed,
+            group_ids=group_ids,
+            row_weights=row_weights,
+        )
 
         # optimizer
         self.clip_by_global_norm = clip_by_global_norm
@@ -405,7 +430,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         """
         # Collect full validation set
         x_real_list, theta_list = [], []
-        for x_batch, theta_batch in self.vali_loader:
+        for x_batch, theta_batch, _ in self.vali_loader:
             x_real_list.append(x_batch)
             theta_list.append(theta_batch)
         x_real = torch.cat(x_real_list, dim=0)  # (n, x_dim)
@@ -488,7 +513,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         return accuracy
 
-    def _prepare_data(self, x, theta, batch_size, vali_split, seed=None, group_ids=None):
+    def _prepare_data(
+        self, x, theta, batch_size, vali_split, seed=None, group_ids=None, row_weights=None
+    ):
         """
         Prepare the data for training and validation.
 
@@ -508,6 +535,10 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 which a plain row-level random split cannot guarantee when groups have multiple
                 rows (e.g. several noise realizations per signal). When omitted, falls back to
                 the previous row-level `random_split` behaviour.
+            row_weights (numpy.ndarray, optional): 1D array aligned row-for-row with `x`/`theta`,
+                weighting each row's contribution to the training AND validation loss. Carried as a
+                third dataset tensor so it is split, shuffled and batched with its row. Defaults to
+                None, i.e. every row weighted equally.
 
         Returns:
             None
@@ -519,14 +550,18 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         x = torch.tensor(x, dtype=self.floatx, device=self.device)
         theta = torch.tensor(theta, dtype=self.floatx, device=self.device)
 
-        dset = TensorDataset(x, theta)
+        # Keep weights aligned through the split and shuffle. Ones give the unweighted loss.
+        if row_weights is None:
+            w = torch.ones(len(x), dtype=self.floatx, device=self.device)
+        else:
+            w = torch.tensor(np.asarray(row_weights).reshape(-1), dtype=self.floatx, device=self.device)
+            if len(w) != len(x):
+                raise ValueError(f"row_weights has {len(w)} entries but x has {len(x)} rows")
+
+        dset = TensorDataset(x, theta, w)
 
         if group_ids is not None:
-            unique_ids = np.unique(group_ids)
-            split = int((1 - vali_split) * len(unique_ids))
-            train_ids, vali_ids = unique_ids[:split], unique_ids[split:]
-            train_idx = np.where(np.isin(group_ids, train_ids))[0]
-            vali_idx = np.where(np.isin(group_ids, vali_ids))[0]
+            train_idx, vali_idx, train_ids, vali_ids = group_split_indices(group_ids, vali_split)
             LOGGER.info(
                 f"Splitting by group id into {len(train_ids)} train / {len(vali_ids)} vali groups "
                 f"({len(train_idx)} / {len(vali_idx)} rows)"
@@ -547,8 +582,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         self.train()
 
         epoch_loss = []
-        for x, theta in self.train_loader:
-            loss = -self.log_prob(inputs=x, context=theta).mean()
+        for x, theta, w in self.train_loader:
+            # self-normalized weighted mean; identical to .mean() when every weight is 1
+            loss = -(w * self.log_prob(inputs=x, context=theta)).sum() / w.sum()
             epoch_loss.append(loss.item())
 
             # Backpropagation
@@ -569,8 +605,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         with torch.no_grad():
             epoch_loss = []
-            for x, theta in self.vali_loader:
-                loss = -self.log_prob(inputs=x, context=theta).mean()
+            for x, theta, w in self.vali_loader:
+                loss = -(w * self.log_prob(inputs=x, context=theta)).sum() / w.sum()
                 epoch_loss.append(loss.item())
 
         epoch_loss = np.mean(epoch_loss)
@@ -1149,6 +1185,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         save_model=True,
         seed=None,
         group_ids=None,
+        row_weights=None,
         run_c2st=False,
         c2st_hidden_dim=64,
         c2st_n_epochs=50,
@@ -1176,6 +1213,9 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 flow's `_prepare_data` to make the train/vali split deterministic and group-aware -- see
                 `LikelihoodFlow.fit`. When given, every ensemble member gets the same split (independent of `seed`),
                 so `_compute_validation_weights` comparisons across members are apples-to-apples.
+            row_weights (numpy.ndarray, optional): per-row loss weights aligned with `x`/`theta`, shared
+                by every member (they correct the training theta density, which is a property of the
+                data and not a diversity knob). See `LikelihoodFlow._prepare_data`. Defaults to None.
             run_c2st (bool, optional): Whether to run a Classifier Two-Sample Test. Defaults to False.
             c2st_hidden_dim (int, optional): Hidden layer size for the C2ST classifier MLP. Defaults to 64.
             c2st_n_epochs (int, optional): Number of epochs to train the C2ST classifier. Defaults to 50.
@@ -1223,6 +1263,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                     save_model=save_model,
                     seed=seed,
                     group_ids=group_ids,
+                    row_weights=row_weights,
                     run_c2st=run_c2st,
                     c2st_hidden_dim=c2st_hidden_dim,
                     c2st_n_epochs=c2st_n_epochs,
@@ -1249,6 +1290,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             scheduler_kwargs=scheduler_kwargs,
             n_patience_epochs=n_patience_epochs,
             min_delta=min_delta,
+            row_weights=row_weights,
             run_c2st=run_c2st,
             c2st_hidden_dim=c2st_hidden_dim,
             c2st_n_epochs=c2st_n_epochs,
@@ -1297,6 +1339,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         save_model,
         seed,
         group_ids,
+        row_weights,
         run_c2st,
         c2st_hidden_dim,
         c2st_n_epochs,
@@ -1345,14 +1388,19 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         member_seed = seed if seed is not None else self.torch_seed
 
         # shared, group-aware train/vali split (identical for every member, as in the sequential path)
-        self.flows[0]._prepare_data(x, theta, batch_size, vali_split, seed=member_seed, group_ids=group_ids)
+        self.flows[0]._prepare_data(
+            x, theta, batch_size, vali_split, seed=member_seed, group_ids=group_ids, row_weights=row_weights
+        )
         tr = self.flows[0].train_dset
         va = self.flows[0].vali_dset
         train_x = tr.dataset.tensors[0][tr.indices].to(device)
         train_theta = tr.dataset.tensors[1][tr.indices].to(device)
+        train_w = tr.dataset.tensors[2][tr.indices].to(device)
         val_x = va.dataset.tensors[0][va.indices].to(device)
         val_theta = va.dataset.tensors[1][va.indices].to(device)
+        val_w = va.dataset.tensors[2][va.indices].to(device)
         n_train = train_x.shape[0]
+
         steps_per_epoch = n_train // batch_size
         if steps_per_epoch < 1:
             raise ValueError(f"batch_size {batch_size} exceeds the {n_train} training rows")
@@ -1388,16 +1436,18 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             if isinstance(m, torch.nn.Dropout):
                 m.training = True
 
-        def compute_loss(p, b, xb, tb):
-            return -functional_call(base_train, (p, b), args=(xb, tb)).mean()
+        def compute_loss(p, b, xb, tb, wb):
+            # self-normalized weighted mean, as in the sequential _train_epoch
+            return -(wb * functional_call(base_train, (p, b), args=(xb, tb))).sum() / wb.sum()
 
         # randomness="different": each vmap lane (ensemble member) draws its own independent dropout mask
         # per call -- the documented torch.func pattern for dropout under vmap, matching what the
         # sequential per-member loop does naturally. base_eval never calls a random op (dropout is a
         # no-op in eval mode), so neg_sum_fn keeps the default randomness="error" as a tripwire.
-        grad_fn = vmap(grad_and_value(compute_loss), in_dims=(0, 0, 0, 0), randomness="different")
+        grad_fn = vmap(grad_and_value(compute_loss), in_dims=(0, 0, 0, 0, 0), randomness="different")
         neg_sum_fn = vmap(
-            lambda p, b, xb, tb: -functional_call(base_eval, (p, b), args=(xb, tb)).sum(), (0, 0, None, None)
+            lambda p, b, xb, tb, wb: -(wb * functional_call(base_eval, (p, b), args=(xb, tb))).sum(),
+            (0, 0, None, None, None),
         )
 
         optimizer = optim.Adam(list(params.values()), lr=learning_rate, weight_decay=weight_decay)
@@ -1422,13 +1472,14 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         def _val_loss_vec():
             with torch.no_grad():
                 total = torch.zeros(N, device=device, dtype=floatx)
-                n_seen = 0
+                w_seen = torch.zeros((), device=device, dtype=floatx)
                 for s in range(0, val_x.shape[0], batch_size):
                     xb = val_x[s : s + batch_size]
                     tb = val_theta[s : s + batch_size]
-                    total = total + neg_sum_fn(params, buffers, xb, tb)
-                    n_seen += xb.shape[0]
-            return (total / max(n_seen, 1)).detach().cpu().numpy()
+                    wb = val_w[s : s + batch_size]
+                    total = total + neg_sum_fn(params, buffers, xb, tb, wb)
+                    w_seen = w_seen + wb.sum()
+            return (total / w_seen.clamp(min=1e-12)).detach().cpu().numpy()
 
         pbar = LOGGER.progressbar(range(n_epochs), at_level="info", total=n_epochs)
         for i_epoch in pbar:
@@ -1440,7 +1491,8 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 idx = perms[:, s * batch_size : (s + 1) * batch_size]  # (N, batch_size)
                 xb = train_x[idx]  # (N, batch_size, x_dim)
                 tb = train_theta[idx]  # (N, batch_size, theta_dim)
-                grads, losses = grad_fn(params, buffers, xb, tb)  # grads: dict of (N, *), losses: (N,)
+                wb = train_w[idx]  # (N, batch_size)
+                grads, losses = grad_fn(params, buffers, xb, tb, wb)  # grads: dict of (N, *), losses: (N,)
 
                 if clip_by_global_norm is not None:
                     # per-member global-norm clipping, matching torch.nn.utils.clip_grad_norm_ per member

@@ -289,9 +289,21 @@ def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
     return embedding_net, transform
 
 
+def validate_training_config(flow_conf):
+    """Reject removed experiment options before loading data or fitting a flow."""
+    training = flow_conf.get("training", {})
+    removed = {"theta_jitter", "group_design", "group_bootstrap"}.intersection(training)
+    if removed:
+        raise ValueError(f"Removed experimental training options: {sorted(removed)}")
+    if training.get("group_by", "signal") not in ("signal", "cosmology"):
+        raise ValueError("training.group_by must be signal or cosmology")
+    train_prior_mode(flow_conf)
+
+
 def _extract_train_kwargs(flow_conf: dict) -> dict:
     """Pull the LikelihoodFlow.fit training arguments out of a flow config's ``training`` block,
     applying the same defaults as the single-flow path."""
+    validate_training_config(flow_conf)
     train_conf = flow_conf.get("training", {})
     return dict(
         n_epochs=train_conf.get("n_epochs", 100),
@@ -307,6 +319,117 @@ def _extract_train_kwargs(flow_conf: dict) -> dict:
     )
 
 
+TRAIN_PRIOR_MODES = ("all", "wide", "reweight_projected", "reweight_joint", "reweight_conditional")
+
+
+def train_prior_mode(flow_conf: dict):
+    """Select all rows, the wide subset, or a deterministic grid-weighting control.
+
+    These controls support the coverage experiments. Production NLE can retain all
+    rows and explicitly condition on the nuisance parameters via --extend_params.
+    """
+    v = flow_conf.get("training", {}).get("train_prior", "all")
+    if v not in TRAIN_PRIOR_MODES:
+        raise ValueError(f"training.train_prior must be one of {TRAIN_PRIOR_MODES}, got {v!r}")
+    return v
+
+
+def full_grid_train_weights(i_sobol, grid_cosmos, params, msfm_conf, flow_conf):
+    """Weights using metadata coordinates, including nuisances omitted from context.
+
+    Modes share a deterministic volume calculation and design-mixture fraction.
+    """
+    from msi.utils import extended_params, grid_weighting
+    from msfm.utils.prior import NARROW_GRID_BOX
+
+    table = extended_params.load_grid_param_table(msfm_conf)
+    coords = grid_weighting.lookup_coordinates(table, i_sobol)
+    for j, p in enumerate(grid_weighting.COSMO_PARAMS):
+        if p in params and not np.allclose(coords[:, j], grid_cosmos[:, params.index(p)], rtol=1e-5, atol=1e-6):
+            raise ValueError(f"Prediction/metadata mismatch for {p}; cannot assign grid weights")
+    weights, audit = grid_weighting.design_weights(
+        coords,
+        msfm_conf["analysis"]["grid"]["priors"],
+        NARROW_GRID_BOX,
+        mode=train_prior_mode(flow_conf)[len("reweight_") :],
+        wide_fraction=flow_conf.get("training", {}).get("grid_wide_fraction", 0.5),
+    )
+    print(f"Grid weighting audit: {audit}")
+    return weights
+
+
+def restrict_to_wide_prior(grid_preds, grid_cosmos, i_signal, i_sobol, i_noise, msfm_conf):
+    """Drop every grid row whose cosmology belongs to the narrow Sobol half.
+
+    The flow and both coverage stages use the same filtered rows. This halves the
+    cosmologies and changes updates per epoch, so comparisons must match optimizer
+    updates rather than only epoch counts.
+
+    Returns:
+        tuple: the same arrays masked to the wide half (``i_noise`` passes through as None if unset).
+    """
+    from msi.utils.coverage import wide_prior_sobol_indices
+
+    wide = np.asarray(list(wide_prior_sobol_indices(msfm_conf)))
+    keep = np.isin(np.asarray(i_sobol).reshape(-1), wide)
+    n_cos = len(np.unique(np.asarray(i_sobol)[keep]))
+    print(
+        f"Restricting training grid to the wide prior: {keep.sum()} of {len(keep)} rows, "
+        f"{n_cos} of {len(np.unique(i_sobol))} cosmologies"
+    )
+    if not keep.any():
+        raise ValueError("training.train_prior='wide' kept no rows; check the metainfo file")
+    out = [grid_preds[keep], grid_cosmos[keep], np.asarray(i_signal)[keep], np.asarray(i_sobol)[keep]]
+    out.append(None if i_noise is None else np.asarray(i_noise)[keep])
+    return tuple(out)
+
+
+def resolve_group_ids(flow_conf: dict, i_signal, i_sobol=None, msfm_conf=None):
+    """Return row-aligned groups for a signal or cosmology holdout.
+
+    Cosmology grouping reserves evenly spaced wide-grid cosmologies for validation,
+    then ranks the ids so the common sorted-group split selects exactly that set.
+    Use the same returned groups for fitting and both coverage stages. This tests
+    interpolation to unseen cosmologies but yields fewer distinct coverage truths
+    than the signal split; their coverage p-values are not directly comparable.
+    """
+    group_by = flow_conf.get("training", {}).get("group_by", "signal")
+    if group_by == "signal":
+        return i_signal
+    if group_by != "cosmology":
+        raise ValueError(f"training.group_by must be 'signal' or 'cosmology', got {group_by!r}")
+
+    if i_sobol is None or msfm_conf is None:
+        raise ValueError("training.group_by='cosmology' needs both i_sobol and msfm_conf")
+
+    from msi.utils.coverage import wide_prior_sobol_indices
+
+    i_sobol = np.asarray(i_sobol).reshape(-1)
+    present = np.unique(i_sobol)
+    vali_split = flow_conf.get("training", {}).get("vali_split", 0.1)
+    # mirror _prepare_data's arithmetic exactly, so the partition below is the one it will make
+    n_hold = len(present) - int((1 - vali_split) * len(present))
+
+    wide = np.intersect1d(present, np.asarray(list(wide_prior_sobol_indices(msfm_conf))))
+    if n_hold > len(wide):
+        raise ValueError(
+            f"vali_split={vali_split} would hold out {n_hold} cosmologies but only {len(wide)} of the "
+            f"{len(present)} present are wide-prior; the coverage stage keeps only the wide half, so a "
+            f"larger held-out set cannot be filled from it"
+        )
+    held = wide[np.linspace(0, len(wide) - 1, n_hold).round().astype(int)] if n_hold else np.array([], int)
+
+    rank = np.empty(present.max() + 1, dtype=np.int64)
+    train_cos = np.setdiff1d(present, held)
+    rank[train_cos] = np.arange(len(train_cos))
+    rank[held] = len(train_cos) + np.arange(len(held))
+    print(
+        f"Grouping the flow split by cosmology: {len(train_cos)} train / {len(held)} held-out "
+        f"cosmologies (all held-out are wide-prior)"
+    )
+    return rank[i_sobol]
+
+
 def build_flow(
     params,
     msfm_conf,
@@ -316,10 +439,11 @@ def build_flow(
     grid_cosmos,
     flow_conf: dict,
     prefix: str = "",
-    i_signal=None,
+    group_ids=None,
     seed=None,
     n_flows=1,
     flow_confs=None,
+    row_weights=None,
 ):
     """Build, train, plot diagnostics, and return a LikelihoodFlow or LikelihoodFlowEnsemble.
 
@@ -336,11 +460,8 @@ def build_flow(
         prefix: Prepended to the saved model directory name, e.g. ``"larger_"`` →
             ``pred_dir/larger_likelihood_flow_{n_steps}/``. Useful when comparing
             multiple flow configs on the same prediction file.
-        i_signal: Optional array of shape (N,), row-aligned with grid_preds/grid_cosmos
-            (e.g. from load_grid_summaries). When given, the flow's train/vali split is
-            made deterministic and grouped by signal realization, so that no signal
-            realization (regardless of its noise realizations) appears in both sets --
-            see LikelihoodFlow._prepare_data's group_ids argument.
+        group_ids: Row-aligned groups from resolve_group_ids (signal or cosmology).
+            Pass the same array to both coverage stages to reproduce the training split.
         seed: Optional torch seed for weight init and the (group-aware) train/vali split.
             Defaults to None, then flow_conf.get("seed", 7) is used.
         n_flows: If 1 (default), build a single LikelihoodFlow (current behavior). If >1,
@@ -352,6 +473,10 @@ def build_flow(
             ``len(flow_confs) * n_flows``, member i uses ``flow_confs[i % len(flow_confs)]``
             (replicas of a config differ only by seed). Each member trains with its own
             config's ``training`` block. Defaults to None (homogeneous behavior above).
+        row_weights: Optional array of shape (N,), row-aligned with grid_preds/grid_cosmos, weighting
+            each row's contribution to the training and validation loss. Built by
+            ``full_grid_train_weights`` for the weighting controls. Defaults to None
+            (every row weighted equally).
 
     Returns:
         LikelihoodFlow or LikelihoodFlowEnsemble: Trained flow(s) with saved checkpoint(s).
@@ -360,6 +485,19 @@ def build_flow(
     theta_dim = grid_cosmos.shape[-1]
 
     base_conf = flow_confs[0] if flow_confs else flow_conf
+    # Experiment configs can assert the actual update budget without changing
+    # historical epoch-based training or either training backend.
+    training = base_conf.get("training", {})
+    if "expected_updates" in training:
+        from msi.flow_conductor.likelihood_flow import group_split_indices
+
+        if group_ids is None or flow_confs:
+            raise ValueError("expected_updates requires a homogeneous, group-split, unresampled training set")
+        n_train = len(group_split_indices(group_ids, training.get("vali_split", 0.1))[0])
+        actual = (n_train // training.get("batch_size", 10000)) * training["n_epochs"]
+        if actual != training["expected_updates"]:
+            raise ValueError(f"Training budget mismatch: {actual} != {training['expected_updates']}")
+        print(f"Verified optimizer budget: {actual} updates per member")
     if seed is None:
         seed = base_conf.get("seed", 7)
     torch.manual_seed(seed)
@@ -431,7 +569,8 @@ def build_flow(
         x=grid_preds,
         theta=grid_cosmos,
         save_model=True,
-        group_ids=i_signal,
+        group_ids=group_ids,
+        row_weights=row_weights,
         **fit_kwargs,
     )
 

@@ -1,0 +1,78 @@
+# ROUND 2 of the coverage sweep. Every arm here is `drop.yaml` plus ONE knob, so the measured
+# `drop` run (s = 1.107 / 0.966 / 1.213 on Om / s8 / w0, joint HPD p = 0.26) is the shared control
+# and no arm needs its own. Round 1 established what this round is built on: ensembling itself
+# contributes nothing (pooled factor 0.985-1.008 on every arm, against the 0.32 sigma of member-mean
+# scatter that s = 1.05 would need and the 0.13 sigma the most diverse ensemble reached), so these
+# are PER-MEMBER regularizers, not diversity knobs.
+#
+# COSMOLOGY-HELD-OUT VALIDATION SPLIT. A DIAGNOSTIC RUN, not a candidate configuration.
+#
+# The default split groups by signal realization: it holds out 2 of 16 realizations, but all 2500
+# Sobol cosmologies appear in BOTH halves (verified on preds_229900.h5 -- 2500 in train, 2500 in
+# vali, 0 held out). So a flow that over-resolves the theta-dependence is REWARDED by the validation
+# loss, because the validation set contains other realizations of every cosmology it memorized.
+# That is why round 1's flat train/vali curves were not evidence against theta-overfitting: the
+# loss cannot see it. `group_by: cosmology` holds out whole cosmologies instead, making the
+# validation loss a genuine test of generalization in theta.
+#
+# WHAT TO READ, AND WHAT NOT TO. The deliverable is the LOSS CURVE: a cosmology-held-out vali loss
+# that sits clearly above the realization-held-out one, or that turns up with epochs while the
+# training loss falls, is direct evidence of theta-overfitting and makes the jitter arms the right
+# medicine. DO NOT table this run's HPD p-value against any other arm's: the held-out rows now come
+# from 250 distinct truths rather than from all 1250 wide-prior cosmologies, so the 1000 coverage
+# mocks share truths, are not independent draws, and the KS test is anti-conservative by roughly
+# sqrt(4).
+#
+# The held-out cosmologies are drawn from the WIDE half of the grid, which is not automatic -- the
+# wide half is `id_param < n_cosmos/2`, a PREFIX in sorted i_sobol order, so grouping naively on
+# i_sobol would hold out only narrow cosmologies and leave the coverage stage with zero valid mocks.
+# resolve_group_ids handles this; see its docstring.
+
+seed: 7
+
+context_embedding:
+  dim: 16
+  hidden_dim: 32
+  n_blocks: 2
+  dropout_probability: 0.3
+
+transform:
+  type: maf
+  n_layers: 4
+  hidden_dim: 128
+  maf:
+    num_blocks: 2
+    dropout_probability: 0.3
+    use_linear: false
+
+training:
+  n_epochs: 300
+  batch_size: 10000
+  vali_split: 0.1
+  group_by: cosmology
+  learning_rate: 1.0e-3
+  weight_decay: 0.0
+  scheduler_type: cosine
+  n_patience_epochs: null
+  run_c2st: false
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+  method: ensemble
+  use_validation_weights: false
+  store_individual_chains: false
+
+# lc2st and mock_contamination are off for the whole sweep: both need chains these jobs do not
+# produce, and neither bears on posterior coverage. hpd is the exact test.
+diagnostics:
+  n_obs: 1000
+  n_likelihood_samples: 100
+  prior_selection: wide
+  tests:
+    hpd: true
+    tarp: true
+    sbc: true
+    lc2st: false
+    mock_contamination: false
