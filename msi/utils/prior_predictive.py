@@ -13,6 +13,9 @@ has to learn the density of; visualizing it as a corner plot of grid_preds color
 idea of how complex the VMIM latent summary space is. The plot is saved with a 0_ prefix under
 flow.model_dir/unblinding_plots, analogous to the likelihood- (1_) and posterior-level (2_) coverage
 plots in coverage.py.
+
+summary_typicality is the quantitative counterpart: whether an observed summary is a typical draw from
+the grid summaries, before any posterior is evaluated. It computes and does not plot.
 """
 
 import os
@@ -20,6 +23,8 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
+from scipy.linalg import solve_triangular
+from scipy.spatial import cKDTree
 from trianglechain import TriangleChain
 
 from msfm.utils import logger
@@ -75,3 +80,60 @@ def run_prior_predictive(flow, grid_preds, grid_cosmos, params, flow_conf, n_ran
 
     tri.fig.suptitle(f"prior predictive summary space | x_dim={grid_preds.shape[-1]}", fontsize=20)
     _save(tri.fig, plot_dir, "0_prior_predictive_summary_space.png")
+
+
+# neighbour rank of the distance statistic
+K_NEIGHBORS = 10
+
+
+def summary_typicality(s_obs, preds, cosmo_ids, k=K_NEIGHBORS, chunk_size=10000):
+    """Prior predictive check in summary space: is s_obs a typical draw from the simulated summaries?
+
+    The statistic is the distance from a summary to its k-th nearest simulated summary, with all summaries
+    whitened by the covariance of the simulated ones. Its null distribution is the same distance for every
+    simulated summary in turn, so the p-value is exact if s_obs is exchangeable with them.
+
+    Each simulated summary is scored leave-one-cosmology-out, i.e. against the others with every
+    realization of its own cosmology removed, since the observation's cosmology is not among them either.
+    Keeping the siblings shrinks the null and fails a typical observation.
+
+    Args:
+        s_obs: (n_summaries,) summary of the observation.
+        preds: (..., n_summaries) summaries of simulations the compression network was not trained on, drawn
+            from the analysis prior, e.g. grid/preds/test of preds_*.h5 restricted to the wide Sobol sequence.
+            A sampling density that differs from the prior enters the statistic.
+        cosmo_ids: preds.shape[:-1] cosmology id per summary, e.g. i_sobol.
+        k (int): neighbour rank of the distance.
+        chunk_size (int): null summaries queried at once, bounding the memory of the neighbour search.
+
+    Returns:
+        dict: t_data (float), t_null (n_preds,), p_value (float), k, n_ref (number of simulated summaries).
+    """
+    n_summaries = np.shape(s_obs)[-1]
+    preds = np.asarray(preds, dtype=np.float64).reshape(-1, n_summaries)
+    cosmo_ids = np.asarray(cosmo_ids).reshape(-1)
+    s_obs = np.asarray(s_obs, dtype=np.float64).reshape(1, n_summaries)
+
+    mean = preds.mean(axis=0)
+    chol = np.linalg.cholesky(np.cov(preds, rowvar=False))
+
+    def whiten(x):
+        return solve_triangular(chol, (x - mean).T, lower=True).T
+
+    white = whiten(preds)
+    tree = cKDTree(white)
+    t_data = tree.query(whiten(s_obs), k=[k])[0][0, 0]
+
+    # enough neighbours that k remain after dropping the largest possible set of siblings
+    n_query = k + np.unique(cosmo_ids, return_counts=True)[1].max()
+    t_null = np.empty(preds.shape[0])
+    for start in range(0, preds.shape[0], chunk_size):
+        stop = min(start + chunk_size, preds.shape[0])
+        dist, idx = tree.query(white[start:stop], k=n_query)
+        dist[cosmo_ids[idx] == cosmo_ids[start:stop, None]] = np.inf
+        t_null[start:stop] = np.sort(dist, axis=1)[:, k - 1]
+
+    # permutation p-value, counting the observation itself, so it is never 0
+    p_value = (1 + np.sum(t_null >= t_data)) / (1 + t_null.size)
+
+    return {"t_data": t_data, "t_null": t_null, "p_value": p_value, "k": k, "n_ref": preds.shape[0]}
