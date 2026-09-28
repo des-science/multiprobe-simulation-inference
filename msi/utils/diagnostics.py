@@ -15,7 +15,7 @@ import tarp.drp as _tarp_drp
 from tarp import get_tarp_coverage
 
 from msfm.utils import logger
-from msi.utils.plotting import PLOT_DPI
+from msi.utils.plotting import PLOT_DPI, sigma8_to_S8
 
 LOGGER = logger.get_logger(__file__)
 
@@ -650,3 +650,30 @@ def FoM_from_chain_nd(chain, params, param_set):
     idx = [params.index(p) for p in param_set]
     cov = np.atleast_2d(np.cov(chain[:, idx], rowvar=False))
     return np.linalg.det(cov) ** (-0.5)
+
+
+def _FoM_columns(chain, params, param_set):
+    """The ``param_set`` columns of ``chain`` (..., n_params), with S8 derived from s8 and Om if asked."""
+    cols = []
+    for p in param_set:
+        if p == "S8":
+            cols.append(sigma8_to_S8(chain[..., params.index("s8")], chain[..., params.index("Om")]))
+        else:
+            cols.append(chain[..., params.index(p)])
+    return np.stack(cols, axis=-1)
+
+
+def FoM_percentile(chain_obs, params_obs, theta_sample, params_sample, param_set=("Om", "S8")):
+    """Percentile of the observed FoM among the FoMs of the coverage mocks, over ``param_set``.
+
+    ``chain_obs`` is (n_samples, n_params_obs), ``theta_sample`` is (n_samples, n_mocks, n_params_sample) as in
+    mcmc_samples.h5. Returns ``(fom_obs, fom_mocks, percentile)``, the percentile being the percentage of mocks
+    with a smaller FoM.
+    """
+    param_set = list(param_set)
+    fom_obs = FoM_from_chain_nd(_FoM_columns(chain_obs, params_obs, param_set), param_set, param_set)
+    x = _FoM_columns(theta_sample.astype(np.float64), params_sample, param_set)
+    x = x - x.mean(axis=0)
+    cov = np.einsum("smi,smj->mij", x, x) / (x.shape[0] - 1)
+    fom_mocks = np.linalg.det(cov) ** (-0.5)
+    return fom_obs, fom_mocks, 100 * np.mean(fom_mocks < fom_obs)
