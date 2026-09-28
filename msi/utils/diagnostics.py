@@ -605,6 +605,12 @@ def posterior_tarp_check(
         theta_sample.shape[1] == theta_true.shape[0]
     ), f"theta_samples must have shape (n_samples, n_sims, n_dim) but got {theta_sample.shape} and {theta_true.shape}"
 
+    # tarp's bootstrap swaps one mock for another IN PLACE, cumulatively (drp.py
+    # _get_tarp_coverage_bootstrap), so without a copy it leaves ~n_bootstrap of the caller's mocks
+    # overwritten by duplicates and every later test on the same arrays runs on the corrupted set
+    theta_true = theta_true.copy()
+    theta_sample = theta_sample.copy()
+
     with _quiet_tarp_progress():
         ecp, alpha = get_tarp_coverage(
             # shape (n_samples, n_sims, n_dim)
