@@ -400,8 +400,15 @@ def run_likelihood_coverage_tests(
 
 
 def run_likelihood_coverage(
-    flow, grid_preds, grid_cosmos, i_signal, flow_conf, n_likelihood_samples=100, group_ids=None,
-    i_sobol=None, i_noise=None,
+    flow,
+    grid_preds,
+    grid_cosmos,
+    i_signal,
+    flow_conf,
+    n_likelihood_samples=100,
+    group_ids=None,
+    i_sobol=None,
+    i_noise=None,
 ):
     """Orchestrate the likelihood-level coverage stage: sample p(x|theta) for the held-out mock
     observations and run the HPD (EECP) and TARP diagnostics, with plots saved as 1_likelihood_*.png under
@@ -466,8 +473,8 @@ def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=1
         post_samples_star: the observation's posterior chain, of shape (n_samples, n_params).
         conf_alpha: significance level of the test.
         n_eval: number of posterior samples the classifier is evaluated on; the chain is subsampled
-            down to this. Note the statistic is noticeably sensitive to which subsample is drawn.
-        seed: seed for that subsample. None keeps the global numpy stream, i.e. an unseeded draw.
+            down to this.
+        seed: seed for that subsample and for every classifier. None leaves both unseeded.
 
     Returns:
         dict: {probs_data, probs_null, T_data, T_null, p_value, reject, conf_alpha}.
@@ -485,13 +492,25 @@ def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=1
     i_rand = rng.choice(post_samples_star.shape[0], n_eval)
     post_samples_star = np.asarray(post_samples_star)[i_rand]
 
-    xs_star = torch.from_numpy(xs_star)
-    x_cal = torch.from_numpy(x_cal)
-    theta_cal = torch.from_numpy(theta_cal)
-    post_samples_cal = torch.from_numpy(post_samples_cal)
+    # Standardize here rather than with LC2ST(z_score=True): sbi 0.25 standardizes the null trials twice
+    # and x_o cumulatively. Raw inputs (H0 sigma ~5 next to Ob ~0.009) let the classifier land on a
+    # theta-independent offset at x_o whose size depends on its initialization alone.
+    theta_mean, theta_std = post_samples_cal.mean(axis=0), post_samples_cal.std(axis=0)
+    x_mean, x_std = x_cal.mean(axis=0), x_cal.std(axis=0)
+    theta_cal, post_samples_cal = (theta_cal - theta_mean) / theta_std, (post_samples_cal - theta_mean) / theta_std
+    post_samples_star = (post_samples_star - theta_mean) / theta_std
+    x_cal, xs_star = (x_cal - x_mean) / x_std, (xs_star - x_mean) / x_std
+
+    xs_star = torch.from_numpy(xs_star.astype(np.float32))
+    x_cal = torch.from_numpy(x_cal.astype(np.float32))
+    theta_cal = torch.from_numpy(theta_cal.astype(np.float32))
+    post_samples_cal = torch.from_numpy(post_samples_cal.astype(np.float32))
     post_samples_star = torch.from_numpy(post_samples_star.astype(np.float32))
 
     lc2st = LC2ST(thetas=theta_cal, xs=x_cal, posterior_samples=post_samples_cal, classifier="mlp", num_ensemble=1)
+    # sbi seeds only its KFold split; the classifiers (init, early-stopping split) otherwise draw fresh
+    if seed is not None:
+        lc2st.clf_kwargs["random_state"] = seed
     # sbi's LC2ST drives its classifier-training tqdm bars off `verbosity` (disable=verbosity<1);
     # keep them only at debug level, consistent with the MCMC/diagnostics bars.
     lc2st_verbosity = 1 if LOGGER.islevel("debug") else 0
@@ -528,7 +547,7 @@ def run_lc2st(samples, params, flow, obs_pred, obs_label, plot_dir, conf_alpha=0
     else:
         post_samples_star = np.asarray(flow.sample_posterior(np.asarray(obs_pred, dtype=np.float32), label=obs_label))
 
-    scores = lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=conf_alpha)
+    scores = lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=conf_alpha, seed=0)
     T_data, T_null = scores["T_data"], scores["T_null"]
     p_value, reject = scores["p_value"], scores["reject"]
     LOGGER.info(f"l-C2ST [{obs_label}]: p-value = {p_value:.3f}, reject = {reject}")
