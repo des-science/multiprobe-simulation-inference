@@ -468,7 +468,7 @@ def run_likelihood_coverage(
 
 
 def lc2st_scores(
-    samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None, num_ensemble=10, paired_null=False
+    samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None, num_ensemble=10, paired_null=True
 ):
     """Run the Local Classifier Two-Sample Test (l-C2ST) at one observation, following the sbi tutorial,
     and return its scores without plotting anything. Needs sbi.
