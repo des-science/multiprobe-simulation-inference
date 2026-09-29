@@ -74,6 +74,7 @@ class LikelihoodBase(ABC):
         use_validation_weights=True,
         compile_flow=True,
         method="ensemble",
+        obs_index=None,
     ):
         """Sample the posterior for a batch of observations at once with the GPU-batched torch ensemble
         sampler (msi.utils.torch_ensemble). The throughput-oriented counterpart of sample_posterior (which
@@ -124,6 +125,10 @@ class LikelihoodBase(ABC):
                 itself). LikelihoodFlowEnsemble overrides this method to interpret "ensemble" (one chain on
                 the combined likelihood) vs "individual" (per-member chains, then pooled). Defaults to
                 "ensemble".
+            obs_index (array-like of int, optional): Shape (n_rows,), the chain each row of x_obs_batch
+                belongs to (0 .. n_obs-1). Rows sharing an index are sampled as ONE product-likelihood
+                posterior, their log-likelihoods summed, which is what the emcee path does with a multi-row
+                observation. Defaults to None (one chain per row).
 
         Returns:
             tuple(np.ndarray, np.ndarray): chain of shape (n_obs, n_steps * n_walkers, n_params) and its
@@ -138,7 +143,13 @@ class LikelihoodBase(ABC):
 
         x_obs_batch = torch.as_tensor(x_obs_batch, dtype=self.floatx, device=device)
         x_obs_batch = torch.atleast_2d(x_obs_batch)
-        n_obs = x_obs_batch.shape[0]
+        if obs_index is None:
+            n_obs = x_obs_batch.shape[0]
+        else:
+            obs_index = torch.as_tensor(obs_index, dtype=torch.long, device=device)
+            n_obs = int(obs_index.max()) + 1
+            assert obs_index.shape == (x_obs_batch.shape[0],), "obs_index needs one entry per row of x_obs_batch"
+            assert torch.bincount(obs_index, minlength=n_obs).min() > 0, "every observation needs at least one row"
 
         # Parameters fixed to a constant are dropped from the sampled space and reinserted only to
         # evaluate the model + full-parameter prior (the drop-and-fix idiom): lambdaCDM fixes w0 = -1,
@@ -206,6 +217,7 @@ class LikelihoodBase(ABC):
                     weights=weights,
                     loglike_fn=llf,
                     gaussian_data=gaussian_data,
+                    obs_index=obs_index,
                 )
 
             return log_prob_fn
@@ -291,7 +303,7 @@ class LikelihoodBase(ABC):
         return chain, log_prob
 
     def _batched_log_posterior_torch(
-        self, theta, x_obs, prior_data, weights=None, loglike_fn=None, gaussian_data=None
+        self, theta, x_obs, prior_data, weights=None, loglike_fn=None, gaussian_data=None, obs_index=None
     ):
         """On-device batched log-posterior: the subclass's batched log-likelihood plus the hard top-hat
         prior (applied once here). theta is (n_obs, n_walkers, n_params); returns (n_obs, n_walkers) with
@@ -300,14 +312,15 @@ class LikelihoodBase(ABC):
         ``loglike_fn`` lets the caller inject an alternative log-likelihood callable (e.g. a
         ``torch.compile``-wrapped version of ``_batched_log_likelihood_torch``); defaults to the eager
         method. ``gaussian_data`` optionally adds Gaussian log-prior terms inside the top-hat (see
-        sample_posterior_batched's gaussian_priors)."""
+        sample_posterior_batched's gaussian_priors). ``obs_index`` maps the rows of x_obs to observations
+        for a product likelihood (see sample_posterior_batched)."""
         import torch
 
         if loglike_fn is None:
             loglike_fn = self._batched_log_likelihood_torch
 
         with torch.no_grad():
-            log_like = loglike_fn(theta, x_obs, weights=weights)
+            log_like = loglike_fn(theta, x_obs, weights=weights, obs_index=obs_index)
             if gaussian_data is not None:
                 for kind, idx, mu, sigma in gaussian_data:
                     if kind == "Obh2":
@@ -319,6 +332,13 @@ class LikelihoodBase(ABC):
             in_prior = prior.in_grid_prior_torch(theta, prior_data)
             log_post = torch.where(in_prior, log_like, torch.full_like(log_like, float("-inf")))
         return log_post
+
+    @staticmethod
+    def _sum_rows_per_obs(log_like, obs_index, n_obs):
+        """Product likelihood: sum the per-row log-likelihoods (..., n_rows, n_walkers) into their
+        observations, returning (..., n_obs, n_walkers)."""
+        out = log_like.new_zeros((*log_like.shape[:-2], n_obs, log_like.shape[-1]))
+        return out.index_add_(log_like.ndim - 2, obs_index, log_like)
 
     def _resolve_gaussian_priors(self, gaussian_priors):
         """Resolve a ``{name: (mu, sigma)}`` Gaussian-prior spec into (kind, index, mu, sigma) tuples in

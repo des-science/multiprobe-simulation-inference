@@ -513,9 +513,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         return accuracy
 
-    def _prepare_data(
-        self, x, theta, batch_size, vali_split, seed=None, group_ids=None, row_weights=None
-    ):
+    def _prepare_data(self, x, theta, batch_size, vali_split, seed=None, group_ids=None, row_weights=None):
         """
         Prepare the data for training and validation.
 
@@ -842,7 +840,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         return log_prob
 
-    def _batched_log_likelihood_torch(self, theta, x_obs, weights=None):
+    def _batched_log_likelihood_torch(self, theta, x_obs, weights=None, obs_index=None):
         """On-device batched flow log-likelihood log p(x|theta) for the torch ensemble sampler.
 
         Unlike _single_log_posterior (one observation, walkers batched, numpy round-trip per step), this
@@ -852,16 +850,23 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         Args:
             theta (torch.Tensor): Cosmological parameters, shape (n_obs, n_walkers, n_params), on device.
-            x_obs (torch.Tensor): Observations, shape (n_obs, n_features), on device.
+            x_obs (torch.Tensor): Observations, shape (n_rows, n_features), on device. n_rows == n_obs
+                unless obs_index is given.
+            obs_index (torch.Tensor, optional): (n_rows,) observation of each row; rows of one observation
+                are summed into a product likelihood, as _mcmc_log_posterior does for a multi-row x_obs.
 
         Returns:
             torch.Tensor: Log-likelihood of shape (n_obs, n_walkers).
         """
-        n_obs, n_walkers, n_params = theta.shape
-        theta_flat = theta.reshape(n_obs * n_walkers, n_params)
+        n_obs = theta.shape[0]
+        if obs_index is not None:
+            theta = theta[obs_index]  # each row is evaluated at its observation's walkers
+        n_rows, n_walkers, n_params = theta.shape
+        theta_flat = theta.reshape(n_rows * n_walkers, n_params)
         # broadcast each observation across its walkers (FlowConductor does not broadcast the context)
-        x_flat = x_obs.unsqueeze(1).expand(-1, n_walkers, -1).reshape(n_obs * n_walkers, x_obs.shape[-1])
-        return self.log_prob(inputs=x_flat, context=theta_flat).reshape(n_obs, n_walkers)
+        x_flat = x_obs.unsqueeze(1).expand(-1, n_walkers, -1).reshape(n_rows * n_walkers, x_obs.shape[-1])
+        log_like = self.log_prob(inputs=x_flat, context=theta_flat).reshape(n_rows, n_walkers)
+        return log_like if obs_index is None else self._sum_rows_per_obs(log_like, obs_index, n_obs)
 
     # utils ###########################################################################################################
 
@@ -1958,6 +1963,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         compile_flow=True,
         method="ensemble",
         return_members=False,
+        obs_index=None,
     ):
         """GPU-batched posterior sampling for the ensemble, switched by ``method``:
 
@@ -1987,6 +1993,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 seed=seed,
                 use_validation_weights=use_validation_weights,
                 compile_flow=compile_flow,
+                obs_index=obs_index,
             )
         if method != "individual":
             raise ValueError(f"Unknown method {method!r}; choose 'ensemble' or 'individual'.")
@@ -2013,6 +2020,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 seed=seed + i,  # distinct walker init per member
                 use_validation_weights=False,  # a single flow has no members to weight
                 compile_flow=compile_flow,
+                obs_index=obs_index,
             )
             member_chains.append(c)
             member_log_probs.append(lp)
@@ -2023,25 +2031,33 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             return chain, log_probs, member_chains, member_log_probs
         return chain, log_probs
 
-    def _batched_log_likelihood_torch(self, theta, x_obs, weights=None):
+    def _batched_log_likelihood_torch(self, theta, x_obs, weights=None, obs_index=None):
         """On-device batched ensemble log-likelihood: the (weighted) log-mean-exp over members of each
         member's batched log p(x|theta). When vmap fusion is available (self._vmap_state, set in
         _set_eval_device) all members are evaluated in a single fused pass; otherwise they are looped over
         one at a time. Either way peak GPU memory is ~a single flow and the hard prior is applied once by
-        the shared base wrapper. theta is (n_obs, n_walkers, n_params); returns (n_obs, n_walkers)."""
-        n_obs, n_walkers, n_params = theta.shape
-        theta_flat = theta.reshape(n_obs * n_walkers, n_params)
-        x_flat = x_obs.unsqueeze(1).expand(-1, n_walkers, -1).reshape(n_obs * n_walkers, x_obs.shape[-1])
+        the shared base wrapper. theta is (n_obs, n_walkers, n_params); returns (n_obs, n_walkers).
+
+        With obs_index, x_obs has one row per realization and each member's rows are summed BEFORE the
+        member average, i.e. mean_m prod_r p_m(x_r|theta), matching the emcee _mcmc_log_posterior."""
+        n_obs = theta.shape[0]
+        if obs_index is not None:
+            theta = theta[obs_index]
+        n_rows, n_walkers, n_params = theta.shape
+        theta_flat = theta.reshape(n_rows * n_walkers, n_params)
+        x_flat = x_obs.unsqueeze(1).expand(-1, n_walkers, -1).reshape(n_rows * n_walkers, x_obs.shape[-1])
 
         if self._vmap_state is not None:
             vmapped, params, buffers = self._vmap_state
-            # single fused pass over all members -> (n_flows, n_obs * n_walkers)
-            log_likes = vmapped(params, buffers, x_flat, theta_flat).reshape(self.n_flows, n_obs, n_walkers)
+            # single fused pass over all members -> (n_flows, n_rows * n_walkers)
+            log_likes = vmapped(params, buffers, x_flat, theta_flat).reshape(self.n_flows, n_rows, n_walkers)
         else:
             log_likes = torch.stack(
-                [flow.log_prob(inputs=x_flat, context=theta_flat).reshape(n_obs, n_walkers) for flow in self.flows],
+                [flow.log_prob(inputs=x_flat, context=theta_flat).reshape(n_rows, n_walkers) for flow in self.flows],
                 dim=0,
-            )  # (n_flows, n_obs, n_walkers)
+            )  # (n_flows, n_rows, n_walkers)
+        if obs_index is not None:
+            log_likes = self._sum_rows_per_obs(log_likes, obs_index, n_obs)  # (n_flows, n_obs, n_walkers)
 
         if weights is not None:
             # weighted log-sum-exp: log(sum_i w_i * exp(log_like_i))

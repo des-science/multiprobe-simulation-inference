@@ -34,6 +34,11 @@ REF_GAUSSIAN_PRIORS = {
 }
 REF_PRIOR_SUFFIX = "_refpriors"
 
+# Mocks sampled as a product over their stack by default. Only the Buzzard flock: its 15 members are
+# independent survey realizations, while the fiducial-family stacks (80 rows) would give an
+# 80-fold-area posterior that answers no question in the paper.
+MOCK_PRODUCT_DEFAULT = ("buzzard",)
+
 
 def _ref_prior_kwargs(flow):
     """Sampler kwargs for the reference-prior variant, or None when the flow is not conditioned on the
@@ -109,6 +114,16 @@ def add_obs_args(parser, mock_labels_default=None):
         "(one chain per realization, not a product over likelihoods); default samples only "
         "the {label}_mean summary (one chain per mock).",
     )
+    parser.add_argument(
+        "--mock_product",
+        nargs="*",
+        default=list(MOCK_PRODUCT_DEFAULT),
+        metavar="SUBSTRING",
+        help="mocks whose label contains one of these substrings also get their whole {label}_stack "
+        "sampled as ONE product-likelihood posterior (MacCrann+2018), chain_{label}_stack.npy: the "
+        "N-fold-area joint posterior of the Buzzard recovery test, which the {label}_mean chain is NOT. "
+        "Default: the Buzzard flock only. Bare --mock_product (no values) switches it off.",
+    )
 
 
 def discover_mock_labels(obs_pred_dict):
@@ -145,7 +160,9 @@ def get_des_observations(obs_pred_dict):
     return obs_dict
 
 
-def get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels, include_realizations=False):
+def get_mock_observations(
+    obs_pred_dict, obs_cosmo_dict, params, obs_labels, include_realizations=False, product_match=()
+):
     obs_dict = {}
     for label in obs_labels:
         full_label = f"{label}_mean"
@@ -154,6 +171,17 @@ def get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels, inc
             continue
         cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
         obs_dict[full_label] = {"pred": obs_pred_dict[full_label], "cosmo": cosmo}
+
+        # The whole stack as ONE observation, i.e. the product over its per-realization likelihoods.
+        # Keeping all rows under a single key is what makes it a product: both backends sum the log
+        # likelihood over the rows of obs["pred"] (emcee in _mcmc_log_posterior, torch_batched via
+        # obs_index), so this is the N-fold-area joint posterior rather than a posterior at the mean.
+        if any(s in label for s in product_match):
+            stack_label = f"{label}_stack"
+            if stack_label not in obs_pred_dict:
+                print(f"Warning: '{stack_label}' not found in predictions, skipping the product.")
+            else:
+                obs_dict[stack_label] = {"pred": obs_pred_dict[stack_label], "cosmo": cosmo}
 
         # Optionally add each stack realization as its own single-row observation (separate chain,
         # not a product likelihood). Keys are {label}_{i}, which do not end in "_mean" and so are
@@ -183,25 +211,29 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
                 params,
                 args.mock_labels,
                 include_realizations=getattr(args, "mock_realizations", False),
+                product_match=getattr(args, "mock_product", MOCK_PRODUCT_DEFAULT),
             )
         )
     return obs_dict
 
 
 def _can_batch(flow, obs_dict, backend):
-    """The GPU-batched sampler covers a single LikelihoodFlow or a LikelihoodFlowEnsemble, with one summary
-    vector per observation (it treats the leading axis as independent observations). Anything else -- a flow
-    type without sample_posterior_batched, or an observation that bundles several summary rows into one
-    product-likelihood posterior -- transparently falls back to the emcee loop."""
+    """The GPU-batched sampler covers a single LikelihoodFlow or a LikelihoodFlowEnsemble, including
+    multi-row (product-likelihood) observations; any other flow type falls back to the emcee loop."""
     if backend != "torch_batched":
         return False
     if not hasattr(flow, "sample_posterior_batched"):
         print("mcmc_backend=torch_batched unavailable for this flow type; using emcee.")
         return False
-    if any(np.atleast_2d(obs["pred"]).shape[0] != 1 for obs in obs_dict.values()):
-        print("mcmc_backend=torch_batched: some observations bundle multiple summary rows; using emcee.")
-        return False
     return True
+
+
+def _stack_rows(obs_dict, keys):
+    """All summary rows of ``keys`` in one array, plus the obs_index mapping each row to its key's
+    position, so a multi-row observation is sampled as one product-likelihood chain."""
+    rows = [np.atleast_2d(obs_dict[k]["pred"]) for k in keys]
+    obs_index = np.repeat(np.arange(len(keys)), [len(r) for r in rows])
+    return np.concatenate(rows, axis=0), obs_index
 
 
 def _save_member_chains(flow, keys, member_chains, member_log_probs, variant_suffix=""):
@@ -233,7 +265,7 @@ def _run_mcmc_batched(
     per-member chains but returns the same (n_obs, n_samples, n_params) layout, so saving/plotting below is
     method-agnostic. With store_individual_chains the per-member chains are additionally saved."""
     keys = list(obs_dict.keys())
-    x_batch = np.concatenate([np.atleast_2d(obs_dict[k]["pred"]) for k in keys], axis=0)  # (n_obs, n_features)
+    x_batch, obs_index = _stack_rows(obs_dict, keys)  # (n_rows, n_features), n_rows >= n_obs
     want_members = store_individual_chains and method == "individual" and hasattr(flow, "flows")
 
     print(f"\nGPU-batched sampling of {len(keys)} observations (method={method})")
@@ -244,6 +276,7 @@ def _run_mcmc_batched(
         n_burnin_steps=n_burnin_steps,
         use_validation_weights=use_validation_weights,
         method=method,
+        obs_index=obs_index,
         **({"return_members": True} if want_members else {}),
     )
     if want_members:
@@ -268,7 +301,7 @@ def _run_mcmc_batched(
     # together, so this doesn't degenerate into slow one-at-a-time chains.
     des_keys = [k for k in keys if "des" in k.lower()]
     if des_keys:
-        x_des = np.concatenate([np.atleast_2d(obs_dict[k]["pred"]) for k in des_keys], axis=0)
+        x_des, des_index = _stack_rows(obs_dict, des_keys)
         for suffix, model_kwargs, _ in des_variants(flow)[1:]:
             print(f"\nGPU-batched sampling of variant '{suffix}' for {len(des_keys)} DES obs (method={method})")
             result_v = flow.sample_posterior_batched(
@@ -278,6 +311,7 @@ def _run_mcmc_batched(
                 n_burnin_steps=n_burnin_steps,
                 use_validation_weights=use_validation_weights,
                 method=method,
+                obs_index=des_index,
                 **model_kwargs,
                 **({"return_members": True} if want_members else {}),
             )
