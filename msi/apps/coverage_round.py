@@ -2,14 +2,13 @@
 
 Preparation is CPU-only metadata inspection, never model training. Run as
 ``python -m msi.apps.coverage_round prepare --output /path/to/new/round``.
-``run --round /path/to/round --arm joint_long`` executes one prepared arm.
+``run --round /path/to/round --arm extended_long`` executes one prepared arm.
 """
 
 import argparse
 import copy
 import hashlib
 import json
-import math
 from pathlib import Path
 import subprocess
 import sys
@@ -18,18 +17,12 @@ import h5py
 import numpy as np
 import yaml
 
-from msi.utils.grid_weighting import COSMO_PARAMS, design_weights, lookup_coordinates
-
 REPO = Path(__file__).resolve().parents[2]
+# (epochs, extend_params); the epochs are round 5's
 ARMS = {
-    "all_short": ("all", "short", []),
-    "all_long": ("all", "long", []),
-    "projected_long": ("reweight_projected", "long", []),
-    "joint_long": ("reweight_joint", "long", []),
-    "conditional_long": ("reweight_conditional", "long", []),
-    "wide_short": ("wide", "short", []),
-    "wide_long": ("wide", "long", []),
-    "extended_long": ("all", "long", ["ns", "Ob", "H0"]),
+    "all_short": (144, []),
+    "all_long": (304, []),
+    "extended_long": (304, ["ns", "Ob", "H0"]),
 }
 
 
@@ -42,8 +35,7 @@ def sha256(path):
 
 
 def prepare(preds, output, seed=7, arms=None):
-    """Freeze inputs, mock identities, update budgets and complete arm configs."""
-    from msfm.utils.prior import NARROW_GRID_BOX
+    """Freeze inputs, mock identities and complete arm configs."""
     import msfm
 
     preds, output = Path(preds).absolute(), Path(output).absolute()
@@ -74,49 +66,30 @@ def prepare(preds, output, seed=7, arms=None):
         summary_shape = f["grid/preds/test"].shape
     if summary_shape != (2500, 80, len(params)):
         raise ValueError(f"Unexpected prediction shape {summary_shape}; recheck the experimental design")
-    coords = lookup_coordinates(table, ids[:, 0])
-    if not np.allclose(coords[:, :3], theta[:, :3], rtol=1e-5, atol=1e-6):
+    row = {int(s): i for i, s in enumerate(table["sobol_index"])}
+    rows = [row[int(s)] for s in ids[:, 0]]
+    coords = np.column_stack([table[p][rows] for p in ("Om", "s8", "w0")])
+    if not np.allclose(coords, theta[:, :3], rtol=1e-5, atol=1e-6):
         raise ValueError("Metadata and prediction cosmological parameters disagree")
     if len(np.unique(ids, axis=0)) != len(ids):
         raise ValueError("Duplicate realization identities")
     if not np.array_equal(np.unique(ids[:, 0]), np.sort(table["sobol_index"])):
         raise ValueError("Predictions must contain the complete grid for this design")
-    _, counts = np.unique(ids[:, 0], return_counts=True)
-    if len(np.unique(counts)) != 1:
-        raise ValueError("Unequal examples per cosmology change the assumed grid mixture")
     wide_set = table["sobol_index"][table["id_param"] < 1250]
     wide = np.isin(ids[:, 0], wide_set)
     signals = np.unique(ids[:, 1])
     train = np.isin(ids[:, 1], signals[: int(0.9 * len(signals))])
-    batch_size = 10000
-    steps = {"all": int(train.sum()) // batch_size, "wide": int((train & wide).sum()) // batch_size}
-    multiple = steps["all"] * steps["wide"] // math.gcd(steps["all"], steps["wide"])
-    budgets = {"short": math.ceil(2400 / multiple) * multiple, "long": math.ceil(5100 / multiple) * multiple}
     available = ids[~train & wide]
     available = available[np.lexsort((available[:, 2], available[:, 1], available[:, 0]))]
     mocks = available[:: len(available) // 1000][:1000]
     if len(mocks) != 1000 or len(np.unique(mocks[:, 0])) != 1000:
         raise ValueError("Expected 1000 distinct coverage cosmologies")
 
-    audit = {}
     priors = msfm_conf["analysis"]["grid"]["priors"]
-    for mode in ("projected", "joint", "conditional"):
-        weights, info = design_weights(coords, priors, NARROW_GRID_BOX, mode)
-        for subset, mask in (("train", train), ("validation", ~train)):
-            w = weights[mask]
-            info[f"{subset}_ess_fraction"] = float(w.sum() ** 2 / (w @ w) / len(w))
-        audit[mode] = info
-    bounds = np.array([NARROW_GRID_BOX[p] for p in COSMO_PARAMS])
-    unique_coords = lookup_coordinates(table, table["sobol_index"])
-    inside = ((unique_coords >= bounds[:, 0]) & (unique_coords <= bounds[:, 1])).all(axis=1)
-    audit["narrow_component_outside_box_ids"] = table["id_param"][(table["id_param"] >= 1250) & ~inside].tolist()
-    audit["wide_component_inside_6d_box"] = int(inside[table["id_param"] < 1250].sum())
-    audit["mixture_assumption"] = "Documented 50/50 design; retain nine boundary-label exceptions (user accepted)."
-
     with open(REPO / "configs/flow/coverage/base8.yaml") as f:
         base = yaml.safe_load(f)
     base["seed"] = seed
-    base["training"].update(group_by="signal", grid_wide_fraction=0.5)
+    base["training"].update(group_by="signal")
     base["diagnostics"].update(
         mock_ids_file=str(output / "mock_ids.npy"),
         sampling_seed=12,
@@ -139,26 +112,19 @@ def prepare(preds, output, seed=7, arms=None):
         "base_params": params,
         "prior_intervals": {p: priors[p] for p in params + ["ns", "Ob", "H0"]},
         "training_rows": int(train.sum()),
-        "wide_training_rows": int((train & wide).sum()),
-        "steps_per_epoch": steps,
-        "budgets": budgets,
-        "audit": audit,
         "arms": {},
         "hashes": {},
     }
     for name in selected_arms:
-        mode, budget, extension = ARMS[name]
+        epochs, extension = ARMS[name]
         config = copy.deepcopy(base)
-        updates = budgets[budget]
-        epochs = updates // steps["wide" if mode == "wide" else "all"]
-        config["training"].update(train_prior=mode, n_epochs=epochs, expected_updates=updates)
+        config["training"].update(n_epochs=epochs)
         config_path = output / "arms" / f"{name}.yaml"
         config_path.write_text(yaml.safe_dump(config, sort_keys=False))
         manifest["arms"][name] = {
             "config": str(config_path),
             "extend_params": extension,
             "n_epochs": epochs,
-            "updates": updates,
         }
     tracked = [
         preds,
@@ -168,7 +134,6 @@ def prepare(preds, output, seed=7, arms=None):
         *sorted((output / "arms").glob("*.yaml")),
         REPO / "msi/apps/coverage_round.py",
         REPO / "msi/apps/run_inference.py",
-        REPO / "msi/utils/grid_weighting.py",
         REPO / "msi/utils/flow.py",
         REPO / "msi/utils/coverage.py",
         REPO / "msi/flow_conductor/likelihood_flow.py",
@@ -177,13 +142,12 @@ def prepare(preds, output, seed=7, arms=None):
         REPO / "msi/flow_conductor/architecture.py",
         REPO / "msi/utils/extended_params.py",
         REPO / "msi/utils/torch_ensemble.py",
-        Path(msfm.__file__).resolve().parent / "utils/prior.py",
     ]
     manifest["hashes"] = {str(p): sha256(p) for p in tracked}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(
         json.dumps(
-            {"output": str(output), "steps": steps, "budgets": budgets, "audit": audit, "arms": manifest["arms"]},
+            {"output": str(output), "arms": manifest["arms"]},
             indent=2,
         )
     )

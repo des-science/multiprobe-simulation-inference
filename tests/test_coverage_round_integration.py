@@ -62,7 +62,7 @@ class CoverageIntegrationTests(unittest.TestCase):
                 sample_coverage_posteriors(flow, x, x, ids[:, 1], conf,
                                            i_sobol=ids[:, 0], i_noise=ids[:, 2])
 
-    def test_weighted_sequential_and_fused_cpu_training(self):
+    def test_sequential_and_fused_cpu_training(self):
         import msfm
         import yaml
         from msi.utils.flow import build_flow_architecture
@@ -73,7 +73,6 @@ class CoverageIntegrationTests(unittest.TestCase):
             msfm_conf = yaml.safe_load(f)
         rng = np.random.default_rng(8)
         x, theta = rng.normal(size=(64, 2)), rng.normal(size=(64, 2))
-        weights = np.where(np.arange(64) % 3, 1.0, .021)
         groups = np.repeat(np.arange(4), 16)
         config = {"context_embedding": {"dim": 4, "hidden_dim": 8, "n_blocks": 1},
                   "transform": {"type": "maf", "n_layers": 1, "hidden_dim": 8,
@@ -83,7 +82,7 @@ class CoverageIntegrationTests(unittest.TestCase):
             single = LikelihoodFlow(["Om", "s8"], conf=msfm_conf, out_dir=tmp, feature_dim=2,
                                     embedding_net=embedding, transform=transform, device="cpu", load_existing=False)
             history = single.fit(x, theta, n_epochs=2, batch_size=16, vali_split=.25,
-                                 scheduler_type="cosine", group_ids=groups, row_weights=weights, save_model=False)
+                                 scheduler_type="cosine", group_ids=groups, save_model=False)
             self.assertTrue(np.isfinite(history["vali_loss"]).all())
             ensemble = LikelihoodFlowEnsemble(
                 ["Om", "s8"], conf=msfm_conf, n_flows=2, out_dir=tmp, feature_dim=2, device="cpu", load_existing=False,
@@ -96,10 +95,22 @@ class CoverageIntegrationTests(unittest.TestCase):
             ensemble._fit_fused(
                 x, theta, n_epochs=2, batch_size=16, vali_split=.25, learning_rate=.001,
                 weight_decay=0, clip_by_global_norm=1, scheduler_type="cosine", scheduler_kwargs=None,
-                save_model=False, seed=7, group_ids=groups, row_weights=weights,
+                save_model=False, seed=7, group_ids=groups,
                 run_c2st=False, c2st_hidden_dim=8, c2st_n_epochs=1,
             )
             self.assertTrue(np.isfinite(ensemble.validation_losses).all())
+
+
+class MockMatchingTests(unittest.TestCase):
+    def test_mock_matching_rejects_leakage_and_duplicates(self):
+        from msi.utils.coverage import match_mock_rows
+
+        available = np.array([[9, 78, 0], [2, 79, 1], [18, 78, 0]])
+        np.testing.assert_array_equal(match_mock_rows(available, available[[2, 0]]), [2, 0])
+        with self.assertRaises(ValueError):
+            match_mock_rows(available, [[9, 64, 0]])
+        with self.assertRaises(ValueError):
+            match_mock_rows(available, available[[0, 0]])
 
 
 if __name__ == "__main__":

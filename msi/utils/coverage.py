@@ -40,6 +40,20 @@ LOGGER = logger.get_logger(__file__)
 _DEFAULT_TESTS = {"hpd": True, "tarp": True, "sbc": True, "lc2st": True}
 
 
+def match_mock_rows(available, requested):
+    """Match exact (Sobol, signal, noise) identities, retaining requested order."""
+    available, requested = np.asarray(available), np.asarray(requested)
+    if available.ndim != 2 or available.shape[1] != 3 or requested.ndim != 2 or requested.shape[1] != 3:
+        raise ValueError("Mock identities must have shape (N, 3)")
+    if len(np.unique(available, axis=0)) != len(available) or len(np.unique(requested, axis=0)) != len(requested):
+        raise ValueError("Duplicate mock identity")
+    lookup = {tuple(row): i for i, row in enumerate(available)}
+    try:
+        return np.array([lookup[tuple(row)] for row in requested], dtype=np.int64)
+    except KeyError as exc:
+        raise ValueError(f"Requested coverage mock is not held out: {exc.args[0]}") from exc
+
+
 def _test_flags(flow_conf):
     """Return the enabled-coverage-test flags, merging flow_conf overrides onto _DEFAULT_TESTS."""
     tests = dict(_DEFAULT_TESTS)
@@ -190,8 +204,6 @@ def sample_coverage_posteriors(
     selected = np.arange(n_cosmos)[:: n_cosmos // n_sims][:n_sims]
     mock_file = flow_conf.get("diagnostics", {}).get("mock_ids_file")
     if mock_file:
-        from msi.utils.grid_weighting import match_mock_rows
-
         if not save_real_idx:
             raise ValueError("mock_ids_file requires all three realization indices")
         requested = np.load(mock_file, allow_pickle=False)
@@ -436,8 +448,6 @@ def run_likelihood_coverage(
     selected = np.arange(len(x_true))[::step][:n_obs]
     mock_file = flow_conf.get("diagnostics", {}).get("mock_ids_file")
     if mock_file:
-        from msi.utils.grid_weighting import match_mock_rows
-
         if i_sobol is None or i_noise is None:
             raise ValueError("mock_ids_file requires all three realization indices")
         available = np.column_stack([i_sobol, i_signal, i_noise])[flow.vali_dset.indices]
@@ -457,7 +467,9 @@ def run_likelihood_coverage(
     run_likelihood_coverage_tests(x_true, grid_preds_sample, theta_true, flow, plot_dir, tests=tests)
 
 
-def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None, num_ensemble=10):
+def lc2st_scores(
+    samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None, num_ensemble=10, paired_null=False
+):
     """Run the Local Classifier Two-Sample Test (l-C2ST) at one observation, following the sbi tutorial,
     and return its scores without plotting anything. Needs sbi.
 
@@ -477,6 +489,8 @@ def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=1
         seed: seed for that subsample and sbi's classifier random_state. None leaves both unseeded.
         num_ensemble: sbi's classifier ensemble size, for the observed and every null trial alike. A single
             classifier gives a permutation null spread over two decades, which the ensemble narrows ~4x.
+        paired_null: permute the class labels within each (posterior draw, true parameter) pair instead of
+            across all rows, so every calibration summary stays once in each class, as in the observed trial.
 
     Returns:
         dict: {probs_data, probs_null, T_data, T_null, p_value, reject, conf_alpha}.
@@ -509,7 +523,17 @@ def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=1
     post_samples_cal = torch.from_numpy(post_samples_cal.astype(np.float32))
     post_samples_star = torch.from_numpy(post_samples_star.astype(np.float32))
 
-    lc2st = LC2ST(
+    class PairedLC2ST(LC2ST):
+        # sbi's null shuffles all 2N rows, which unbalances the x_i between the classes; swap within pairs
+        def train_under_null_hypothesis(self, verbosity=1):
+            self.trained_clfs_null = {}
+            for t in range(self.num_trials_null):
+                swap = (torch.rand(len(self.theta_p), generator=torch.Generator().manual_seed(t)) < 0.5)[:, None]
+                theta_p_t = torch.where(swap, self.theta_q, self.theta_p)
+                theta_q_t = torch.where(swap, self.theta_p, self.theta_q)
+                self.trained_clfs_null[t] = self._train(theta_p_t, theta_q_t, self.x_p, self.x_q, verbosity=0)
+
+    lc2st = (PairedLC2ST if paired_null else LC2ST)(
         thetas=theta_cal, xs=x_cal, posterior_samples=post_samples_cal, classifier="mlp", num_ensemble=num_ensemble
     )
     # sbi's own seed only fixes its KFold split; this seeds the classifiers, shared by every trial

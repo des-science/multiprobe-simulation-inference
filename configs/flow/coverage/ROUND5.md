@@ -23,8 +23,9 @@ so it cannot be checked post hoc), and an independent ensemble seed (item 5, `--
 samples the same ten dimensions as the baseline, so it carries no such confound, and it reaches
 RMSE/RMS-sd 1.021 / 0.987 / 1.004 on the combined probe.
 
-The `training.train_prior` weighting modes below are retained as the experimental controls that
-established the mechanism. Production does not use them.
+The `training.train_prior` weighting modes below, `conditional_long` included, were removed from the
+code on 2026-09-29 once the extended flow made them obsolete. They are recoverable from `8543554`,
+which introduced them; `coverage_round` now prepares only `all_short`, `all_long` and `extended_long`.
 
 ## Questions and arms
 

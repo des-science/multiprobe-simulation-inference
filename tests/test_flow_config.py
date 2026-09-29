@@ -9,16 +9,9 @@ class FlowConfigTests(unittest.TestCase):
         from msi.utils.flow import _extract_train_kwargs
         for settings in ({'theta_jitter': .1}, {'group_design': 'bootstrap'},
                          {'group_bootstrap': True}, {'group_by': 'unknown'},
-                         {'train_prior': 'reweight'}):
+                         {'train_prior': 'all'}, {'grid_wide_fraction': .5}, {'expected_updates': 5168}):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 _extract_train_kwargs({'training': settings})
-
-    def test_retained_round_configs_have_unchanged_training_defaults(self):
-        from msi.utils.flow import _extract_train_kwargs
-        for mode in ['all', 'wide', 'reweight_projected', 'reweight_joint', 'reweight_conditional']:
-            result = _extract_train_kwargs({'training': {'train_prior': mode, 'group_by': 'signal'}})
-            self.assertEqual(result['batch_size'], 10000)
-            self.assertEqual(result['scheduler_type'], 'cosine')
 
     def test_extend_params_resolution(self):
         from msi.utils.extended_params import DEFAULT_EXTEND_PARAMS

@@ -296,16 +296,6 @@ def main():
         params = params + extend
         print(f"Extended conditioning vector: {params}")
 
-    # Keep grid rows and weights aligned for training and both coverage stages.
-    train_prior = flow_utils.train_prior_mode(flow_conf)
-    if train_prior == "wide":
-        grid_preds, grid_cosmos, i_signal, i_sobol, i_noise = flow_utils.restrict_to_wide_prior(
-            grid_preds, grid_cosmos, i_signal, i_sobol, i_noise, msfm_conf
-        )
-    row_weights = None
-    if train_prior.startswith("reweight_"):
-        row_weights = flow_utils.full_grid_train_weights(i_sobol, grid_cosmos, params, msfm_conf, flow_conf)
-
     group_ids = flow_utils.resolve_group_ids(flow_conf, i_signal, i_sobol=i_sobol, msfm_conf=msfm_conf)
 
     if args.load_flow:
@@ -330,7 +320,6 @@ def main():
             group_ids=group_ids,
             n_flows=args.n_flows,
             flow_confs=flow_confs,
-            row_weights=row_weights,
         )
 
     LOGGER.info(f"[timing] flow {'loaded' if args.load_flow else 'trained'}: {LOGGER.timer.elapsed('flow')}")
