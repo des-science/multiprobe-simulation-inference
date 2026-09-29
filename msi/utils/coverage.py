@@ -457,7 +457,7 @@ def run_likelihood_coverage(
     run_likelihood_coverage_tests(x_true, grid_preds_sample, theta_true, flow, plot_dir, tests=tests)
 
 
-def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None):
+def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=10_000, seed=None, num_ensemble=10):
     """Run the Local Classifier Two-Sample Test (l-C2ST) at one observation, following the sbi tutorial,
     and return its scores without plotting anything. Needs sbi.
 
@@ -474,7 +474,9 @@ def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=1
         conf_alpha: significance level of the test.
         n_eval: number of posterior samples the classifier is evaluated on; the chain is subsampled
             down to this.
-        seed: seed for that subsample and for every classifier. None leaves both unseeded.
+        seed: seed for that subsample and sbi's classifier random_state. None leaves both unseeded.
+        num_ensemble: sbi's classifier ensemble size, for the observed and every null trial alike. A single
+            classifier gives a permutation null spread over two decades, which the ensemble narrows ~4x.
 
     Returns:
         dict: {probs_data, probs_null, T_data, T_null, p_value, reject, conf_alpha}.
@@ -507,8 +509,10 @@ def lc2st_scores(samples, obs_pred, post_samples_star, conf_alpha=0.05, n_eval=1
     post_samples_cal = torch.from_numpy(post_samples_cal.astype(np.float32))
     post_samples_star = torch.from_numpy(post_samples_star.astype(np.float32))
 
-    lc2st = LC2ST(thetas=theta_cal, xs=x_cal, posterior_samples=post_samples_cal, classifier="mlp", num_ensemble=1)
-    # sbi seeds only its KFold split; the classifiers (init, early-stopping split) otherwise draw fresh
+    lc2st = LC2ST(
+        thetas=theta_cal, xs=x_cal, posterior_samples=post_samples_cal, classifier="mlp", num_ensemble=num_ensemble
+    )
+    # sbi's own seed only fixes its KFold split; this seeds the classifiers, shared by every trial
     if seed is not None:
         lc2st.clf_kwargs["random_state"] = seed
     # sbi's LC2ST drives its classifier-training tqdm bars off `verbosity` (disable=verbosity<1);
