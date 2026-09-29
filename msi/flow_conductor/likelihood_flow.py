@@ -1818,31 +1818,26 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
 
         assert x_obs.ndim == 2
 
-        # compute ensemble log likelihood
-        log_likes = []
-        for flow in self.flows:
-            if x_obs.shape[0] == 1:
-                log_like = flow._single_log_posterior(theta_walkers, x_obs, device=device)
-            else:
-                # posterior product over multiple independent observations
-                log_like = np.zeros((theta_walkers.shape[0]))
-                for x in x_obs:
-                    x = torch.atleast_2d(x)
-                    log_like += flow._single_log_posterior(theta_walkers, x, device=device)
-            log_likes.append(log_like)
+        # (n_flows, n_rows, n_walkers), one row per independent observation
+        log_likes = np.stack(
+            [
+                [flow._single_log_posterior(theta_walkers, torch.atleast_2d(x), device=device) for x in x_obs]
+                for flow in self.flows
+            ],
+            axis=0,
+        )
 
-        # average log likelihoods (in log space: weighted or unweighted log-mean-exp)
-        log_likes = np.stack(log_likes, axis=0)
-
+        # average over members in log space (weighted or unweighted log-mean-exp)
         if weights is not None:
             # weighted log-sum-exp: log(sum_i w_i * exp(log_like_i))
-            log_weights = np.log(weights).reshape(-1, 1)  # Shape: (n_flows, 1)
+            log_weights = np.log(weights).reshape(-1, 1, 1)  # Shape: (n_flows, 1, 1)
             log_ensemble = np.logaddexp.reduce(log_likes + log_weights, axis=0)
         else:
             # unweighted log-mean-exp
             log_ensemble = np.logaddexp.reduce(log_likes, axis=0) - np.log(self.n_flows)
 
-        return log_ensemble
+        # posterior product over the rows, prod_r mean_m p_m(x_r|theta): the mixture is per row
+        return log_ensemble.sum(axis=0)
 
     # GPU-batched sampling hooks (the shared driver lives in LikelihoodBase.sample_posterior_batched) ##############
 
@@ -1957,6 +1952,9 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             )
         if method != "individual":
             raise ValueError(f"Unknown method {method!r}; choose 'ensemble' or 'individual'.")
+        # pooling member posteriors can only give mean_m prod_r p_m, not the ensemble product prod_r mean_m p_m
+        if obs_index is not None and len(np.unique(np.asarray(obs_index))) < len(obs_index):
+            raise ValueError("method='individual' cannot sample a multi-row (product) observation; use 'ensemble'.")
 
         if device is None:
             device = self.device
@@ -1998,8 +1996,8 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         one at a time. Either way peak GPU memory is ~a single flow and the hard prior is applied once by
         the shared base wrapper. theta is (n_obs, n_walkers, n_params); returns (n_obs, n_walkers).
 
-        With obs_index, x_obs has one row per realization and each member's rows are summed BEFORE the
-        member average, i.e. mean_m prod_r p_m(x_r|theta), matching the emcee _mcmc_log_posterior."""
+        With obs_index, x_obs has one row per realization and the ensemble density of each row is multiplied
+        over the rows, prod_r mean_m p_m(x_r|theta), matching the emcee _mcmc_log_posterior."""
         n_obs = theta.shape[0]
         if obs_index is not None:
             theta = theta[obs_index]
@@ -2016,14 +2014,18 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 [flow.log_prob(inputs=x_flat, context=theta_flat).reshape(n_rows, n_walkers) for flow in self.flows],
                 dim=0,
             )  # (n_flows, n_rows, n_walkers)
-        if obs_index is not None:
-            log_likes = self._sum_rows_per_obs(log_likes, obs_index, n_obs)  # (n_flows, n_obs, n_walkers)
 
         if weights is not None:
             # weighted log-sum-exp: log(sum_i w_i * exp(log_like_i))
-            return torch.logsumexp(log_likes + torch.log(weights).view(-1, 1, 1), dim=0)
-        # unweighted log-mean-exp
-        return torch.logsumexp(log_likes, dim=0) - np.log(self.n_flows)
+            log_ensemble = torch.logsumexp(log_likes + torch.log(weights).view(-1, 1, 1), dim=0)
+        else:
+            # unweighted log-mean-exp
+            log_ensemble = torch.logsumexp(log_likes, dim=0) - np.log(self.n_flows)
+
+        # (n_rows, n_walkers); the member mixture is per row, so a product multiplies ensemble densities
+        if obs_index is not None:
+            return self._sum_rows_per_obs(log_ensemble, obs_index, n_obs)
+        return log_ensemble
 
     def _prepare_data(self, *args, **kwargs):
         """Reproduce the deterministic, group-aware train/vali split for coverage-test reconstruction.

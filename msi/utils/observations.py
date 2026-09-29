@@ -176,6 +176,7 @@ def get_mock_observations(
         # Keeping all rows under a single key is what makes it a product: both backends sum the log
         # likelihood over the rows of obs["pred"] (emcee in _mcmc_log_posterior, torch_batched via
         # obs_index), so this is the N-fold-area joint posterior rather than a posterior at the mean.
+        # For an ensemble each row enters through the ensemble density, prod_r mean_m p_m(x_r|theta).
         if any(s in label for s in product_match):
             stack_label = f"{label}_stack"
             if stack_label not in obs_pred_dict:
