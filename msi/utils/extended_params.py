@@ -86,12 +86,17 @@ def extend_obs_cosmo_dict(obs_cosmo_dict, params, extend_params, msfm_conf, tabl
     """Append ``extend_params`` values to every observation's true-parameter vector.
 
     Grid observations are matched to their metainfo row by their (Om, s8, w0) values (unique
-    per grid cosmology); anything that does not match a grid row (e.g. fiducial benchmark
-    mocks) falls back to the config fiducials. Only used for plotting truth points, so the
-    fiducial fallback is exact for the fiducial mocks and irrelevant for DES data (no cosmo).
+    per grid cosmology); a Buzzard mock takes the Buzzard truth (msfm.utils.buzzard), since its
+    cosmology is on no grid row and not at the fiducial; anything else (e.g. fiducial benchmark
+    mocks) falls back to the config fiducials. The Buzzard values are what the fixed-extension
+    recovery chains (msi.utils.observations.FIXED_EXT_SUFFIX) are conditioned on, so they have to
+    be the truth rather than a plotting placeholder.
     """
+    from msfm.utils import buzzard
+
     if table is None:
         table = load_grid_param_table(msfm_conf)
+    buzzard_extra = np.array(list(buzzard.get_cosmo(msfm_conf, extend_params).values()), dtype=np.float32)
 
     match_params = [p for p in ("Om", "s8", "w0") if p in params]
     match_idx = [params.index(p) for p in match_params]
@@ -106,7 +111,10 @@ def extend_obs_cosmo_dict(obs_cosmo_dict, params, extend_params, msfm_conf, tabl
         cosmo = np.asarray(cosmo, dtype=np.float32)
         dist = np.abs(match_cols - cosmo[match_idx]).max(axis=-1)
         i_min = int(np.argmin(dist))
-        extra = extend_cols[i_min] if dist[i_min] < 1e-4 else fid_extra
+        if "buzzard" in label:
+            extra = buzzard_extra
+        else:
+            extra = extend_cols[i_min] if dist[i_min] < 1e-4 else fid_extra
         extended[label] = np.concatenate([cosmo, extra])
     return extended
 

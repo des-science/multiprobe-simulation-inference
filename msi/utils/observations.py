@@ -39,6 +39,15 @@ REF_PRIOR_SUFFIX = "_refpriors"
 # 80-fold-area posterior that answers no question in the paper.
 MOCK_PRODUCT_DEFAULT = ("buzzard",)
 
+# Fixed-extension mock variant, the default of the Buzzard recovery test: every chain of a matching
+# mock (its _mean, each realization and the _stack product) is sampled once more with the flow's
+# extension parameters (ns, Ob, H0) fixed at the mock's own truth. The data barely constrain them,
+# and in the 15-fold product they otherwise drift into the prior edge along the Om-ns-H0
+# degeneracy and drag Om with them. Written as chain_{key}_fixedext.npy beside the free chain, which
+# stays what every other figure reads. Needs an extended flow and a truth for each fixed parameter.
+FIXED_EXT_SUFFIX = "_fixedext"
+MOCK_FIXED_EXT_DEFAULT = ("buzzard",)
+
 
 def _ref_prior_kwargs(flow):
     """Sampler kwargs for the reference-prior variant, or None when the flow is not conditioned on the
@@ -124,6 +133,15 @@ def add_obs_args(parser, mock_labels_default=None):
         "N-fold-area joint posterior of the Buzzard recovery test, which the {label}_mean chain is NOT. "
         "Default: the Buzzard flock only. Bare --mock_product (no values) switches it off.",
     )
+    parser.add_argument(
+        "--mock_fixed_ext",
+        nargs="*",
+        default=list(MOCK_FIXED_EXT_DEFAULT),
+        metavar="SUBSTRING",
+        help="mocks whose label contains one of these substrings also get every chain sampled with the "
+        f"extension parameters fixed at the mock's truth, chain_{{key}}{FIXED_EXT_SUFFIX}.npy (the Buzzard "
+        "recovery test). Default: the Buzzard flock only. Bare --mock_fixed_ext switches it off.",
+    )
 
 
 def discover_mock_labels(obs_pred_dict):
@@ -160,9 +178,30 @@ def get_des_observations(obs_pred_dict):
     return obs_dict
 
 
+def _fixed_ext(label, cosmo, fixed_ext_params):
+    """``{param: truth}`` for the fixed-extension variant of mock ``label``, or None when it has no truth
+    for one of them (a NaN, or no cosmo at all)."""
+    if not fixed_ext_params:
+        return None
+    fixed = {p: float(cosmo[p]) for p in fixed_ext_params if cosmo is not None and p in cosmo}
+    if len(fixed) < len(fixed_ext_params) or not np.all(np.isfinite(list(fixed.values()))):
+        LOGGER.warning(f"{label}: no truth for all of {fixed_ext_params} ({fixed}); no {FIXED_EXT_SUFFIX} chains")
+        return None
+    return fixed
+
+
 def get_mock_observations(
-    obs_pred_dict, obs_cosmo_dict, params, obs_labels, include_realizations=False, product_match=()
+    obs_pred_dict,
+    obs_cosmo_dict,
+    params,
+    obs_labels,
+    include_realizations=False,
+    product_match=(),
+    fixed_ext_match=(),
+    fixed_ext_params=(),
 ):
+    """Mock observations keyed by chain name. An entry of a mock matching ``fixed_ext_match`` also
+    carries ``fixed_params``, the truth of ``fixed_ext_params``, for its FIXED_EXT_SUFFIX chain."""
     obs_dict = {}
     for label in obs_labels:
         full_label = f"{label}_mean"
@@ -170,6 +209,7 @@ def get_mock_observations(
             print(f"Warning: '{full_label}' not found in predictions, skipping.")
             continue
         cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
+        n_before = len(obs_dict)
         obs_dict[full_label] = {"pred": obs_pred_dict[full_label], "cosmo": cosmo}
 
         # The whole stack as ONE observation, i.e. the product over its per-realization likelihoods.
@@ -191,9 +231,14 @@ def get_mock_observations(
             stack_label = f"{label}_stack"
             if stack_label not in obs_pred_dict:
                 print(f"Warning: '{stack_label}' not found in predictions, skipping realizations.")
-                continue
-            for i, row in enumerate(obs_pred_dict[stack_label]):
-                obs_dict[f"{label}_{i}"] = {"pred": row, "cosmo": cosmo}
+            else:
+                for i, row in enumerate(obs_pred_dict[stack_label]):
+                    obs_dict[f"{label}_{i}"] = {"pred": row, "cosmo": cosmo}
+
+        fixed = _fixed_ext(label, cosmo, fixed_ext_params) if any(s in label for s in fixed_ext_match) else None
+        if fixed is not None:
+            for key in list(obs_dict)[n_before:]:
+                obs_dict[key]["fixed_params"] = fixed
     return obs_dict
 
 
@@ -213,6 +258,8 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
                 args.mock_labels,
                 include_realizations=getattr(args, "mock_realizations", False),
                 product_match=getattr(args, "mock_product", MOCK_PRODUCT_DEFAULT),
+                fixed_ext_match=getattr(args, "mock_fixed_ext", MOCK_FIXED_EXT_DEFAULT),
+                fixed_ext_params=[p for p in (getattr(args, "extend_params", None) or []) if p in params],
             )
         )
     return obs_dict
@@ -325,6 +372,29 @@ def _run_mcmc_batched(
                 if flow.model_dir is not None:
                     np.save(os.path.join(flow.model_dir, f"chain_{key}{suffix}.npy"), chains_v[i])
                     np.save(os.path.join(flow.model_dir, f"log_probs_{key}{suffix}.npy"), log_probs_v[i])
+
+    # fixed-extension mock chains, batched per set of fixed values (one per mock truth)
+    groups = {}
+    for key in keys:
+        if obs_dict[key].get("fixed_params"):
+            groups.setdefault(tuple(sorted(obs_dict[key]["fixed_params"].items())), []).append(key)
+    for fixed, fixed_keys in groups.items():
+        x_fix, fix_index = _stack_rows(obs_dict, fixed_keys)
+        print(f"\nGPU-batched sampling of {len(fixed_keys)} mock chains with {dict(fixed)} fixed (method={method})")
+        chains_f, log_probs_f = flow.sample_posterior_batched(
+            x_fix,
+            n_walkers=n_walkers,
+            n_steps=n_steps,
+            n_burnin_steps=n_burnin_steps,
+            use_validation_weights=use_validation_weights,
+            method=method,
+            obs_index=fix_index,
+            fixed_params=dict(fixed),
+        )
+        for i, key in enumerate(fixed_keys):
+            if flow.model_dir is not None:
+                np.save(os.path.join(flow.model_dir, f"chain_{key}{FIXED_EXT_SUFFIX}.npy"), chains_f[i])
+                np.save(os.path.join(flow.model_dir, f"log_probs_{key}{FIXED_EXT_SUFFIX}.npy"), log_probs_f[i])
 
 
 def run_member_mcmc(
@@ -448,3 +518,17 @@ def run_mcmc(
                     **model_kwargs,
                     **extra,
                 )
+        if obs.get("fixed_params"):
+            print(f"\nStarting fixed-extension run for {key} with {obs['fixed_params']} fixed")
+            flow.sample_posterior(
+                obs["pred"],
+                label=key,
+                n_walkers=n_walkers,
+                n_steps=n_steps,
+                n_burnin_steps=n_burnin_steps,
+                fixed_params=obs["fixed_params"],
+                variant_label=FIXED_EXT_SUFFIX,
+                method=method,
+                use_validation_weights=use_validation_weights,
+                **extra,
+            )
