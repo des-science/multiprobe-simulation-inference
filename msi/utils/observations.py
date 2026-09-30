@@ -39,6 +39,10 @@ REF_PRIOR_SUFFIX = "_refpriors"
 # 80-fold-area posterior that answers no question in the paper.
 MOCK_PRODUCT_DEFAULT = ("buzzard",)
 
+# Mocks whose stack rows are also sampled one chain per realization, the Buzzard recovery test's
+# single-realization posteriors. Buzzard only, for the same reason: 80 fiducial chains per mock.
+MOCK_REALIZATIONS_DEFAULT = ("buzzard",)
+
 # Fixed-extension mock variant, the default of the Buzzard recovery test: every chain of a matching
 # mock (its _mean, each realization and the _stack product) is sampled once more with the flow's
 # extension parameters (ns, Ob, H0) fixed at the mock's own truth. The data barely constrain them,
@@ -118,10 +122,13 @@ def add_obs_args(parser, mock_labels_default=None):
     )
     parser.add_argument(
         "--mock_realizations",
-        action="store_true",
-        help="also sample each individual realization in {label}_stack as its OWN observation "
-        "(one chain per realization, not a product over likelihoods); default samples only "
-        "the {label}_mean summary (one chain per mock).",
+        nargs="*",
+        default=list(MOCK_REALIZATIONS_DEFAULT),
+        metavar="SUBSTRING",
+        help="mocks whose label contains one of these substrings also get each realization in "
+        "{label}_stack sampled as its OWN observation, chain_{label}_{i}.npy (one chain per realization, "
+        "not a product over likelihoods). Default: the Buzzard flock only. Bare --mock_realizations "
+        "(no values) switches it off.",
     )
     parser.add_argument(
         "--mock_product",
@@ -150,8 +157,8 @@ def discover_mock_labels(obs_pred_dict):
     That mean+stack pair is the structural signature written only by evaluate_obs_mocks /
     evaluate_mock_cls, so the observation sources stay cleanly disjoint by structure (not by
     name): grid (grid_*) and DES (DESy3*) have neither key. The Buzzard flock is a mock like any
-    other and is picked up here. Only the {L}_mean summary is sampled (one chain per mock); the
-    _stack is the discovery signal, sampled only under --mock_realizations.
+    other and is picked up here. The {L}_mean summary is sampled for every mock; the _stack is the
+    discovery signal, sampled only for the mocks --mock_product / --mock_realizations match.
     """
     suf = "_stack"
     return sorted(
@@ -195,7 +202,7 @@ def get_mock_observations(
     obs_cosmo_dict,
     params,
     obs_labels,
-    include_realizations=False,
+    realization_match=(),
     product_match=(),
     fixed_ext_match=(),
     fixed_ext_params=(),
@@ -224,10 +231,10 @@ def get_mock_observations(
             else:
                 obs_dict[stack_label] = {"pred": obs_pred_dict[stack_label], "cosmo": cosmo}
 
-        # Optionally add each stack realization as its own single-row observation (separate chain,
-        # not a product likelihood). Keys are {label}_{i}, which do not end in "_mean" and so are
-        # excluded from the mock-contamination plot (which uses only the {label}_mean chains).
-        if include_realizations:
+        # Each stack realization as its own single-row observation (separate chain, not a product
+        # likelihood). Keys are {label}_{i}, which do not end in "_mean" and so are excluded from the
+        # mock-contamination plot (which uses only the {label}_mean chains).
+        if any(s in label for s in realization_match):
             stack_label = f"{label}_stack"
             if stack_label not in obs_pred_dict:
                 print(f"Warning: '{stack_label}' not found in predictions, skipping realizations.")
@@ -256,7 +263,7 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
                 obs_cosmo_dict,
                 params,
                 args.mock_labels,
-                include_realizations=getattr(args, "mock_realizations", False),
+                realization_match=getattr(args, "mock_realizations", MOCK_REALIZATIONS_DEFAULT),
                 product_match=getattr(args, "mock_product", MOCK_PRODUCT_DEFAULT),
                 fixed_ext_match=getattr(args, "mock_fixed_ext", MOCK_FIXED_EXT_DEFAULT),
                 fixed_ext_params=[p for p in (getattr(args, "extend_params", None) or []) if p in params],
