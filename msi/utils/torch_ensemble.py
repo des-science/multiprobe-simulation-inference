@@ -68,6 +68,7 @@ def run_ensemble_torch(
     theta_0,
     n_steps=1_000,
     n_burnin_steps=1_000,
+    thin=1,
     a=2.0,
     generator=None,
     progress=True,
@@ -79,8 +80,10 @@ def run_ensemble_torch(
             (n_obs, k, n_params) and returns (n_obs, k). Must return -inf outside the prior.
         theta_0 (torch.Tensor): Initial walker positions, shape (n_obs, n_walkers, n_params), on the target
             device. ``n_walkers`` must be even (split into two half-ensembles, like emcee).
-        n_steps (int, optional): Number of main-chain steps. Defaults to 1000.
+        n_steps (int, optional): Number of main-chain steps KEPT. Defaults to 1000.
         n_burnin_steps (int, optional): Number of burn-in steps (discarded). Defaults to 1000.
+        thin (int, optional): Keep every ``thin``-th step, so the main chain runs ``n_steps * thin`` steps
+            and stores ``n_steps``, as emcee's ``thin_by``. Defaults to 1.
         a (float, optional): Stretch-move scale parameter. Defaults to 2.0 (emcee default).
         generator (torch.Generator, optional): RNG on theta_0's device. Defaults to None (a fresh one).
         progress (bool, optional): Log a progress bar for the main chain. Defaults to True.
@@ -104,19 +107,19 @@ def run_ensemble_torch(
     theta = theta_0.clone()
     log_prob = log_prob_fn(theta)  # (n_obs, n_walkers)
 
-    def _run(n, desc, store):
-        # preallocate the host-side chain only for the kept (main-chain) phase
+    def _run(n, desc, store, thin=1):
+        # preallocate the host-side chain only for the kept (main-chain) phase, one slot per kept step
         if store:
-            chain = np.empty((n, n_obs, n_walkers, n_params), dtype=np.float32)
-            chain_lp = np.empty((n, n_obs, n_walkers), dtype=np.float32)
+            chain = np.empty((n // thin, n_obs, n_walkers, n_params), dtype=np.float32)
+            chain_lp = np.empty((n // thin, n_obs, n_walkers), dtype=np.float32)
         steps = LOGGER.progressbar(range(n), desc=desc, at_level="debug") if progress else range(n)
         for step in steps:
             # update each half against the (current) other half, exactly as emcee's RedBlueMove
             _stretch_update(theta, log_prob, first, second, log_prob_fn, a, generator)
             _stretch_update(theta, log_prob, second, first, log_prob_fn, a, generator)
-            if store:
-                chain[step] = theta.cpu().numpy()
-                chain_lp[step] = log_prob.cpu().numpy()
+            if store and (step + 1) % thin == 0:
+                chain[step // thin] = theta.cpu().numpy()
+                chain_lp[step // thin] = log_prob.cpu().numpy()
         if store:
             return chain, chain_lp
         return None, None
@@ -126,12 +129,13 @@ def run_ensemble_torch(
     _run(n_burnin_steps, "burn-in", store=False)
     LOGGER.info(f"[timing] burn-in ({n_burnin_steps} steps): {LOGGER.timer.elapsed('torch_mcmc_burnin')}")
 
-    LOGGER.info(f"Starting the main MCMC chain ({n_steps} steps) for {n_obs} observations")
+    n_run = n_steps * thin
+    LOGGER.info(f"Starting the main MCMC chain ({n_run} steps, keeping every {thin}) for {n_obs} observations")
     LOGGER.timer.start("torch_mcmc_main")
-    chain, chain_lp = _run(n_steps, "main chain", store=True)
+    chain, chain_lp = _run(n_run, "main chain", store=True, thin=thin)
     LOGGER.info(
-        f"[timing] main chain ({n_steps} steps x {n_walkers} walkers x {n_obs} obs = "
-        f"{n_steps * n_walkers * n_obs} log_prob evals): {LOGGER.timer.elapsed('torch_mcmc_main')}"
+        f"[timing] main chain ({n_run} steps x {n_walkers} walkers x {n_obs} obs = "
+        f"{n_run * n_walkers * n_obs} log_prob evals, thinned by {thin}): {LOGGER.timer.elapsed('torch_mcmc_main')}"
     )
 
     # (n_steps, n_obs, n_walkers, n_params) -> (n_obs, n_steps * n_walkers, n_params), walkers fastest

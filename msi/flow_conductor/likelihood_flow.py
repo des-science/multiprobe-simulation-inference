@@ -681,6 +681,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         dont_save=False,
         method="ensemble",
         use_validation_weights=False,
+        thin=1,
     ):
         """
         Sample from the posterior distribution p(theta|x) using likelihood learned by the flow model and the flat
@@ -774,6 +775,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             n_walkers=n_walkers,
             n_steps=n_steps,
             n_burnin_steps=n_burnin_steps,
+            thin=thin,
         )
 
         # restore the flow to the original device
@@ -1624,6 +1626,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         method="individual",
         use_validation_weights=False,
         store_individual_chains=False,
+        thin=1,
     ):
         """
         Sample from the posterior distribution p(theta|x).
@@ -1752,6 +1755,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_walkers=n_walkers,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
+                thin=thin,
             )
 
         elif method == "individual":
@@ -1782,6 +1786,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                     label=flow_label,
                     device=device,
                     dont_save=(dont_save or not store_individual_chains),
+                    thin=thin,
                 )
                 member_chains.append(flow_chain)
 
@@ -1907,6 +1912,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         n_walkers=1_024,
         n_steps=1_000,
         n_burnin_steps=1_000,
+        thin=1,
         lambdaCDM=False,
         w0_prior=None,
         nla=False,
@@ -1939,6 +1945,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_walkers=n_walkers,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
+                thin=thin,
                 lambdaCDM=lambdaCDM,
                 w0_prior=w0_prior,
                 nla=nla,
@@ -1969,6 +1976,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_walkers=n_walkers,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
+                thin=thin,
                 lambdaCDM=lambdaCDM,
                 w0_prior=w0_prior,
                 nla=nla,

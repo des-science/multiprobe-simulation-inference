@@ -64,6 +64,7 @@ class LikelihoodBase(ABC):
         n_walkers=1_024,
         n_steps=1_000,
         n_burnin_steps=1_000,
+        thin=1,
         lambdaCDM=False,
         w0_prior=None,
         nla=False,
@@ -90,6 +91,8 @@ class LikelihoodBase(ABC):
             n_walkers (int, optional): Number of walkers per chain (must be even). Defaults to 1024.
             n_steps (int, optional): Number of main-chain steps. Defaults to 1000.
             n_burnin_steps (int, optional): Number of burn-in steps. Defaults to 1000.
+            thin (int, optional): Keep every ``thin``-th main-chain step, running ``n_steps * thin`` and
+                storing ``n_steps`` (emcee's ``thin_by``). Defaults to 1.
             lambdaCDM (bool, optional): If True, fix w0 = -1 and sample the reduced (w0-dropped) parameter
                 space, mirroring the emcee sample_posterior's lambdaCDM mode. Defaults to False.
             w0_prior (tuple, optional): ``(lower, upper)`` override of the flat w0 prior box. Either entry
@@ -279,6 +282,7 @@ class LikelihoodBase(ABC):
                 theta_0,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
+                thin=thin,
                 generator=generator,
             )
         except Exception as e:
@@ -294,6 +298,7 @@ class LikelihoodBase(ABC):
                 theta_0,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
+                thin=thin,
                 generator=generator,
             )
 

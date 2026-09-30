@@ -378,6 +378,7 @@ def main():
                 n_walkers=mcmc_conf.get("n_walkers", 1024),
                 n_steps=mcmc_conf.get("n_steps", 1000),
                 n_burnin_steps=mcmc_conf.get("n_burnin_steps", 1000),
+                thin=mcmc_conf.get("thin", 1),
                 method=mcmc_conf.get("method", "ensemble"),
                 use_validation_weights=mcmc_conf.get("use_validation_weights", True),
                 backend=args.mcmc_backend,
@@ -399,6 +400,7 @@ def main():
                 n_walkers=mcmc_conf.get("n_walkers", 1024),
                 n_steps=mcmc_conf.get("n_steps", 1000),
                 n_burnin_steps=mcmc_conf.get("n_burnin_steps", 1000),
+                thin=mcmc_conf.get("thin", 1),
                 obs_labels=args.flow_member_obs,
                 backend=args.mcmc_backend,
             )

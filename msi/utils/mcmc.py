@@ -25,6 +25,7 @@ def run_emcee(
     n_walkers=1024,
     n_steps=1000,
     n_burnin_steps=100,
+    thin=1,
     moves=None,
     print_MAP=False,
 ):
@@ -43,6 +44,8 @@ def run_emcee(
             vectorization. Defaults to 1024.
         n_steps (int, optional): Number of steps to run the chain for. Defaults to 1000.
         n_burnin_steps (int, optional): Number of steps to run the burn in chain for. Defaults to 100.
+        thin (int, optional): Keep every ``thin``-th step: runs ``n_steps * thin`` and stores ``n_steps``
+            (emcee's ``thin_by``). Defaults to 1.
         moves (list, optional): List of emcee moves to use. Defaults to None, which uses the default moves. An example
             is [(emcee.moves.StretchMove(a=1.6), 0.75), (emcee.moves.WalkMove(), 0.25)].
 
@@ -66,14 +69,14 @@ def run_emcee(
     sampler.reset()
 
     # run the actual chain
-    LOGGER.info(f"Starting the main MCMC chain ({n_steps} steps)")
+    LOGGER.info(f"Starting the main MCMC chain ({n_steps * thin} steps, keeping every {thin})")
     # each vectorized step evaluates log_prob_fn on n_walkers points, so for fixed n_steps/n_walkers
     # this elapsed time is directly comparable across flow architectures and dominates NLE cost
     LOGGER.timer.start("mcmc_main")
-    sampler.run_mcmc(state, n_steps, progress=LOGGER.islevel("debug"))
+    sampler.run_mcmc(state, n_steps, thin_by=thin, progress=LOGGER.islevel("debug"))
     LOGGER.info(
-        f"[timing] main chain ({n_steps} steps x {n_walkers} walkers = "
-        f"{n_steps * n_walkers} log_prob evals): {LOGGER.timer.elapsed('mcmc_main')}"
+        f"[timing] main chain ({n_steps * thin} steps x {n_walkers} walkers = "
+        f"{n_steps * thin * n_walkers} log_prob evals, thinned by {thin}): {LOGGER.timer.elapsed('mcmc_main')}"
     )
 
     chain = sampler.get_chain(flat=True)

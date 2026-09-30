@@ -52,9 +52,12 @@ training:
   n_patience_epochs: null
   run_c2st: false
 
+# n_steps is the number of steps KEPT: the chain runs n_steps * thin. The extended chains'
+# autocorrelation time is ~85 steps, so 1000 x 1024 unthinned held only ~1e4 independent samples.
 mcmc:
   n_walkers: 1024
   n_steps: 1000
+  thin: 10
   n_burnin_steps: 1000
   method: ensemble
   use_validation_weights: false

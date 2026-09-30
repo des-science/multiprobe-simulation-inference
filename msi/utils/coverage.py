@@ -131,6 +131,7 @@ def sample_coverage_posteriors(
     n_walkers = mcmc_conf.get("n_walkers", 1024)
     n_steps = mcmc_conf.get("n_steps", 1000)
     n_burnin_steps = mcmc_conf.get("n_burnin_steps", 1000)
+    thin = mcmc_conf.get("thin", 1)
     use_validation_weights = mcmc_conf.get("use_validation_weights", True)
     method = mcmc_conf.get("method", "ensemble")  # same switch as the plotted MCMC chains
     n_sims = flow_conf.get("diagnostics", {}).get("n_obs", 1000)
@@ -223,6 +224,7 @@ def sample_coverage_posteriors(
         n_walkers=n_walkers,
         n_steps=n_steps,
         n_burnin_steps=n_burnin_steps,
+        thin=thin,
         use_validation_weights=use_validation_weights,
         method=method,
         seed=flow_conf.get("diagnostics", {}).get("sampling_seed", 12),
