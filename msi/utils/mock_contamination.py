@@ -11,7 +11,8 @@ LOGGER = logger.get_logger(__file__)
 
 # Mock labels starting with these prefixes are not "contaminated systematics" mocks and are excluded
 # from the comparison: cosmo_* are the large per-cosmology grid, Buzzard is a separate N-body suite.
-_EXCLUDE_PREFIXES = ("cosmo", "Buzzard")
+# Matched case-insensitively: the Buzzard flock mocks are labelled `buzzard_flock*`.
+_EXCLUDE_PREFIXES = ("cosmo", "buzzard")
 
 # {sigma, enclosed-probability level} pairs and {parametrization} variants for the four plots.
 _SIGMA_LEVELS = [([0.235], "0.3sigma"), ([0.68], "1sigma")]
@@ -65,7 +66,7 @@ def _load_mock_chains(model_dir, fidu_label):
     suffix = "_mean.npy"
     for chain_file in sorted(glob.glob(os.path.join(model_dir, "chain_*_mean.npy"))):
         label = os.path.basename(chain_file)[len("chain_") : -len(suffix)]
-        if label.startswith(_EXCLUDE_PREFIXES):
+        if label.lower().startswith(_EXCLUDE_PREFIXES):
             continue
         chain = np.load(chain_file)
         if label == fidu_label:
