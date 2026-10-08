@@ -1,0 +1,55 @@
+# The GCNN-vs-transformer posterior shift on DES Y3, per probe: the one maps-vs-maps question the
+# paper puts to the data (appendix sec:architecture_comparison). Same runs as prod.yaml, which
+# leaves these pairs out on purpose; pass via RUNS_CONFIG to submissions/clariden/tension.sh.
+#
+# Both networks compress the same simulation grid, so the correlated estimator applies as for the
+# maps-vs-Cls pairs. Outputs land in the transformer's flow dir (run_2).
+
+flow_name: ensemble_flow
+
+scales_config: /users/athomsen/dlss/repos/y3-deep-lss/configs/scales/8wl,32gc.yaml
+
+runs:
+  maps_gcnn:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/lensing/v1
+      steps: 126000
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/clustering/v1
+      steps: 126500
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_gcnn/combined/v1
+      steps: 229900
+      convergence_steps: []
+
+  maps_transformer:
+    lensing:
+      params: [Om, s8, w0, Aia, n_Aia, bta]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/lensing/v1
+      steps: 202600
+      convergence_steps: []
+    clustering:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/clustering/v1
+      steps: 247400
+      convergence_steps: []
+    combined:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
+      pred_dir: /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v18/default/maps_transformer/combined/v1
+      steps: 365900
+      convergence_steps: []
+
+# 3 data pairs (one per probe), no probe pairs.
+comparisons:
+  probes: false
+  data: true
+  data_pairs:
+    - [maps_gcnn, maps_transformer]
+
+obs_labels:
+  - { label: DESy3, lambdaCDM: false }
