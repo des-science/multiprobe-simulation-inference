@@ -33,7 +33,7 @@ residual_flow:
 # MCMC for the joint residual posterior -> correlated difference chain, stage A.
 mcmc:
   n_walkers: 1024
-  n_steps: 1000
+  n_steps: 10000 # 1000 gave visibly noisy contours
   n_burnin_steps: 1000
 
 # Uncorrelated difference chain (tensiometer.parameter_diff_chain), stage A.
