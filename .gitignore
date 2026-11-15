@@ -9,6 +9,12 @@
 # the cached metacal pixel-index arrays). Never versioned -- they live on scratch/at the source.
 *.npy
 *.npz
+# Non-public chains shared by other DES Y3 SBI analyses: never commit (symlink to the store)
+data/DESy3_sbi
+# Public DES key-project chains: only the README (release paths + md5s) is tracked
+data/DESy3_key_project_chains/*
+!data/DESy3_key_project_chains/README.md
+data/DESy6_key_project_chains
 
 !data/figures/*.png
 
