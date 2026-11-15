@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --account=a0158
+#SBATCH --account=lp184
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00
 #SBATCH --nodes=1
