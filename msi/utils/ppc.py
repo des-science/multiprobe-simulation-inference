@@ -6,6 +6,7 @@ from trianglechain import TriangleChain
 from msfm.utils import files, logger
 from msi.utils import input_output, plotting, tensions
 from msi.utils import flow as flow_utils
+from msi.utils.observations import survey_name
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 
 LOGGER = logger.get_logger(__file__)
@@ -1353,7 +1354,7 @@ class PosteriorPredictiveChecks:
         catalog → maps → hard_rebinned-Cls pipeline — the same preprocessing the cls network is
         trained on (``deep_lss.utils.cls_preprocessing.preprocess_obs_hard_rebinned``).
 
-        Only catalog-based labels (currently ``"DESy3"``) are supported. For mock labels that
+        Only the catalog-based label, msfm's ``survey.name`` (e.g. ``"DESy3"``), is supported. For mock labels that
         live only in the maps obs_dict (e.g. ``"bench_fidu_mean"``, ``"grid_*"``), the caller
         must pass ``cls_obs`` to ``check_cls_marginals`` directly — the underlying maps for
         those mocks are not co-located with the compressed-summary obs_dict.
@@ -1368,9 +1369,10 @@ class PosteriorPredictiveChecks:
                 "check_cls_marginals or provide cls_obs explicitly."
             )
 
-        if self.obs_label != "DESy3":
+        survey = survey_name(self.conf)
+        if self.obs_label != survey:
             raise ValueError(
-                f"Auto-build of cls_obs is only implemented for obs_label='DESy3', "
+                f"Auto-build of cls_obs is only implemented for the survey's own catalogs, obs_label='{survey}', "
                 f"got '{self.obs_label}'. Pass cls_obs explicitly for mock observations."
             )
 

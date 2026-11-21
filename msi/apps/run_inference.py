@@ -186,7 +186,7 @@ def setup():
         "--sample_flow_members",
         action="store_true",
         help="Additionally sample each ensemble member's OWN posterior for the DES observation(s), saved as "
-        "chain_DESy3_flow_{m}.npy next to the ensemble chain. This is the ensemble-convergence / "
+        "chain_<survey>_flow_{m}.npy next to the ensemble chain. This is the ensemble-convergence / "
         "out-of-distribution pre-unblinding test: the members agree on data from the training distribution, "
         "so disagreement on the real data means the summary sits outside it. The ensemble chains are NOT "
         "affected -- unlike the mcmc.method='individual' + mcmc.store_individual_chains config pair, which "
@@ -196,10 +196,10 @@ def setup():
     parser.add_argument(
         "--flow_member_obs",
         nargs="+",
-        default=["DESy3"],
-        help="Observation labels for --sample_flow_members. Defaults to the primary DESy3 data vector; the "
-        "systematics variants (DESy3_no_sys, DESy3_no_psi_rot, ...) are separate observations and have to "
-        "be named to be included.",
+        default=None,
+        help="Observation labels for --sample_flow_members. Defaults to the primary data vector, named by "
+        "msfm's survey.name (DESy3, DESy6); the systematics variants (<survey>_no_sys, <survey>_no_psi_rot, "
+        "...) are separate observations and have to be named to be included.",
     )
     observations.add_obs_args(parser)
     return parser.parse_args()
@@ -285,6 +285,9 @@ def main():
 
     dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
     params = dlss_conf["dset"]["training"]["params"]
+    survey = observations.survey_name(msfm_conf)
+    if args.flow_member_obs is None:
+        args.flow_member_obs = [survey]
 
     if args.extend_params:
         # Append the recorded grid values of the extension parameters to every grid row (via i_sobol) and
@@ -431,6 +434,7 @@ def main():
                     flow_conf,
                     params,
                     obs_pred_dict,
+                    obs_label=survey,
                     i_sobol=i_sobol,
                     msfm_conf=msfm_conf,
                     i_noise=i_noise,

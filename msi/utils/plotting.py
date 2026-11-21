@@ -56,6 +56,9 @@ param_label_dict = {
     "bg2": r"$b_g^2$",
     "bg3": r"$b_g^3$",
     "bg4": r"$b_g^4$",
+    # DES Y6 names the lens bias by survey bin and drops bin 2: bg1, bg3, bg4, bg5, bg6
+    "bg5": r"$b_g^5$",
+    "bg6": r"$b_g^6$",
     "qbg1": r"$b_{g,q}^1$",
     "qbg2": r"$b_{g,q}^2$",
     "qbg3": r"$b_{g,q}^3$",
@@ -315,6 +318,9 @@ def plot_chains(
 
     # DES key project chains
     if with_des_chain:
+        survey = conf.get("survey", {}).get("name", "DESy3")
+        if survey != "DESy3":
+            raise ValueError(f"with_des_chain overlays the DES Y3 key project chains, not {survey}")
         # clustering params (2x2pt)
         if includes_clustering_params and not includes_lensing_params:
             des_params = ["Om", "s8", "bg1", "bg2", "bg3", "bg4"]

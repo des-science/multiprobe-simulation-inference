@@ -24,6 +24,7 @@ from msfm.utils import files as msfm_files
 from msfm.utils import logger
 from msfm.utils.input_output import read_yaml
 from msi.utils import tensions
+from msi.utils.observations import survey_name
 from msi.utils.ppc import PosteriorPredictiveChecks
 
 LOGGER = logger.get_logger(__file__)
@@ -250,7 +251,7 @@ def main():
             # by run_checks (so no checks are repeated).
             hooks = []
 
-            # optional rebinned-Cls-space PPD (DESy3 only). The diagnostic importance-samples the
+            # optional rebinned-Cls-space PPD (real data only). The diagnostic importance-samples the
             # grid with this run's flow and shows the corresponding hard_rebinned Cls data vector --
             # for maps runs it projects the maps posterior into Cls space; for cls runs it is the
             # native data vector. Config comes from the shared cache (resolved above), so it does not
@@ -260,7 +261,7 @@ def main():
                 _cls_k_top = cls_conf.get("k_top", None)
 
                 def cls_hook(ppc, obs_label, _cfg=cls_marginals_cfg, _sample_set=_cls_sample_set, _k_top=_cls_k_top):
-                    if obs_label != "DESy3":
+                    if obs_label != survey_name(ppc.conf):
                         return
                     base_dir, cls_n_bins, scales_name, dlss_conf = _cfg
                     ppc.check_cls_marginals(

@@ -24,7 +24,11 @@ LOGGER = logger.get_logger(__file__)
 def setup():
     parser = argparse.ArgumentParser(description="Percentile of the observed FoM among the coverage mocks.")
     parser.add_argument("--runs_config", required=True, help="YAML defining the runs, as for run_tension_chains.py.")
-    parser.add_argument("--obs_label", default="DESy3", help="Observed chain, chain_<obs_label>.npy.")
+    parser.add_argument(
+        "--obs_label",
+        default=None,
+        help="Observed chain, chain_<obs_label>.npy. Defaults to the runs config's first obs_labels entry.",
+    )
     parser.add_argument("--representations", nargs="+", default=None, help="Subset of runs_config['runs'] keys.")
     return parser.parse_args()
 
@@ -33,6 +37,8 @@ def main():
     args = setup()
     runs_conf = read_yaml(args.runs_config)
     flow_name = runs_conf.get("flow_name", "likelihood_flow")
+    if args.obs_label is None:
+        args.obs_label = tensions.iter_observations(runs_conf)[0][0]
 
     for rep, probes in runs_conf["runs"].items():
         if not probes or (args.representations is not None and rep not in args.representations):

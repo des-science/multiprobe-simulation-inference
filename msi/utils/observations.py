@@ -156,7 +156,7 @@ def discover_mock_labels(obs_pred_dict):
 
     That mean+stack pair is the structural signature written only by evaluate_obs_mocks /
     evaluate_mock_cls, so the observation sources stay cleanly disjoint by structure (not by
-    name): grid (grid_*) and DES (DESy3*) have neither key. The Buzzard flock is a mock like any
+    name): grid (grid_*) and DES (<survey>*, e.g. DESy3*) have neither key. The Buzzard flock is a mock like any
     other and is picked up here. The {L}_mean summary is sampled for every mock; the _stack is the
     discovery signal, sampled only for the mocks --mock_product / --mock_realizations match.
     """
@@ -178,10 +178,17 @@ def get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, n_examples=16):
     return obs_dict
 
 
-def get_des_observations(obs_pred_dict):
+def survey_name(msfm_conf):
+    """The real-data observation label, msfm's survey.name; DESy3 for configs that predate the key."""
+    return (msfm_conf or {}).get("survey", {}).get("name", "DESy3")
+
+
+def get_des_observations(obs_pred_dict, survey="DESy3"):
     obs_dict = {}
-    for label in sorted(k for k in obs_pred_dict if k == "DESy3" or k.startswith("DESy3_")):
+    for label in sorted(k for k in obs_pred_dict if k == survey or k.startswith(f"{survey}_")):
         obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": None}
+    if not obs_dict:
+        LOGGER.warning(f"--include_des: no '{survey}' observation in the predictions, keys {sorted(obs_pred_dict)}")
     return obs_dict
 
 
@@ -255,7 +262,7 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
     if args.include_grid:
         obs_dict.update(get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, args.n_grid_examples))
     if args.include_des:
-        obs_dict.update(get_des_observations(obs_pred_dict))
+        obs_dict.update(get_des_observations(obs_pred_dict, survey_name(msfm_conf)))
     if args.include_mocks:
         obs_dict.update(
             get_mock_observations(
