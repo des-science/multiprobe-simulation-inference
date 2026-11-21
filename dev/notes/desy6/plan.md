@@ -9,7 +9,8 @@ folder).
 
 A Y6 run trained by y3-deep-lss on branch `desy6` gets its DES chains, plots, PPC and tension
 from msi. y3-deep-lss writes the real-data predictions under msfm's `survey.name`
-(`obs/preds/DESy6`, `DESy6_no_sys`, y3-deep-lss `c4e353b`). Until this port it blocked its own
+(`obs/preds/DESy6`, y3-deep-lss `c4e353b`; the `_no_sys`/`_no_psi_rot` test variants are opt-in
+outside Y3 since `175a2cb`). Until this port it blocked its own
 infer stage (`require_y3_inference`), because msi selected only `DESy3*`, so a Y6 inference
 ended with no DES chain and no error.
 
@@ -102,14 +103,25 @@ Read-only on every run.
      one known error: `test_coverage_round_integration` reads msfm `configs/v18/default.yaml`,
      which msfm's `desy6` checkout moved to `configs/desy3/`.
 2. **Y6 cases.**
-   - A synthetic preds dict with `DESy6*` keys and the Y6 config selects `DESy6`, `DESy6_no_sys`.
+   - A synthetic preds dict with `DESy6*` keys and the Y6 config selects every `DESy6*` key.
    - The same config with only `DESy3*` keys warns and selects nothing.
    - Labels resolve for `[Om, s8, w0, Aia, n_Aia, bta, bg1, bg3, bg4, bg5, bg6]`.
    - `with_des_chain=True` on the Y6 config raises.
 3. **Y6 smoke inference**, after y3-deep-lss's Y6 smoke training (their verification step 4)
    writes a `preds_*.h5`. `inference.sh` on debug with `RUNS_ROOT` under `claude/`,
-   `N_FLOWS=2`, `SAMPLE_POSTERIOR=`. Expected: `chain_DESy6*.npy`, `chain_DESy6_no_sys*.npy`,
-   `chain_DESy6_flow_{m}.npy`, triangle plots with `bg5`/`bg6`.
+   `N_FLOWS=2`. Expected: `chain_DESy6*.npy` (wCDM and its variants), `chain_DESy6_flow_{m}.npy`,
+   triangle plots with `bg5`/`bg6`, l-C2ST on `DESy6`. The smoke run carries only `DESy6`.
+   **Passed 2026-11-21** (job 5416298, debug, 14:27, on y3-deep-lss job 5416191's
+   `claude/bench/desy6_deep_lss_smoke/maps_gcnn_nocls/combined/smoke`): all 8 `chain_DESy6*` files
+   (wCDM 14 columns = 11 + ns/Ob/H0, the variants one fewer per fixed parameter, both
+   `_refpriors`), both member chains, all finite; grid contours label `bg5`/`bg6`; l-C2ST ran on
+   `DESy6`; mock contamination skipped (no mocks). Flow config
+   `claude/configs/msi_desy6_smoke/maf_smoke.yaml` = `maf.yaml` with `batch_size 256` and
+   `thin 1`: `maf.yaml`'s batch of 10000 exceeds the 1680 smoke training rows, which gives 0 steps
+   per epoch and a NaN loss (job 5416269). Production has ~200k rows.
+   Seen in passing, not Y6: with `extend_params` the triangle's parameter groups are cut by
+   count (`[cosmo, ia, bg]` sizes) while ns/Ob/H0 sit at the end, so the boxes split 6 | 3 | 5
+   instead of by kind. Cosmetic, on Y3 too.
 
 ## 5. Later
 

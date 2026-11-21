@@ -143,8 +143,9 @@ repositories. `--msfm_config` / `--dlss_config` exist only to override it.
 ### DES Y3 and DES Y6
 
 The survey is whatever that saved forward-model config names in `survey.name`, so the same code
-serves both. The real-data observations are the `<survey>` keys of the prediction file
-(`DESy3`, `DESy3_no_sys`; `DESy6`, `DESy6_no_sys`), and their chains are named after them. The
+serves both. The real-data observations are the `<survey>` and `<survey>_*` keys of the
+prediction file (`DESy3` with its test variants `DESy3_no_sys`, `DESy3_no_psi_rot`; `DESy6`),
+and their chains are named after them. The
 parameter vector, including the lens bias names (`bg1`-`bg4` for Y3, `bg1, bg3, bg4, bg5, bg6`
 for Y6, named by survey bin), is the training run's. The DES Y3 runs configs sit at the top of
 `configs/runs/`, the DES Y6 ones under `configs/runs/desy6/`. The reference-prior chains of

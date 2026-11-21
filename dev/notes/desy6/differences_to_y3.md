@@ -34,7 +34,7 @@ Y6 side: the msfm `configs/desy6/v1/default.yaml` as saved in each run's `config
 
 | # | item | Y3 v18 | Y6 v1 | kind | note |
 |---|---|---|---|---|---|
-| 1 | observation label | `DESy3`, `DESy3_no_sys`, ... (literal in msi) | `DESy6`, `DESy6_no_sys`, ..., from `survey.name` | upstream | y3-deep-lss `c4e353b` writes the keys; msi selects `<survey>` and `<survey>_*`. Chains are `chain_DESy6*.npy` |
+| 1 | observation label | `DESy3`, `DESy3_no_sys`, `DESy3_no_psi_rot`, ... (literal in msi) | `DESy6`, from `survey.name` | upstream | y3-deep-lss `c4e353b` writes the keys; msi selects `<survey>` and `<survey>_*`. Chains are `chain_DESy6*.npy`. The `_no_sys`/`_no_psi_rot` test variants are opt-in outside Y3 (y3-deep-lss `175a2cb`), so a default Y6 run has none |
 | 2 | lens bias parameters | `bg1`-`bg4` | `bg1, bg3, bg4, bg5, bg6`, named by survey bin | upstream | msfm D3 / y3-deep-lss D5; the KP drops bin 2. Combined summary 11 parameters (Y3 10), clustering 8 (Y3 7) |
 | 3 | key-project overlay | DES Y3 1x2pt/2x2pt/3x2pt chains via `with_des_chain` | none; `with_des_chain` raises | decision | the overlay maps `bg1-4` onto the Y3 chain's `b1-4`. Off in every production path on Y3 too |
 
