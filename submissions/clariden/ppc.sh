@@ -8,14 +8,16 @@
 #SBATCH --job-name=ppc
 #SBATCH --output=/users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/slurm/slurm-%j.out
 
-# Posterior predictive checks over every run and pair in a runs config; defaults to v18 prod. A
-# cold run trains ~10 PPC flows and takes ~6 h; re-runs recover the flows from disk.
-#   sbatch ppc.sh
-#   VERSION=v17 SUBVERSION=baseline RUNS_NAME=t2_v3 sbatch ppc.sh
-#   PPC_CONFIG=$MSI/configs/ppc/ppc_quick.yaml sbatch --partition=debug --time=00:30:00 ppc.sh
+# Posterior predictive checks over every run and pair in a runs config, configs/runs/<VERSION>/<SUBVERSION>/
+# <RUNS_NAME>.yaml (VERSION has no default, RUNS_NAME defaults to prod). A cold run trains ~10 PPC flows and
+# takes ~6 h; re-runs recover the flows from disk.
+#   VERSION=desy3/v18 sbatch ppc.sh
+#   VERSION=desy3/v17 SUBVERSION=baseline RUNS_NAME=t2_v3 sbatch ppc.sh
+#   VERSION=desy3/v18 PPC_CONFIG=$MSI/configs/ppc/ppc_quick.yaml sbatch --partition=debug --time=00:30:00 ppc.sh
 
 set -euo pipefail
 source /users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/common.sh
+use_dataset
 
 RUNS_NAME="${RUNS_NAME:-prod}"
 RUNS_CONFIG="${RUNS_CONFIG:-$MSI/configs/runs/$VERSION/$SUBVERSION/$RUNS_NAME.yaml}"

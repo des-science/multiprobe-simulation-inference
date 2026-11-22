@@ -15,8 +15,8 @@ import numpy as np
 import yaml
 
 from msfm.utils import logger
-from msfm.utils.input_output import read_yaml
 from msi.utils import diagnostics, tensions
+from msi.utils.runs import load_runs_config
 
 LOGGER = logger.get_logger(__file__)
 
@@ -35,7 +35,7 @@ def setup():
 
 def main():
     args = setup()
-    runs_conf = read_yaml(args.runs_config)
+    runs_conf = load_runs_config(args.runs_config)
     flow_name = runs_conf.get("flow_name", "likelihood_flow")
     if args.obs_label is None:
         args.obs_label = tensions.iter_observations(runs_conf)[0][0]

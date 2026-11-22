@@ -2,7 +2,7 @@
 Posterior predictive checks (PyTorch / torch_env), packaged from
 ``deep_lss_paper/paper_2/pre-unblinding/4_posterior_predictive_checks.ipynb``.
 
-For the runs and comparisons defined in a runs config (e.g. ``configs/runs/v17/baseline/t2_v3.yaml``), this
+For the runs and comparisons defined in a runs config (e.g. ``configs/runs/desy3/v17/baseline/t2_v3.yaml``), this
 script runs two families of posterior predictive checks via
 ``msi.utils.ppc.PosteriorPredictiveChecks``:
 
@@ -26,6 +26,7 @@ from msfm.utils.input_output import read_yaml
 from msi.utils import tensions
 from msi.utils.observations import survey_name
 from msi.utils.ppc import PosteriorPredictiveChecks
+from msi.utils.runs import load_runs_config
 
 LOGGER = logger.get_logger(__file__)
 
@@ -149,7 +150,7 @@ def resolve_rebinned_cls_cache(cls_conf, scales_config):
 def main():
     args = setup()
 
-    runs_conf = read_yaml(args.runs_config)
+    runs_conf = load_runs_config(args.runs_config)
     ppc_conf = read_yaml(args.ppc_config)
     # validate the msfm config path early (the class loads it again per PPC instance)
     msfm_files.load_config(args.msfm_config)

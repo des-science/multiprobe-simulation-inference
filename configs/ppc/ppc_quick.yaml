@@ -5,7 +5,7 @@
 # auto loop still runs setup_flow + run_checks (to set the observation state) and then the
 # cls-marginals post-hook, which produces {flow_dir}/ppc/auto_wl/DESy3_cls_marginals.png.
 #
-# Edit ppc.sh to point RUNS_CONFIG at a live runs config (e.g. configs/runs/v17/baseline/t2_v3.yaml)
+# Edit ppc.sh to point RUNS_CONFIG at a live runs config (e.g. configs/runs/desy3/v17/baseline/t2_v3.yaml)
 # and PPC_CONFIG at this file, then submit it. Short enough for --partition=debug.
 
 cosmo_params: [Om, s8, w0]

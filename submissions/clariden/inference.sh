@@ -8,19 +8,19 @@
 #SBATCH --job-name=inference
 #SBATCH --output=/users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/slurm/slurm-%j.out
 
-# Likelihood-flow inference on the summaries of trained runs, one run per GPU. The defaults are the
-# production settings; y3-deep-lss's prod/{maps,cls}.sh call this as their last stage. The six v18
-# production runs (overwrites their chains):
-#   RUNS="maps_gcnn/lensing/v1 maps_gcnn/clustering/v1 maps_gcnn/combined/v1
+# Likelihood-flow inference on the summaries of trained runs, one run per GPU. VERSION picks the dataset
+# (no default) and its RUNS_ROOT; the other defaults are the production settings. y3-deep-lss's
+# prod/{maps,cls}.sh call this as their last stage. The six v18 production runs (overwrites their chains):
+#   VERSION=desy3/v18 RUNS="maps_gcnn/lensing/v1 maps_gcnn/clustering/v1 maps_gcnn/combined/v1
 #         cls/lensing/v1 cls/clustering/v1 cls/combined/v1" sbatch inference.sh
-#   LOAD_FLOW=--load_flow RUNS=... sbatch inference.sh           # resample an already trained flow
-#   FLOW_LABEL=test FLOW_CONFIG=<yaml> RUNS=... sbatch inference.sh   # experiment beside the prod flow
+#   VERSION=desy3/v18 LOAD_FLOW=--load_flow RUNS=... sbatch inference.sh   # resample an already trained flow
+#   VERSION=desy6/v1 FLOW_LABEL=test FLOW_CONFIG=<yaml> RUNS=... sbatch inference.sh   # beside the prod flow
 # From inside a uenv session: env -u LD_LIBRARY_PATH sbatch --uenv-passthrough=ignore ...
 
 source /users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/common.sh
 
 : "${RUNS:?set RUNS to one or more <method>/<probe>/<run> dirs under RUNS_ROOT}"
-RUNS_ROOT="${RUNS_ROOT:-$STORE/deep_lss/runs/$VERSION/$SUBVERSION}"
+use_dataset runs
 RUN_NUM="${RUN_NUM:-1}"  # names the log only
 
 FLOW_CONFIG="${FLOW_CONFIG:-$MSI/configs/flow/maf.yaml}"

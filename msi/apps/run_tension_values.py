@@ -20,6 +20,7 @@ import yaml
 from msfm.utils import logger
 from msfm.utils.input_output import read_yaml
 from msi.utils import tensions
+from msi.utils.runs import load_runs_config
 
 LOGGER = logger.get_logger(__file__)
 
@@ -34,7 +35,7 @@ def setup():
 def main():
     args = setup()
 
-    runs_conf = read_yaml(args.runs_config)
+    runs_conf = load_runs_config(args.runs_config)
     tension_conf = read_yaml(args.tension_config)
 
     tensiometer_conf = tension_conf.get("tensiometer", {})

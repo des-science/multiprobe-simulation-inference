@@ -10,8 +10,10 @@ import h5py
 import numpy as np
 
 
-@unittest.skipUnless(importlib.util.find_spec("torch") and importlib.util.find_spec("enflows"),
-                     "Requires the existing PyTorch environment")
+@unittest.skipUnless(
+    importlib.util.find_spec("torch") and importlib.util.find_spec("enflows"),
+    "Requires the existing PyTorch environment",
+)
 class CoverageIntegrationTests(unittest.TestCase):
     def test_paired_likelihood_and_posterior_selection(self):
         import torch
@@ -44,11 +46,12 @@ class CoverageIntegrationTests(unittest.TestCase):
                     self.likelihood_theta = theta
                     return np.tile(theta[:, None, :], (1, 10, 1))
 
-            conf = {"diagnostics": {"n_obs": 2, "mock_ids_file": str(mock_file), "subsample_seed": 17},
-                    "mcmc": {"n_steps": 4, "n_walkers": 4, "n_burnin_steps": 1}}
+            conf = {
+                "diagnostics": {"n_obs": 2, "mock_ids_file": str(mock_file), "subsample_seed": 17},
+                "mcmc": {"n_steps": 4, "n_walkers": 4, "n_burnin_steps": 1},
+            }
             flow = FakeFlow()
-            out = sample_coverage_posteriors(flow, x, x, ids[:, 1], conf,
-                                             i_sobol=ids[:, 0], i_noise=ids[:, 2])
+            out = sample_coverage_posteriors(flow, x, x, ids[:, 1], conf, i_sobol=ids[:, 0], i_noise=ids[:, 2])
             with patch("msi.utils.coverage.run_likelihood_coverage_tests") as diagnostic:
                 run_likelihood_coverage(flow, x, x, ids[:, 1], conf, i_sobol=ids[:, 0], i_noise=ids[:, 2])
                 np.testing.assert_array_equal(diagnostic.call_args.args[0], x[[15, 3]])
@@ -59,8 +62,7 @@ class CoverageIntegrationTests(unittest.TestCase):
             # A training realization must never be accepted as a requested coverage mock.
             np.save(mock_file, ids[[0, 3]])
             with self.assertRaisesRegex(ValueError, "not held out"):
-                sample_coverage_posteriors(flow, x, x, ids[:, 1], conf,
-                                           i_sobol=ids[:, 0], i_noise=ids[:, 2])
+                sample_coverage_posteriors(flow, x, x, ids[:, 1], conf, i_sobol=ids[:, 0], i_noise=ids[:, 2])
 
     def test_sequential_and_fused_cpu_training(self):
         import msfm
@@ -68,24 +70,52 @@ class CoverageIntegrationTests(unittest.TestCase):
         from msi.utils.flow import build_flow_architecture
         from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 
-        conf_path = Path(msfm.__file__).resolve().parents[1] / "configs/v18/default.yaml"
+        conf_path = Path(msfm.__file__).resolve().parents[1] / "configs/desy3/v18/default.yaml"
         with open(conf_path) as f:
             msfm_conf = yaml.safe_load(f)
         rng = np.random.default_rng(8)
         x, theta = rng.normal(size=(64, 2)), rng.normal(size=(64, 2))
         groups = np.repeat(np.arange(4), 16)
-        config = {"context_embedding": {"dim": 4, "hidden_dim": 8, "n_blocks": 1},
-                  "transform": {"type": "maf", "n_layers": 1, "hidden_dim": 8,
-                                "maf": {"num_blocks": 1, "dropout_probability": .1}}}
+        config = {
+            "context_embedding": {"dim": 4, "hidden_dim": 8, "n_blocks": 1},
+            "transform": {
+                "type": "maf",
+                "n_layers": 1,
+                "hidden_dim": 8,
+                "maf": {"num_blocks": 1, "dropout_probability": 0.1},
+            },
+        }
         with tempfile.TemporaryDirectory() as tmp:
             embedding, transform = build_flow_architecture(2, 2, config)
-            single = LikelihoodFlow(["Om", "s8"], conf=msfm_conf, out_dir=tmp, feature_dim=2,
-                                    embedding_net=embedding, transform=transform, device="cpu", load_existing=False)
-            history = single.fit(x, theta, n_epochs=2, batch_size=16, vali_split=.25,
-                                 scheduler_type="cosine", group_ids=groups, save_model=False)
+            single = LikelihoodFlow(
+                ["Om", "s8"],
+                conf=msfm_conf,
+                out_dir=tmp,
+                feature_dim=2,
+                embedding_net=embedding,
+                transform=transform,
+                device="cpu",
+                load_existing=False,
+            )
+            history = single.fit(
+                x,
+                theta,
+                n_epochs=2,
+                batch_size=16,
+                vali_split=0.25,
+                scheduler_type="cosine",
+                group_ids=groups,
+                save_model=False,
+            )
             self.assertTrue(np.isfinite(history["vali_loss"]).all())
             ensemble = LikelihoodFlowEnsemble(
-                ["Om", "s8"], conf=msfm_conf, n_flows=2, out_dir=tmp, feature_dim=2, device="cpu", load_existing=False,
+                ["Om", "s8"],
+                conf=msfm_conf,
+                n_flows=2,
+                out_dir=tmp,
+                feature_dim=2,
+                device="cpu",
+                load_existing=False,
                 embedding_net_fn=lambda: build_flow_architecture(2, 2, config)[0],
                 transform_fn=lambda: build_flow_architecture(2, 2, config)[1],
             )
@@ -93,10 +123,22 @@ class CoverageIntegrationTests(unittest.TestCase):
             for flow in ensemble.flows:
                 flow._embedding_net.set_stats(theta)
             ensemble._fit_fused(
-                x, theta, n_epochs=2, batch_size=16, vali_split=.25, learning_rate=.001,
-                weight_decay=0, clip_by_global_norm=1, scheduler_type="cosine", scheduler_kwargs=None,
-                save_model=False, seed=7, group_ids=groups,
-                run_c2st=False, c2st_hidden_dim=8, c2st_n_epochs=1,
+                x,
+                theta,
+                n_epochs=2,
+                batch_size=16,
+                vali_split=0.25,
+                learning_rate=0.001,
+                weight_decay=0,
+                clip_by_global_norm=1,
+                scheduler_type="cosine",
+                scheduler_kwargs=None,
+                save_model=False,
+                seed=7,
+                group_ids=groups,
+                run_c2st=False,
+                c2st_hidden_dim=8,
+                c2st_n_epochs=1,
             )
             self.assertTrue(np.isfinite(ensemble.validation_losses).all())
 

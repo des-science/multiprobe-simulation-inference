@@ -11,7 +11,7 @@ silent. Kinds in the table:
 - **decision**: a stated user decision;
 - **method**: the same quantity, derived another way.
 
-Y3 side: `configs/runs/v18/default/prod.yaml`, `configs/flow/maf.yaml`, arXiv:2511.04681.
+Y3 side: `configs/runs/desy3/v18/default/prod.yaml`, `configs/flow/maf.yaml`, arXiv:2511.04681.
 Y6 side: the msfm `configs/desy6/v1/default.yaml` as saved in each run's `configs.yaml`, and
 `plan.md` (this folder). The forward-model differences are in msfm
 `dev/notes/desy6/differences_to_y3.md`.

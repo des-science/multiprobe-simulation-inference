@@ -8,13 +8,15 @@
 #SBATCH --job-name=tension
 #SBATCH --output=/users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/slurm/slurm-%j.out
 
-# Posterior tension over every pair in a runs config; defaults to v18 prod (21 pairs, ~2 h).
+# Posterior tension over every pair in a runs config, configs/runs/<VERSION>/<SUBVERSION>/<RUNS_NAME>.yaml
+# (VERSION has no default, RUNS_NAME defaults to prod; v18 prod has 21 pairs, ~2 h).
 # Stage A builds the difference chains (torch), stage B their tension values (TensorFlow).
-#   sbatch tension.sh
-#   VERSION=v17 SUBVERSION=baseline RUNS_NAME=t1_v3 sbatch --time=01:00:00 tension.sh
+#   VERSION=desy3/v18 sbatch tension.sh
+#   VERSION=desy3/v17 SUBVERSION=baseline RUNS_NAME=t1_v3 sbatch --time=01:00:00 tension.sh
 
 set -euo pipefail
 source /users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/common.sh
+use_dataset
 
 RUNS_NAME="${RUNS_NAME:-prod}"
 RUNS_CONFIG="${RUNS_CONFIG:-$MSI/configs/runs/$VERSION/$SUBVERSION/$RUNS_NAME.yaml}"

@@ -30,6 +30,7 @@ from msfm.utils import logger
 from msfm.utils.input_output import read_yaml
 from msi.flow_conductor.marginal_flow import MarginalFlow
 from msi.utils import tensions
+from msi.utils.runs import load_runs_config
 
 LOGGER = logger.get_logger(__file__)
 
@@ -83,7 +84,7 @@ def save_chain(samples, out_dirs, filename):
 def main():
     args = setup()
 
-    runs_conf = read_yaml(args.runs_config)
+    runs_conf = load_runs_config(args.runs_config)
     tension_conf = read_yaml(args.tension_config)
     msfm_conf = msfm_files.load_config(args.msfm_config)
 

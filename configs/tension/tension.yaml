@@ -1,7 +1,7 @@
 # Method hyperparameters for the posterior-tension analysis.
 #
 # Only method-related quantities live here; runs, comparisons and observations are defined in a
-# separate runs config passed via --runs_config (e.g. configs/runs/v17/baseline/t2_v3.yaml).
+# separate runs config passed via --runs_config (e.g. configs/runs/desy3/v17/baseline/t2_v3.yaml).
 
 # Both the sigma8 and the S8 = sigma8 * sqrt(Om / 0.3) parametrization of every difference chain are
 # always produced (S8 is a cheap post-hoc reparametrization of the shared emulators / flow / MCMC).
