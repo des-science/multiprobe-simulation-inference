@@ -127,4 +127,5 @@ Read-only on every run.
 
 - PPC and tension on Y6 need the Y6 runs config (item 4) and at least two Y6 runs.
 - Y6 key-project chains as an overlay (public on the DES data server, not wired in).
-- Mocks: no fiducial projection and no Y6 validation mock yet (msfm plan, Q6).
+- Mocks: the benchmark projections exist, the msfm mocks from them are not built yet, and there is
+  no Y6 validation mock.
