@@ -57,4 +57,6 @@ Y6 side: the msfm `configs/desy6/v1/default.yaml` as saved in each run's `config
 
 - **D2** (2026-11-21): `--include_des` with no `<survey>` observation now logs a warning, on Y3
   too (before: nothing). The outputs are unchanged.
-- `VERSION=desy6/v1` resolves `MSFM_CONFIG` and the runs-config path in `ppc.sh`/`tension.sh`.
+- `VERSION=desy6/v1` resolves `MSFM_CONFIG` and the runs-config path in `ppc.sh`/`tension.sh`, and
+  `RUNS_ROOT` in `inference.sh` (the `runs_dir` of msfm's `configs/desy6/v1/locations.yaml`, on
+  `/ritom`). `VERSION` has no default; DES Y3 is `VERSION=desy3/v18`.
