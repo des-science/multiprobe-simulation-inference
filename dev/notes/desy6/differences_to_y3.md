@@ -48,10 +48,10 @@ Y6 side: the msfm `configs/desy6/v1/default.yaml` as saved in each run's `config
 ## Not there yet
 
 - The Y6 runs config (`configs/runs/desy6/v1/default/prod.yaml`), so no Y6 PPC or tension.
-- Mock observations: the benchmark projections exist (`fiducial_bench` and the box-size,
-  particle-count and redshift-resolution benchmarks), but msfm has not built the mocks from them,
-  and there is no Buzzard-like validation mock. So there is no mock-contamination test and no
-  recovery test yet. Both stages skip without failing.
+- Mock observations: msfm made six from the benchmark projections on 2026-11-22 (`fiducial_bench`,
+  box size, particle count, redshift resolution and two source-clustering arms), but no Y6 network
+  has evaluated them yet, and there is no Buzzard-like validation mock. So there is no
+  mock-contamination test and no recovery test yet. Both stages skip without failing.
 
 ## Plumbing (no effect on the inference)
 
