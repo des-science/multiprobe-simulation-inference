@@ -23,7 +23,10 @@ source /users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/cl
 use_dataset runs
 RUN_NUM="${RUN_NUM:-1}"  # names the log only
 
-FLOW_CONFIG="${FLOW_CONFIG:-$MSI/configs/flow/maf.yaml}"
+# DES Y6 samples the 10x shorter chain until just before unblinding
+DEFAULT_FLOW_CONFIG=maf.yaml
+if [[ "$VERSION" == desy6/* ]]; then DEFAULT_FLOW_CONFIG=maf_chain1000.yaml; fi
+FLOW_CONFIG="${FLOW_CONFIG:-$MSI/configs/flow/$DEFAULT_FLOW_CONFIG}"
 FLOW_CONFIGS="${FLOW_CONFIGS:-}"  # several configs: one heterogeneous ensemble, replaces FLOW_CONFIG
 FLOW_LABEL="${FLOW_LABEL:-}"      # prefixes the flow dir, keeping an experiment off the prod flow
 N_FLOWS="${N_FLOWS:-8}"           # rewrites the flow in place; the dir name omits the member count
