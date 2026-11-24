@@ -105,7 +105,7 @@ def resolve_rebinned_cls_cache(cls_conf, scales_config):
     """Resolve everything the Cls-space PPD needs: ``(base_dir, cls_n_bins, scales_name, dlss_conf)``.
 
     The scale cut is a property of the RUNS (the network was trained with it), so ``scales_config``
-    (the path to the scales YAML, e.g. ``configs/scales/8wl,32gc.yaml``) comes from the runs config.
+    (the path to the scales YAML, e.g. ``configs/scales/desy3/v18/8wl,32gc.yaml``) comes from the runs config.
     Its stem gives ``scales_name`` and its ``scale_cuts`` block defines the obs rebinning / ell axis.
     ``base_dir`` (data location) comes from ``cls_conf`` (the ppc config); ``cls_n_bins`` is read from
     the matching cache's HDF5 attr (authoritative), with an optional ``cls_conf['cls_n_bins']`` to
@@ -227,7 +227,7 @@ def main():
         if scales_config is None:
             LOGGER.warning(
                 "Cls-space PPD disabled: the runs config has no 'scales_config' (the scale cut the "
-                "network was trained with, e.g. configs/scales/8wl,32gc.yaml)."
+                "network was trained with, e.g. configs/scales/desy3/v18/8wl,32gc.yaml)."
             )
         else:
             try:

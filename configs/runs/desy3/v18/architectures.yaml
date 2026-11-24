@@ -7,7 +7,7 @@
 
 flow_name: ensemble_flow
 
-scales_config: /users/athomsen/dlss/repos/y3-deep-lss/configs/scales/8wl,32gc.yaml
+scales_config: /users/athomsen/dlss/repos/y3-deep-lss/configs/scales/desy3/v18/8wl,32gc.yaml
 
 runs:
   maps_gcnn:

@@ -37,7 +37,7 @@ checks:
   check_linf: false
 
 # Rebinned-Cls-space PPD (auto-probe + DESy3 only). The scale cut is tied to the runs, so the runs
-# config sets `scales_config` (e.g. configs/scales/8wl,32gc.yaml); cls_n_bins is read from the cache.
+# config sets `scales_config` (e.g. configs/scales/desy3/v18/8wl,32gc.yaml); cls_n_bins is read from the cache.
 # base_dir moves to v18/default because the v16 and v17 data trees were cleared.
 #
 # Disabled, and NOT because its inputs are missing -- re-verified 2026-09-22, they are all present:
