@@ -20,18 +20,19 @@ class RunsConfigTests(unittest.TestCase):
         return handle.name
 
     def test_existing_configs_load_unchanged(self):
-        paths = sorted(glob.glob(os.path.join(REPO_DIR, "configs/runs/desy3/*/*/*.yaml")))
+        paths = sorted(glob.glob(os.path.join(REPO_DIR, "configs/runs/desy3/**/*.yaml"), recursive=True))
         self.assertGreater(len(paths), 0)
         for path in paths:
             with self.subTest(path=os.path.relpath(path, REPO_DIR)):
                 self.assertEqual(load_runs_config(path), read_yaml(path))
 
     def test_relative_pred_dir_resolves_against_the_dataset(self):
-        runs_dir = dataset_runs_dir("desy6/v1/default")
+        runs_dir = dataset_runs_dir("desy6/v1")
         self.assertEqual(runs_dir, "/ritom/scratch/cscs/athomsen/deep_lss/runs/desy6/v1/default")
+        self.assertEqual(dataset_runs_dir("desy6/v2"), "/ritom/scratch/cscs/athomsen/deep_lss/runs/desy6/v2")
         path = self._write(
             {
-                "dataset": "desy6/v1/default",
+                "dataset": "desy6/v1",
                 "runs": {
                     "maps_gcnn": {"lensing": {"pred_dir": "maps_gcnn/lensing/v1"}},
                     "cls": {"lensing": {"pred_dir": "/elsewhere/cls/lensing/v1"}},
@@ -50,7 +51,7 @@ class RunsConfigTests(unittest.TestCase):
             load_runs_config(path)
 
     def test_unknown_dataset_fails(self):
-        path = self._write({"dataset": "desy6/v9/default", "runs": {}})
+        path = self._write({"dataset": "desy6/v9", "runs": {}})
         with self.assertRaisesRegex(FileNotFoundError, "has no msfm config"):
             load_runs_config(path)
 

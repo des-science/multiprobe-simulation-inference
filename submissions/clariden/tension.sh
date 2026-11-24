@@ -8,18 +8,19 @@
 #SBATCH --job-name=tension
 #SBATCH --output=/users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/slurm/slurm-%j.out
 
-# Posterior tension over every pair in a runs config, configs/runs/<VERSION>/<SUBVERSION>/<RUNS_NAME>.yaml
+# Posterior tension over every pair in a runs config, configs/runs/<VERSION>/<RUNS_NAME>.yaml
 # (VERSION has no default, RUNS_NAME defaults to prod; v18 prod has 21 pairs, ~2 h).
 # Stage A builds the difference chains (torch), stage B their tension values (TensorFlow).
 #   VERSION=desy3/v18 sbatch tension.sh
-#   VERSION=desy3/v17 SUBVERSION=baseline RUNS_NAME=t1_v3 sbatch --time=01:00:00 tension.sh
+#   VERSION=desy3/v17 MSFM_CONFIG=$MSFM/configs/desy3/v17/baseline.yaml \
+#       RUNS_CONFIG=$MSI/configs/runs/desy3/v17/baseline/t1_v3.yaml sbatch --time=01:00:00 tension.sh
 
 set -euo pipefail
 source /users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/common.sh
 use_dataset
 
 RUNS_NAME="${RUNS_NAME:-prod}"
-RUNS_CONFIG="${RUNS_CONFIG:-$MSI/configs/runs/$VERSION/$SUBVERSION/$RUNS_NAME.yaml}"
+RUNS_CONFIG="${RUNS_CONFIG:-$MSI/configs/runs/$VERSION/$RUNS_NAME.yaml}"
 TENSION_CONFIG="${TENSION_CONFIG:-$MSI/configs/tension/tension.yaml}"
 
 LOG="$LOG_DIR/${SLURM_JOB_ID}"

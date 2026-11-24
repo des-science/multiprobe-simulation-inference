@@ -70,7 +70,7 @@ class CoverageIntegrationTests(unittest.TestCase):
         from msi.utils.flow import build_flow_architecture
         from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 
-        conf_path = Path(msfm.__file__).resolve().parents[1] / "configs/desy3/v18/default.yaml"
+        conf_path = Path(msfm.__file__).resolve().parents[1] / "configs/desy3/v18/v18.yaml"
         with open(conf_path) as f:
             msfm_conf = yaml.safe_load(f)
         rng = np.random.default_rng(8)

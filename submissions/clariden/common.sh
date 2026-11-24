@@ -14,8 +14,6 @@ DEEP_LSS="$REPOS/y3-deep-lss"
 [ -z "${SLURM_TRES_PER_TASK:-}" ] && export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=72 TF_NUM_INTRAOP_THREADS=72
 
-SUBVERSION="${SUBVERSION:-default}"
-
 # DRYRUN=1 prints every srun instead of running it (works on the login node).
 DRYRUN="${DRYRUN:-0}"
 LOG_DIR="$MSI/submissions/clariden/slurm"
@@ -30,8 +28,8 @@ GPU_STEP=(-N1 -n1 --exclusive --gpus-per-task=1 --cpus-per-task=72 --cpu-bind=no
 TORCH_ENV=(--uenv=pytorch/v2.9.1:v2 --view=default)
 TORCH_PY="$HOME/dlss/torch_env/bin/python"  # the venv's own interpreter, no activation needed
 
-# use_dataset [runs] [data]: the dataset of VERSION, msfm's configs/<VERSION>/<SUBVERSION>.yaml (MSFM_CONFIG), e.g.
-# VERSION=desy6/v1 or VERSION=desy3/v18. VERSION has no default, so a run never falls back to another survey's
+# use_dataset [runs] [data]: the dataset of VERSION, msfm's configs/<VERSION>/<version>.yaml (MSFM_CONFIG), e.g.
+# VERSION=desy6/v2 or VERSION=desy3/v18. VERSION has no default, so a run never falls back to another survey's
 # runs. The paths asked for come from the locations.yaml next to that config (msfm.utils.locations): runs sets
 # RUNS_ROOT, data sets DATA_DIR. An environment variable overrides each, and then nothing is looked up.
 use_dataset() {
@@ -41,7 +39,7 @@ use_dataset() {
         echo "Set VERSION to a dataset of msfm's configs/: $datasets" >&2
         exit 1
     fi
-    MSFM_CONFIG="${MSFM_CONFIG:-$MSFM/configs/$VERSION/$SUBVERSION.yaml}"
+    MSFM_CONFIG="${MSFM_CONFIG:-$MSFM/configs/$VERSION/$(basename "$VERSION").yaml}"
     if [ ! -f "$MSFM_CONFIG" ]; then
         echo "No msfm config $MSFM_CONFIG; the datasets are: $datasets" >&2
         exit 1

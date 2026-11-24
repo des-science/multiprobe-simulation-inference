@@ -14,7 +14,8 @@
 # Runtime is ~linear in N_BINS (nb16 ~13 min). Reads the Cls of the dataset's data dir; writes into its
 # runs dir, fisher_cls/<scales>/nb<N>/ (both from msfm's locations.yaml).
 #   VERSION=desy3/v18 sbatch fisher_cls.sh
-#   VERSION=desy3/v17 SUBVERSION=baseline SCALES=lmax_1024 N_BINS=32 sbatch fisher_cls.sh
+#   VERSION=desy3/v17 MSFM_CONFIG=$MSFM/configs/desy3/v17/baseline.yaml RUNS_ROOT=<runs> DATA_DIR=<data> \
+#       SCALES=lmax_1024 N_BINS=32 sbatch fisher_cls.sh
 
 source /users/athomsen/dlss/repos/multiprobe-simulation-inference/submissions/clariden/common.sh
 use_dataset runs data

@@ -148,7 +148,7 @@ prediction file (`DESy3` with its test variants `DESy3_no_sys`, `DESy3_no_psi_ro
 and their chains are named after them. The
 parameter vector, including the lens bias names (`bg1`-`bg4` for Y3, `bg1, bg3, bg4, bg5, bg6`
 for Y6, named by survey bin), is the training run's. The runs configs sit under
-`configs/runs/<survey>/<version>/<subversion>/`, e.g. `configs/runs/desy3/v18/default/prod.yaml`. The reference-prior chains of
+`configs/runs/<survey>/<version>/`, e.g. `configs/runs/desy3/v18/prod.yaml`. The reference-prior chains of
 extended flows are shared on purpose: both surveys use the near-delta ns/Obh2/H0 Gaussians of
 the DES Y3 simulation-based analyses. The key-project overlay (`with_des_chain`) exists for
 DES Y3 only and refuses any other survey.
@@ -182,7 +182,7 @@ specific cluster and are included as a worked example, not as a portable script 
 Each script that reads runs needs the dataset, `VERSION=desy6/v1` or `VERSION=desy3/v18`, and
 stops without it. The run tree, `RUNS_ROOT`, is the `runs_dir` of msfm's
 `configs/<VERSION>/locations.yaml`, read through `python -m msfm.utils.locations`. A runs config
-names its dataset in a top-level `dataset:` key (e.g. `desy6/v1/default`), and each relative
+names its dataset in a top-level `dataset:` key (e.g. `desy6/v2`), and each relative
 `pred_dir` resolves against that dataset's runs directory; an absolute `pred_dir` is used as is.
 `msi.utils.runs.load_runs_config` does the resolving for every app that reads a runs config.
 

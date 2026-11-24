@@ -36,7 +36,7 @@ class TensionPairTests(unittest.TestCase):
         from pathlib import Path
         import yaml
 
-        path = Path(__file__).resolve().parents[1] / "configs/runs/desy3/v18/default/prod.yaml"
+        path = Path(__file__).resolve().parents[1] / "configs/runs/desy3/v18/prod.yaml"
         config = yaml.safe_load(path.read_text())
         self.assertEqual(len(build_combinations(config)), 21)
         config["runs"]["maps_convnext"] = None

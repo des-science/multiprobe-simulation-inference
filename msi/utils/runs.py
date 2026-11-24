@@ -4,26 +4,23 @@
 Created November 2026
 Author: Arne Thomsen
 
-Runs configs (configs/runs/<survey>/<version>/<subversion>/*.yaml): the trained y3-deep-lss runs an analysis
-compares, under runs.<representation>.<probe>, each with the pred_dir holding its preds_<steps>.h5.
+Runs configs (configs/runs/<survey>/<version>/*.yaml): the trained y3-deep-lss runs an analysis compares, under
+runs.<representation>.<probe>, each with the pred_dir holding its preds_<steps>.h5.
 
 A pred_dir is either absolute, or relative to the runs directory of the config's dataset: the top-level key
-dataset (e.g. desy6/v1/default) names msfm's configs/<dataset>.yaml, whose locations.yaml gives runs_dir
+dataset (e.g. desy6/v2) names msfm's configs/<dataset>/<version>.yaml, whose locations.yaml gives runs_dir
 (msfm.utils.locations). A relative pred_dir without a dataset is an error.
 """
 
 import os
 
-import msfm
 from msfm.utils import locations
 from msfm.utils.input_output import read_yaml
 
-MSFM_DIR = os.path.abspath(os.path.join(os.path.dirname(msfm.__file__), ".."))
-
 
 def dataset_runs_dir(dataset):
-    """The runs directory of a dataset, e.g. desy6/v1/default."""
-    msfm_config = os.path.join(MSFM_DIR, "configs", f"{dataset}.yaml")
+    """The runs directory of a dataset, e.g. desy6/v2."""
+    msfm_config = locations.dataset_config(dataset)
     if not os.path.isfile(msfm_config):
         raise FileNotFoundError(f"the dataset {dataset} has no msfm config {msfm_config}")
     return locations.get(msfm_config, "runs_dir")

@@ -2,7 +2,7 @@
 # slice, so a schema or dimension problem surfaces in ~15 min on --partition=debug instead of hours
 # into the 6 h production job.
 #
-#   VERSION=v18 SUBVERSION=default PPC_CONFIG=<this file> \
+#   VERSION=desy3/v18 PPC_CONFIG=<this file> \
 #       sbatch --partition=debug --time=00:30:00 ppc.sh
 #
 # WHAT IT COVERS, and why each trim is safe:
