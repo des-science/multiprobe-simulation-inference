@@ -347,11 +347,14 @@ class LikelihoodBase(ABC):
 
     def _resolve_gaussian_priors(self, gaussian_priors):
         """Resolve a ``{name: (mu, sigma)}`` Gaussian-prior spec into (kind, index, mu, sigma) tuples in
-        self.params ordering, shared by the torch-batched and emcee samplers. The special name "Obh2"
-        yields a derived-quantity term on Ob * (H0/100)^2; unknown names are warned about and skipped.
-        Returns None when nothing resolves, so callers can branch cheaply."""
+        self.params ordering, shared by the torch-batched and emcee samplers. The analysis prior's own
+        Gaussians (msfm's analysis.grid.gaussian_priors, truncated by the prior box) always apply, and a
+        call-site entry of the same name replaces one. The special name "Obh2" yields a derived-quantity
+        term on Ob * (H0/100)^2; unknown names are warned about and skipped. Returns None when nothing
+        resolves, so callers can branch cheaply."""
+        gaussian_priors = {**parameters.get_gaussian_priors(self.params, self.conf), **(gaussian_priors or {})}
         gaussian_data = []
-        for name, (mu, sigma) in (gaussian_priors or {}).items():
+        for name, (mu, sigma) in gaussian_priors.items():
             if name == "Obh2":
                 if "Ob" not in self.params or "H0" not in self.params:
                     LOGGER.warning("gaussian_priors: 'Obh2' needs Ob and H0 in self.params; ignored")
