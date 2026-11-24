@@ -54,6 +54,9 @@ class PosteriorPredictiveChecks:
         # flow architecture (shared by every setup_flow call on this instance)
         flow_conf=None,
         n_flows=1,
+        # the parameters each run's network was trained on, its grid label columns
+        probe1_params=None,
+        probe2_params=None,
     ):
         """
         Initialize the PosteriorPredictiveChecks object.
@@ -92,6 +95,11 @@ class PosteriorPredictiveChecks:
             n_flows: Number of flows in the PPC ensemble. 1 (default) builds a single
                 ``LikelihoodFlow``; >1 builds a ``LikelihoodFlowEnsemble`` of independently
                 initialized members with the same architecture.
+            probe1_params: The parameters the probe 1 network was trained on, which name the label
+                columns of its predictions file (``dlss.dset.training.params`` of the run). ``None``
+                builds them as ``cosmo_params`` plus the probe's nuisances, the training list of every
+                run before the network target was resolved from the msfm config.
+            probe2_params: Same as ``probe1_params`` for probe 2.
         """
 
         self.conf = files.load_config(conf)
@@ -131,7 +139,7 @@ class PosteriorPredictiveChecks:
             self.s_probe1_grid, self.theta_probe1_grid, self.probe1_real_idx = tensions.align_rows(
                 self.s_probe1_grid, self.theta_probe1_grid, self.probe1_real_idx
             )
-            self.probe1_params = self._get_probe_params(probe1_name)
+            self.probe1_params = list(probe1_params) if probe1_params else self._get_probe_params(probe1_name)
             self.probe1_cosmo_idx = [self.probe1_params.index(p) for p in cosmo_params]
 
         if self.probe2_pred_file:
@@ -143,7 +151,7 @@ class PosteriorPredictiveChecks:
             self.s_probe2_grid, self.theta_probe2_grid, self.probe2_real_idx = tensions.align_rows(
                 self.s_probe2_grid, self.theta_probe2_grid, self.probe2_real_idx
             )
-            self.probe2_params = self._get_probe_params(probe2_name)
+            self.probe2_params = list(probe2_params) if probe2_params else self._get_probe_params(probe2_name)
             self.probe2_cosmo_idx = [self.probe2_params.index(p) for p in cosmo_params]
 
         if self.probe1_pred_file and self.probe2_pred_file:

@@ -1,5 +1,6 @@
 import glob
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -34,8 +35,8 @@ class RunsConfigTests(unittest.TestCase):
             {
                 "dataset": "desy6/v1",
                 "runs": {
-                    "maps_gcnn": {"lensing": {"pred_dir": "maps_gcnn/lensing/v1"}},
-                    "cls": {"lensing": {"pred_dir": "/elsewhere/cls/lensing/v1"}},
+                    "maps_gcnn": {"lensing": {"pred_dir": "maps_gcnn/lensing/v1", "params": ["Om", "s8"]}},
+                    "cls": {"lensing": {"pred_dir": "/elsewhere/cls/lensing/v1", "params": ["Om", "s8"]}},
                     "maps_transformer": None,
                 },
             }
@@ -49,6 +50,25 @@ class RunsConfigTests(unittest.TestCase):
         path = self._write({"runs": {"maps_gcnn": {"lensing": {"pred_dir": "maps_gcnn/lensing/v1"}}}})
         with self.assertRaisesRegex(ValueError, "needs a dataset key"):
             load_runs_config(path)
+
+    def test_params_default_to_the_runs_own(self):
+        run_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, run_dir)
+        with open(os.path.join(run_dir, "configs.yaml"), "w") as f:
+            yaml.safe_dump({"dlss": {"dset": {"training": {"params": ["Om", "s8", "Asc"]}}}, "msfm": {}}, f)
+        path = self._write(
+            {
+                "runs": {
+                    "maps_gcnn": {
+                        "lensing": {"pred_dir": run_dir},
+                        "combined": {"pred_dir": run_dir, "params": ["Om"]},
+                    }
+                }
+            }
+        )
+        runs = load_runs_config(path)["runs"]["maps_gcnn"]
+        self.assertEqual(runs["lensing"]["params"], ["Om", "s8", "Asc"])
+        self.assertEqual(runs["combined"]["params"], ["Om"])
 
     def test_unknown_dataset_fails(self):
         path = self._write({"dataset": "desy6/v9", "runs": {}})

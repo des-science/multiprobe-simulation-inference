@@ -14,31 +14,19 @@ from msi.utils import observations
 from msi.utils import coverage
 from msi.utils import prior_predictive
 from msi.utils import mock_contamination
+from msi.utils import runs
 
 LOGGER = logger.get_logger(__file__)
 
 
 def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
-    """Load msfm_conf and dlss_conf from either explicit paths or pred_dir/configs.yaml.
-
-    configs.yaml is either the new single-doc nested format ({net|mlp, dlss, loss, data,
-    msfm, run}) or a legacy multi-doc stream ending in [..., dlss_conf, msfm_conf] (3-doc
-    maps or 4-doc Cls format).
-    """
+    """Load dlss_conf and msfm_conf from either explicit paths or the run's configs.yaml (runs.load_run_configs)."""
     if msfm_config_path and dlss_config_path:
         msfm_conf = msfm_files.load_config(msfm_config_path)
-        dlss_conf = read_yaml(dlss_config_path)
-    else:
-        configs_path = os.path.join(pred_dir, "configs.yaml")
-        try:
-            conf = configuration.load_run_configs(configs_path)
-            dlss_conf, msfm_conf = conf["dlss"], conf["msfm"]
-        except ValueError:
-            # Fallback for legacy 4-document Cls streams
-            with open(configs_path) as f:
-                docs = list(yaml.load_all(f, Loader=yaml.FullLoader))
-            dlss_conf, msfm_conf = docs[-2], docs[-1]
-    return dlss_conf, msfm_conf
+        # a probes config may leave its parameters to the msfm config, as in deep_lss
+        dlss_conf = configuration.read_split_configs(dlss_config_path, msfm_conf=msfm_conf)
+        return dlss_conf, msfm_conf
+    return runs.load_run_configs(pred_dir)
 
 
 def _dump_flow_config(model_dir, flow_conf, source):
@@ -289,10 +277,16 @@ def main():
     if args.flow_member_obs is None:
         args.flow_member_obs = [survey]
 
-    if args.extend_params:
+    # Only the extension parameters the network was not trained on are appended. The flow configs carry this
+    # applied extension, which the retrain guard compares and flow_config.yaml records for the chain readers.
+    extend = [p for p in (args.extend_params or []) if p not in params]
+    args.extend_params = extend
+    flow_conf = {**flow_conf, "extend_params": extend}
+    if flow_confs is not None:
+        flow_confs = [{**conf, "extend_params": extend} for conf in flow_confs]
+    if extend:
         # Append the recorded grid values of the extension parameters to every grid row (via i_sobol) and
         # to the observation truth points; the flow below then conditions on the extended vector.
-        extend = [p for p in args.extend_params if p not in params]
         table = extended_params.load_grid_param_table(msfm_conf)
         grid_cosmos = extended_params.extend_grid_cosmos(grid_cosmos, i_sobol, extend, msfm_conf, table=table)
         obs_cosmo_dict = extended_params.extend_obs_cosmo_dict(obs_cosmo_dict, params, extend, msfm_conf, table=table)
@@ -327,7 +321,11 @@ def main():
 
     LOGGER.info(f"[timing] flow {'loaded' if args.load_flow else 'trained'}: {LOGGER.timer.elapsed('flow')}")
 
-    _save_flow_config(flow, flow_conf, args.flow_config, flow_confs=flow_confs, flow_config_paths=args.flow_configs)
+    # the record of a loaded flow is the one written when it was trained
+    if not args.load_flow:
+        _save_flow_config(
+            flow, flow_conf, args.flow_config, flow_confs=flow_confs, flow_config_paths=args.flow_configs
+        )
 
     mcmc_conf = flow_conf.get("mcmc", {})
     # ensemble member weighting: tempered softmax of negative validation losses. Set before any

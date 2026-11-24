@@ -17,6 +17,8 @@ import itertools
 
 import numpy as np
 
+from msfm.utils.parameters import REPORT_MARGINALIZED
+
 
 # ----------------------------------------------------------------------------------------
 # run / combination bookkeeping (pure python, importable from either environment)
@@ -184,9 +186,11 @@ def chain_path(probe_dict, obs_label, lambdaCDM_string):
 # ----------------------------------------------------------------------------------------
 # Chain variants that DROP a parameter column rather than fixing it, so the saved file is narrower
 # than the run's parameter list. msi writes them that way (``likelihood_base.py``), and the reduced
-# space is exactly w0 for lambdaCDM and bta for nla. Mirrors deep_lss's
-# ``run_diagnostics.VARIANT_FIXED`` and dlss_plot's ``runs.VARIANT_FIXED`` -- keep the three in step.
-VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",)}
+# space is exactly w0 for lambdaCDM and bta for nla. The reference-prior chains fix the baryons at their
+# fiducial (``observations._ref_prior_kwargs``) whenever the flow is conditioned on them. Only columns among
+# ``params`` are dropped. Mirrors deep_lss's ``run_diagnostics.VARIANT_FIXED`` and dlss_plot's
+# ``runs.VARIANT_FIXED`` -- keep the three in step.
+VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",), "refpriors": ("bary_Mc", "bary_nu")}
 
 
 def chain_columns(params, variant=""):
@@ -207,9 +211,11 @@ def load_chain(probe_dict, obs_label, lambdaCDM_string, params):
     must NOT re-apply the variant reduction: a lambdaCDM chain arrives with w0 already gone, and
     deleting it again by index shifts every parameter after it (see ``chain_columns``).
 
-    ns/Ob/H0 are always marginalized away here. The flow conditions on them to fix the discontinuous
-    implicit prior over CosmoGrid's two Sobol halves; the tension analysis is a statement about the
-    shared cosmology and nuisance vector, and dropping columns from a chain marginalizes exactly.
+    The parameters reports marginalize (msfm ``parameters.REPORT_MARGINALIZED``: ns, Ob, H0, the
+    baryons and the source clustering amplitude) are always marginalized away here, whether the flow
+    appended them or the network was trained on them. The flow conditions on them; the tension
+    analysis is a statement about the shared cosmology and nuisance vector, and dropping columns from
+    a chain marginalizes exactly.
     """
     from msi.utils import extended_params
 
@@ -217,7 +223,9 @@ def load_chain(probe_dict, obs_label, lambdaCDM_string, params):
     chain = np.load(path)
     columns = chain_columns(params, lambdaCDM_string)
     extend = extended_params.flow_extend_params(os.path.dirname(path))
-    return extended_params.marginalize_extension(chain, columns, extend, source=path), columns
+    chain = extended_params.marginalize_extension(chain, columns, extend, source=path)
+    keep = [i for i, p in enumerate(columns) if p not in REPORT_MARGINALIZED]
+    return chain[..., keep], [columns[i] for i in keep]
 
 
 def load_probe_data(probe_dict):
@@ -279,8 +287,8 @@ def process_cosmologies(cosmos, params, use_lambdaCDM, use_S8):
 
 
 def shared_params(params_1, params_2):
-    """Cosmological parameters shared by both runs (preserving run_1 order)."""
-    return [p for p in params_1 if p in params_2]
+    """Cosmological parameters shared by both runs (preserving run_1 order), less the ones reports marginalize."""
+    return [p for p in params_1 if p in params_2 and p not in REPORT_MARGINALIZED]
 
 
 def shared_labels(params_1, params_2):

@@ -85,6 +85,7 @@ def make_ppc(conf_path, cosmo_params, seed, run_1, run_2=None, shared_data=False
         probe1_data=run_1["data"],
         probe1_pred_file=pred_file(run_1),
         probe1_flow_dir=flow_dir(run_1),
+        probe1_params=run_1["params"],
         flow_conf=flow_conf,
         n_flows=n_flows,
     )
@@ -94,6 +95,7 @@ def make_ppc(conf_path, cosmo_params, seed, run_1, run_2=None, shared_data=False
             probe2_data=run_2["data"],
             probe2_pred_file=pred_file(run_2),
             probe2_flow_dir=flow_dir(run_2),
+            probe2_params=run_2["params"],
             shared_data=shared_data,
         )
     return PosteriorPredictiveChecks(**kwargs)

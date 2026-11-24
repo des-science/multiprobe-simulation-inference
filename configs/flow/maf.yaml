@@ -24,7 +24,10 @@ seed: 7
 # Appended to the summary parameters to form the conditioning vector, looked up per grid cosmology
 # via i_sobol -- no summary recomputation, no retraining of the compression network. Set to [] for
 # the unextended flow. bary_Mc and bary_nu are deliberately absent: both Sobol halves give them the
-# same range, so they carry none of the inconsistency this corrects.
+# same range, so they carry none of the inconsistency this corrects. Only the ones the network was not
+# trained on are appended, so a run whose summary parameters already hold all three (the default
+# network target since the target is resolved from the msfm config) is not extended, and its
+# flow_config.yaml records the extension actually applied.
 extend_params: [ns, Ob, H0]
 
 context_embedding:

@@ -14,6 +14,9 @@ dataset (e.g. desy6/v2) names msfm's configs/<dataset>/<version>.yaml, whose loc
 
 import os
 
+import yaml
+
+from deep_lss.utils import configuration
 from msfm.utils import locations
 from msfm.utils.input_output import read_yaml
 
@@ -26,8 +29,32 @@ def dataset_runs_dir(dataset):
     return locations.get(msfm_config, "runs_dir")
 
 
+def load_run_configs(pred_dir):
+    """The dlss_conf and msfm_conf a trained run saved in its configs.yaml.
+
+    That file is either one nested document ({net|mlp, dlss, loss, data, msfm, run}), a legacy 3-document maps
+    stream (both read by deep_lss), or a legacy 4-document Cls stream ending in [..., dlss_conf, msfm_conf].
+    """
+    path = os.path.join(pred_dir, "configs.yaml")
+    try:
+        conf = configuration.load_run_configs(path)
+        return conf["dlss"], conf["msfm"]
+    except ValueError:
+        with open(path) as f:
+            docs = list(yaml.load_all(f, Loader=yaml.FullLoader))
+        return docs[-2], docs[-1]
+
+
+def run_params(pred_dir):
+    """The network target of a trained run, dlss.dset.training.params of the configs.yaml it saved."""
+    if not os.path.isfile(os.path.join(pred_dir, "configs.yaml")):
+        raise FileNotFoundError(f"{pred_dir} has no configs.yaml; give the run's params in the runs config instead")
+    return list(load_run_configs(pred_dir)[0]["dset"]["training"]["params"])
+
+
 def load_runs_config(path):
-    """Reads a runs config, with every relative pred_dir resolved against its dataset's runs directory.
+    """Reads a runs config, with every relative pred_dir resolved against its dataset's runs directory. A run
+    without params takes those it was trained on (run_params); given, they override them.
 
     Returns:
         dict: the config, absolute pred_dirs unchanged
@@ -39,12 +66,13 @@ def load_runs_config(path):
         # a representation set to null is disabled
         for probe, run in (probes or {}).items():
             pred_dir = run["pred_dir"]
-            if os.path.isabs(pred_dir):
-                continue
-            if runs_dir is None:
-                raise ValueError(
-                    f"{path}: runs.{representation}.{probe}.pred_dir {pred_dir!r} is relative, so the config needs "
-                    "a dataset key"
-                )
-            run["pred_dir"] = os.path.join(runs_dir, pred_dir)
+            if not os.path.isabs(pred_dir):
+                if runs_dir is None:
+                    raise ValueError(
+                        f"{path}: runs.{representation}.{probe}.pred_dir {pred_dir!r} is relative, so the config "
+                        "needs a dataset key"
+                    )
+                run["pred_dir"] = os.path.join(runs_dir, pred_dir)
+            if run.get("params") is None:
+                run["params"] = run_params(run["pred_dir"])
     return conf
