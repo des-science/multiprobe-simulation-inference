@@ -65,6 +65,12 @@ mcmc:
   method: ensemble
   use_validation_weights: false
   store_individual_chains: false
+  # the DES posterior variants beyond wCDM, per msfm survey.name (msi.utils.observations.DES_VARIANTS),
+  # each skipped where the flow cannot sample it. Y6 has no SBI analyses to compare to, so no w0 > -1 or
+  # reference-prior chains. Omitted: every variant on every survey
+  variants:
+    DESy3: [lambdaCDM, w0gt-1, w0gt-1_nla, refpriors_w0gt-1, refpriors_lambdaCDM]
+    DESy6: [lambdaCDM]
 
 # n_likelihood_samples must exceed plot_eecp_check's 100 confidence levels AFTER the ensemble
 # splits it n_samples // n_flows ways, or the likelihood HPD plot dies on a zero slice step -- which

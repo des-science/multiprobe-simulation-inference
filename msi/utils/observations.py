@@ -63,7 +63,36 @@ def _ref_prior_kwargs(flow):
     return {"gaussian_priors": REF_GAUSSIAN_PRIORS, "fixed_params": fixed}
 
 
-def des_variants(flow):
+# The DES posterior variants beyond the unrestricted wCDM chain, in sampling order. A new variant is its
+# name here plus its entry in des_variants; a flow config's mcmc.variants then lists it for a survey.
+DES_VARIANTS = ("lambdaCDM", "w0gt-1", "w0gt-1_nla", "refpriors_w0gt-1", "refpriors_lambdaCDM")
+
+
+def select_variants(variants, survey):
+    """The variants mcmc.variants lists for one survey, for des_variants.
+
+    Args:
+        variants (dict): the flow config's mcmc.variants, msfm's survey.name -> list of DES_VARIANTS names.
+        survey (str): msfm's survey.name of the run.
+
+    Returns:
+        list: None without mcmc.variants (every variant that applies), [] for an empty list (the wCDM chain
+            only). A survey without an entry is an error, so a new survey never inherits another's set.
+    """
+    if variants is None:
+        return None
+    if not isinstance(variants, dict):
+        raise ValueError(f"mcmc.variants maps a survey name to a list of variants, got {variants!r}")
+    for names in variants.values():
+        unknown = [name for name in names or [] if name not in DES_VARIANTS]
+        if unknown:
+            raise ValueError(f"mcmc.variants: unknown {unknown}, choose from {list(DES_VARIANTS)}")
+    if survey not in variants:
+        raise ValueError(f"mcmc.variants: no entry for survey {survey!r}, only for {list(variants)}")
+    return list(variants[survey] or [])
+
+
+def des_variants(flow, names=None):
     """The DES posterior variants a run samples, as one ordered table.
 
     Each entry is ``(suffix, model_kwargs, variant_label)``. ``suffix`` names the chain file, and is
@@ -73,38 +102,48 @@ def des_variants(flow):
 
     One table for both sampler backends and for the per-member stage, so a variant cannot exist on
     one path and not another -- it used to be spelled out once per backend.
+
+    Args:
+        flow: the flow, whose params decide which variants apply.
+        names (list, optional): the variants of DES_VARIANTS to sample, from select_variants. Defaults to
+            None, every one that applies.
     """
     params = getattr(flow, "params", [])
     # bta is not always sampled (v17 fixed it), and `nla` is a no-op without it -- so the suffix must
     # drop `_nla` too, or the batched path would name a file the emcee path spells differently.
     nla = NLA_SUFFIX if "bta" in params else ""
 
-    variants = [
-        ("", {}, None),
-        ("_lambdaCDM", {"lambdaCDM": True}, None),
-        (W0_SUFFIX, {"w0_prior": W0_GT_M1_PRIOR}, None),
-    ]
+    registry = {
+        "lambdaCDM": ("_lambdaCDM", {"lambdaCDM": True}, None),
+        "w0gt-1": (W0_SUFFIX, {"w0_prior": W0_GT_M1_PRIOR}, None),
+    }
     if "bta" in params:
-        variants.append((f"{W0_SUFFIX}{nla}", {"w0_prior": W0_GT_M1_PRIOR, "nla": True}, None))
+        registry["w0gt-1_nla"] = (f"{W0_SUFFIX}{nla}", {"w0_prior": W0_GT_M1_PRIOR, "nla": True}, None)
 
     # Extended-vector flows additionally get the reference-prior (Gower-Street-family) chains: the
     # w0 > -1 + NLA and lambdaCDM + NLA models with near-delta ns/Obh2/H0 Gaussians and baryons fixed
     # at the fiducial, matching the analysis choices of the DES Y3 SBI reference papers.
     ref_kwargs = _ref_prior_kwargs(flow)
     if ref_kwargs is not None:
-        variants += [
-            (
-                f"{W0_SUFFIX}{nla}{REF_PRIOR_SUFFIX}",
-                {"w0_prior": W0_GT_M1_PRIOR, "nla": True, **ref_kwargs},
-                REF_PRIOR_SUFFIX,
-            ),
-            (
-                f"_lambdaCDM{nla}{REF_PRIOR_SUFFIX}",
-                {"lambdaCDM": True, "nla": True, **ref_kwargs},
-                REF_PRIOR_SUFFIX,
-            ),
-        ]
-    return variants
+        registry["refpriors_w0gt-1"] = (
+            f"{W0_SUFFIX}{nla}{REF_PRIOR_SUFFIX}",
+            {"w0_prior": W0_GT_M1_PRIOR, "nla": True, **ref_kwargs},
+            REF_PRIOR_SUFFIX,
+        )
+        registry["refpriors_lambdaCDM"] = (
+            f"_lambdaCDM{nla}{REF_PRIOR_SUFFIX}",
+            {"lambdaCDM": True, "nla": True, **ref_kwargs},
+            REF_PRIOR_SUFFIX,
+        )
+
+    # a registry entry missing from DES_VARIANTS would never be sampled
+    assert set(registry) <= set(DES_VARIANTS), f"add {set(registry) - set(DES_VARIANTS)} to DES_VARIANTS"
+    selected = DES_VARIANTS if names is None else names
+    skipped = [name for name in selected if name not in registry]
+    if names is not None and skipped:
+        # expected where one survey's list covers every probe, e.g. no bta in clustering
+        LOGGER.info(f"mcmc.variants: {skipped} do not apply to a flow conditioned on {params}, skipped")
+    return [("", {}, None)] + [registry[name] for name in DES_VARIANTS if name in selected and name in registry]
 
 
 def add_obs_args(parser, mock_labels_default=None):
@@ -320,6 +359,7 @@ def _run_mcmc_batched(
     use_validation_weights=True,
     method="ensemble",
     store_individual_chains=False,
+    variants=None,
 ):
     """Sample every observation's wCDM posterior in a single GPU-batched run, then save each chain in
     the same location/format as the emcee path (mcmc.run_emcee) and reproduce its contour plots.
@@ -366,7 +406,7 @@ def _run_mcmc_batched(
     des_keys = [k for k in keys if "des" in k.lower()]
     if des_keys:
         x_des, des_index = _stack_rows(obs_dict, des_keys)
-        for suffix, model_kwargs, _ in des_variants(flow)[1:]:
+        for suffix, model_kwargs, _ in des_variants(flow, variants)[1:]:
             print(f"\nGPU-batched sampling of variant '{suffix}' for {len(des_keys)} DES obs (method={method})")
             result_v = flow.sample_posterior_batched(
                 x_des,
@@ -484,6 +524,7 @@ def run_mcmc(
     use_validation_weights=True,
     backend="emcee",
     store_individual_chains=False,
+    variants=None,
 ):
     if _can_batch(flow, obs_dict, backend):
         _run_mcmc_batched(
@@ -496,6 +537,7 @@ def run_mcmc(
             use_validation_weights=use_validation_weights,
             method=method,
             store_individual_chains=store_individual_chains,
+            variants=variants,
         )
         return
 
@@ -527,7 +569,7 @@ def run_mcmc(
         if "des" in key.lower():
             # same variant table as the batched path; sample_posterior derives the matching filename
             # suffix from model_kwargs itself, so only variant_label has to be passed through
-            for suffix, model_kwargs, variant_label in des_variants(flow)[1:]:
+            for suffix, model_kwargs, variant_label in des_variants(flow, variants)[1:]:
                 print(f"\nStarting variant '{suffix}' run for {key}")
                 flow.sample_posterior(
                     obs["pred"],

@@ -274,6 +274,8 @@ def main():
     dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
     params = dlss_conf["dset"]["training"]["params"]
     survey = observations.survey_name(msfm_conf)
+    # resolved before training, so a survey missing from mcmc.variants fails fast
+    des_variants = observations.select_variants(flow_conf.get("mcmc", {}).get("variants"), survey)
     if args.flow_member_obs is None:
         args.flow_member_obs = [survey]
 
@@ -384,6 +386,7 @@ def main():
                 use_validation_weights=mcmc_conf.get("use_validation_weights", True),
                 backend=args.mcmc_backend,
                 store_individual_chains=mcmc_conf.get("store_individual_chains", False),
+                variants=des_variants,
             )
             LOGGER.info(
                 f"[timing] all MCMC chains ({len(obs_dict)} observations): {LOGGER.timer.elapsed('mcmc_total')}"
