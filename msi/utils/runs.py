@@ -14,8 +14,6 @@ dataset (e.g. desy6/v2) names msfm's configs/<dataset>/<version>.yaml, whose loc
 
 import os
 
-import yaml
-
 from deep_lss.utils import configuration
 from msfm.utils import locations
 from msfm.utils.input_output import read_yaml
@@ -30,19 +28,9 @@ def dataset_runs_dir(dataset):
 
 
 def load_run_configs(pred_dir):
-    """The dlss_conf and msfm_conf a trained run saved in its configs.yaml.
-
-    That file is either one nested document ({net|mlp, dlss, loss, data, msfm, run}), a legacy 3-document maps
-    stream (both read by deep_lss), or a legacy 4-document Cls stream ending in [..., dlss_conf, msfm_conf].
-    """
-    path = os.path.join(pred_dir, "configs.yaml")
-    try:
-        conf = configuration.load_run_configs(path)
-        return conf["dlss"], conf["msfm"]
-    except ValueError:
-        with open(path) as f:
-            docs = list(yaml.load_all(f, Loader=yaml.FullLoader))
-        return docs[-2], docs[-1]
+    """The dlss_conf and msfm_conf a trained run saved in its configs.yaml (deep_lss configuration.load_run_configs)."""
+    conf = configuration.load_run_configs(os.path.join(pred_dir, "configs.yaml"))
+    return conf["dlss"], conf["msfm"]
 
 
 def run_params(pred_dir):
