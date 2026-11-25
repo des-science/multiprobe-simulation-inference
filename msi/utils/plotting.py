@@ -64,6 +64,8 @@ param_label_dict = {
     "qbg3": r"$b_{g,q}^3$",
     "qbg4": r"$b_{g,q}^4$",
     "rg": r"$r_g$",
+    # source clustering amplitude
+    "Asc": r"$A_{\mathrm{sc}}$",
 }
 
 
