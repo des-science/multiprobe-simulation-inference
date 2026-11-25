@@ -160,11 +160,10 @@ msi/
   apps/               the entry points above (+ deprecated/)
   flow_conductor/     normalizing flows in PyTorch: likelihood_flow.py is the main class,
                       plus architecture.py, maf.py, spline.py, marginal_flow.py
-  gaussian_mixture/   the TensorFlow-Probability baseline density estimator
   utils/              coverage (HPD/TARP), ppc, tensions, mcmc, chains, dataset,
                       preprocessing, observations, diagnostics, plotting, ...
-  likelihood_base.py  base class both density-estimator backends extend
-  deprecated/         superseded implementations, incl. gp_abc/
+  likelihood_base.py  base class of the likelihood flows
+  deprecated/         superseded implementations, incl. gp_abc/ and the gaussian_mixture/ backend
 configs/              runs/ (which runs) and flow/, ppc/, tension/, tension_pairs/ (how)
 data/                 published DES Y3 chains and figures
 submissions/          SLURM scripts, parameterized by environment variable

@@ -17,8 +17,6 @@ from msi.utils import plotting, diagnostics
 from msfm.utils import logger, prior, parameters
 
 # NOTE: torch / msi.utils.torch_ensemble are imported lazily inside the batched-sampling methods below.
-# LikelihoodBase is also subclassed by the TensorFlow GMM backend (LikelihoodGMM), which runs in an
-# environment that need not have torch installed -- so this module must stay importable without torch.
 
 LOGGER = logger.get_logger(__file__)
 
