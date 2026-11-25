@@ -64,6 +64,13 @@ param_label_dict = {
     "qbg3": r"$b_{g,q}^3$",
     "qbg4": r"$b_{g,q}^4$",
     "rg": r"$r_g$",
+    # lens magnification, by survey bin like the bias
+    "amag1": r"$\alpha^1$",
+    "amag2": r"$\alpha^2$",
+    "amag3": r"$\alpha^3$",
+    "amag4": r"$\alpha^4$",
+    "amag5": r"$\alpha^5$",
+    "amag6": r"$\alpha^6$",
     # source clustering amplitude
     "Asc": r"$A_{\mathrm{sc}}$",
 }
@@ -71,7 +78,8 @@ param_label_dict = {
 
 def group_parameters(params, conf):
     """Order the parameters into the blocks of a grouped triangle plot: constrained cosmology, intrinsic alignment,
-    galaxy bias, then the parameters reports marginalize (msfm parameters.REPORT_MARGINALIZED, in that order).
+    galaxy bias (with lens magnification), then the parameters reports marginalize (msfm
+    parameters.REPORT_MARGINALIZED, in that order).
 
     Args:
         params (list): Parameter names, the order within the first three blocks is kept.
@@ -82,7 +90,7 @@ def group_parameters(params, conf):
     """
     ia = parameters.resolve_parameters(["ia"], conf)
     bg = parameters.resolve_parameters(
-        [group for group in ("bg", "stochasticity") if group in conf["analysis"]["params"]], conf
+        [group for group in ("bg", "stochasticity", "mag") if group in conf["analysis"]["params"]], conf
     )
 
     ia_block = [param for param in params if param in ia]
