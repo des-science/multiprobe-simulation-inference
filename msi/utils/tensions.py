@@ -17,7 +17,7 @@ import itertools
 
 import numpy as np
 
-from msfm.utils.parameters import REPORT_MARGINALIZED
+from msfm.utils.parameters import REPORT_MARGINALIZED, chain_columns
 
 
 # ----------------------------------------------------------------------------------------
@@ -184,32 +184,12 @@ def chain_path(probe_dict, obs_label, lambdaCDM_string):
 # ----------------------------------------------------------------------------------------
 # data loading + row alignment + cosmology processing (numpy / h5py only)
 # ----------------------------------------------------------------------------------------
-# Chain variants that DROP a parameter column rather than fixing it, so the saved file is narrower
-# than the run's parameter list. msi writes them that way (``likelihood_base.py``), and the reduced
-# space is exactly w0 for lambdaCDM and bta for nla. The reference-prior chains fix the baryons at their
-# fiducial (``observations._ref_prior_kwargs``) whenever the flow is conditioned on them. Only columns among
-# ``params`` are dropped. Mirrors deep_lss's ``run_diagnostics.VARIANT_FIXED`` and dlss_plot's
-# ``runs.VARIANT_FIXED`` -- keep the three in step.
-VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",), "refpriors": ("bary_Mc", "bary_nu")}
-
-
-def chain_columns(params, variant=""):
-    """The base column names of ``chain_<obs><variant>.npy``, which is NOT always ``params``.
-
-    Qualifiers are matched as whole underscore-separated tokens rather than as substrings, so a
-    label that merely contains one does not silently lose a column.
-    """
-    tokens = set((variant or "").split("_"))
-    dropped = {p for q, fixed in VARIANT_FIXED.items() if q in tokens for p in fixed}
-    return [p for p in params if p not in dropped]
-
-
 def load_chain(probe_dict, obs_label, lambdaCDM_string, params):
     """Load an inference chain and marginalize over the flow's extension parameters.
 
     Returns ``(chain, columns)``. ``columns`` names the columns that are actually there, so callers
     must NOT re-apply the variant reduction: a lambdaCDM chain arrives with w0 already gone, and
-    deleting it again by index shifts every parameter after it (see ``chain_columns``).
+    deleting it again by index shifts every parameter after it (see msfm ``parameters.chain_columns``).
 
     The parameters reports marginalize (msfm ``parameters.REPORT_MARGINALIZED``: ns, Ob, H0, the
     baryons and the source clustering amplitude) are always marginalized away here, whether the flow
