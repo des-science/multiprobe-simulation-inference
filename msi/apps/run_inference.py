@@ -5,8 +5,7 @@ import yaml
 
 from msfm.utils import files as msfm_files
 from msfm.utils import logger
-from msfm.utils.input_output import read_yaml
-from deep_lss.utils import configuration
+from deep_lss.utils import config_compose, configuration
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 from msi.utils import extended_params
 from msi.utils import flow as flow_utils
@@ -208,9 +207,11 @@ def main():
     # Heterogeneous ensemble: one member per config in --flow_configs. The first config supplies the
     # shared mcmc/diagnostics/coverage settings used by the rest of main(); flow_confs drives the
     # per-member architecture/training in build_flow.
-    flow_confs = [read_yaml(p) for p in args.flow_configs] if args.flow_configs else None
+    flow_confs = [config_compose.load_composed(p) for p in args.flow_configs] if args.flow_configs else None
     is_hetero = flow_confs is not None
-    flow_conf = flow_confs[0] if is_hetero else (read_yaml(args.flow_config) if args.flow_config else {})
+    flow_conf = (
+        flow_confs[0] if is_hetero else (config_compose.load_composed(args.flow_config) if args.flow_config else {})
+    )
 
     for config in flow_confs or [flow_conf]:
         flow_utils.validate_training_config(config)

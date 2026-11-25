@@ -126,7 +126,7 @@ set of runs, and a set of runs re-analysed with a new method, without editing ei
 | Kind | Directory | Defines |
 |---|---|---|
 | Runs | [`configs/runs/`](configs/runs/) | which trained runs to analyse — organized by data representation (maps / Cls) and probe, each entry giving the prediction directory, the training-step count, the parameters, plus the comparisons and observation labels to build |
-| Flow | [`configs/flow/`](configs/flow/) | normalizing-flow architecture and training hyperparameters, and the diagnostics settings |
+| Flow | [`configs/flow/`](configs/flow/) | normalizing-flow architecture and training hyperparameters, and the diagnostics settings. A flow config may `extends:` another and override only what differs (y3-deep-lss `config_compose`), e.g. `maf_chain1000.yaml` |
 | PPC | [`configs/ppc/`](configs/ppc/) | posterior-predictive-check hyperparameters |
 | Tension | [`configs/tension/`](configs/tension/), [`configs/tension_pairs/`](configs/tension_pairs/) | tension method settings, and the run pairs for the direct estimator |
 

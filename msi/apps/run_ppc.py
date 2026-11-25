@@ -23,6 +23,7 @@ import os
 from msfm.utils import files as msfm_files
 from msfm.utils import logger
 from msfm.utils.input_output import read_yaml
+from deep_lss.utils import config_compose
 from msi.utils import tensions
 from msi.utils.observations import survey_name
 from msi.utils.ppc import PosteriorPredictiveChecks
@@ -163,7 +164,7 @@ def main():
     cross_pairs = ppc_conf.get("cross_pairs", None)
     cross_same_probe = ppc_conf.get("cross_same_probe", True)
     n_flows = ppc_conf.get("n_flows", 1)
-    flow_conf = read_yaml(ppc_conf["flow_config"]) if ppc_conf.get("flow_config") else {}
+    flow_conf = config_compose.load_composed(ppc_conf["flow_config"]) if ppc_conf.get("flow_config") else {}
     flow_fit = ppc_conf.get("flow_fit", {}) or {}  # optional per-call training overrides
     sampling = ppc_conf.get("sampling", {})
     checks = ppc_conf.get("checks", {})
