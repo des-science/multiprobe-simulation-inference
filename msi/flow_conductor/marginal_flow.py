@@ -431,6 +431,8 @@ class MarginalFlow(Flow):
 
         combined_params = params_wl + params_gc
         n_wl = len(params_wl)
+        gaussian_wl = prior.get_gaussian_prior_data(params_wl, conf)
+        gaussian_gc = prior.get_gaussian_prior_data(params_gc, conf)
 
         def _log_posterior(theta_walkers):
             # theta_walkers shape: (n_walkers, n_params)
@@ -458,6 +460,8 @@ class MarginalFlow(Flow):
 
                 in_prior = np.logical_and(in_prior_wl, in_prior_gc)
                 log_prob_total = np.where(in_prior, log_prob_total, -np.inf)
+                log_prob_total += prior.gaussian_log_prior(theta_wl, gaussian_wl)
+                log_prob_total += prior.gaussian_log_prior(theta_gc, gaussian_gc)
 
             return log_prob_total
 
