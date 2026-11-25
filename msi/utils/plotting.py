@@ -67,6 +67,33 @@ param_label_dict = {
 }
 
 
+def group_parameters(params, conf):
+    """Order the parameters into the blocks of a grouped triangle plot: constrained cosmology, intrinsic alignment,
+    galaxy bias, then the parameters reports marginalize (msfm parameters.REPORT_MARGINALIZED, in that order).
+
+    Args:
+        params (list): Parameter names, the order within the first three blocks is kept.
+        conf (dict): The msfm config.
+
+    Returns:
+        tuple: The reordered parameters and the sizes of the non-empty blocks.
+    """
+    ia = conf["analysis"]["params"]["ia"]["nla"] + (conf["analysis"]["params"]["ia"].get("tatt") or [])
+    bg = (
+        conf["analysis"]["params"]["bg"]["linear"]
+        + (conf["analysis"]["params"]["bg"].get("quadratic") or [])
+        + (conf["analysis"]["params"].get("stochasticity") or [])
+    )
+
+    ia_block = [param for param in params if param in ia]
+    bg_block = [param for param in params if param in bg]
+    marginalized_block = [param for param in parameters.REPORT_MARGINALIZED if param in params]
+    cosmo_block = [param for param in params if param not in ia_block + bg_block + marginalized_block]
+
+    blocks = [block for block in [cosmo_block, ia_block, bg_block, marginalized_block] if block]
+    return [param for block in blocks for param in block], [len(block) for block in blocks]
+
+
 def plot_chains(
     chains,
     params,
@@ -112,8 +139,8 @@ def plot_chains(
             discarded.
         scale_to_prior (bool, optional): Scale the cosmological parameter ranges to their respective priors. Defaults
             to True.
-        group_params (bool, optional): Whether to group the parameters by cosmological, intrinsic alignment and galaxy
-            bias or not in the plot. Defaults to False.
+        group_params (bool, optional): Whether to order and group the parameters into constrained cosmological,
+            intrinsic alignment, galaxy bias and marginalized (ns, Ob, H0, baryons, Asc) blocks. Defaults to False.
         plot_fiducial (bool, optional): Whether to include the fiducial synthetic observation or not. Defaults to True.
         fiducial_point (dict, optional): Dictionary of parameter values for the given fiducial observation. This is
             meant for test purposes when a grid cosmology is used as the observation. Defaults to None, then the config
@@ -140,18 +167,8 @@ def plot_chains(
         # only keep unique params
         all_params = set.union(*map(set, params))
 
-        # check that all of the params are supported
-        config_params = conf["analysis"]["params"]["cosmo"].copy()
-        config_params += conf["analysis"]["params"].get("bary", [])
-
-        config_params += conf["analysis"]["params"]["ia"]["nla"]
-        if conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
-            config_params += conf["analysis"]["params"]["ia"]["tatt"]
-
-        config_params += conf["analysis"]["params"]["bg"]["linear"]
-        if conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
-            config_params += conf["analysis"]["params"]["bg"]["quadratic"]
-
+        # check that all of the params are labels of the config
+        config_params = parameters.get_parameters(None, conf)
         assert all([param in config_params for param in all_params])
 
         # reorder the params for the plot
@@ -199,28 +216,8 @@ def plot_chains(
             else:
                 chains = chains[:, param_indices]
 
-    # baryonification params count as cosmological for grouping: they are part of the Sobol cosmo block
-    n_cosmo_params = sum(
-        [
-            param in conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"].get("bary", []) + ["S8"]
-            for param in all_params
-        ]
-    )
-    n_ia_params = sum(
-        [
-            param in conf["analysis"]["params"]["ia"]["nla"] + conf["analysis"]["params"]["ia"].get("tatt", [])
-            for param in all_params
-        ]
-    )
-    n_bg_params = sum(
-        [
-            param in conf["analysis"]["params"]["bg"]["linear"] + conf["analysis"]["params"]["bg"]["quadratic"]
-            for param in all_params
-        ]
-    )
-
-    includes_clustering_params = n_bg_params > 0
-    includes_lensing_params = n_ia_params > 0
+    includes_clustering_params = any(param in conf["analysis"]["params"]["bg"]["linear"] for param in all_params)
+    includes_lensing_params = any(param in conf["analysis"]["params"]["ia"]["nla"] for param in all_params)
 
     if ranges is None:
         if scale_to_prior:
@@ -235,8 +232,7 @@ def plot_chains(
         raise ValueError("ranges must be a list or a dict")
 
     if group_params:
-        n_per_group = [n_cosmo_params, n_ia_params, n_bg_params]
-        n_per_group = list(filter(lambda x: x != 0, n_per_group))
+        all_params, n_per_group = group_parameters(all_params, conf)
         grouping_kwargs = {"empty_ratio": 0.1, "n_per_group": n_per_group}
     else:
         grouping_kwargs = {}
