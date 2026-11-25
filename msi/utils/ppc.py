@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from trianglechain import TriangleChain
 
 from msfm.utils import files, logger
-from msi.utils import input_output, plotting, tensions
+from msi.utils import input_output, plotting, runs, tensions
 from msi.utils import flow as flow_utils
 from msi.utils.observations import survey_name
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
@@ -96,9 +96,8 @@ class PosteriorPredictiveChecks:
                 ``LikelihoodFlow``; >1 builds a ``LikelihoodFlowEnsemble`` of independently
                 initialized members with the same architecture.
             probe1_params: The parameters the probe 1 network was trained on, which name the label
-                columns of its predictions file (``dlss.dset.training.params`` of the run). ``None``
-                builds them as ``cosmo_params`` plus the probe's nuisances, the training list of every
-                run before the network target was resolved from the msfm config.
+                columns of its predictions file. ``None`` reads ``dlss.dset.training.params`` of the
+                ``configs.yaml`` next to that file (``runs.run_params``).
             probe2_params: Same as ``probe1_params`` for probe 2.
         """
 
@@ -139,7 +138,7 @@ class PosteriorPredictiveChecks:
             self.s_probe1_grid, self.theta_probe1_grid, self.probe1_real_idx = tensions.align_rows(
                 self.s_probe1_grid, self.theta_probe1_grid, self.probe1_real_idx
             )
-            self.probe1_params = list(probe1_params) if probe1_params else self._get_probe_params(probe1_name)
+            self.probe1_params = list(probe1_params or runs.run_params(os.path.dirname(probe1_pred_file)))
             self.probe1_cosmo_idx = [self.probe1_params.index(p) for p in cosmo_params]
 
         if self.probe2_pred_file:
@@ -151,7 +150,7 @@ class PosteriorPredictiveChecks:
             self.s_probe2_grid, self.theta_probe2_grid, self.probe2_real_idx = tensions.align_rows(
                 self.s_probe2_grid, self.theta_probe2_grid, self.probe2_real_idx
             )
-            self.probe2_params = list(probe2_params) if probe2_params else self._get_probe_params(probe2_name)
+            self.probe2_params = list(probe2_params or runs.run_params(os.path.dirname(probe2_pred_file)))
             self.probe2_cosmo_idx = [self.probe2_params.index(p) for p in cosmo_params]
 
         if self.probe1_pred_file and self.probe2_pred_file:
@@ -236,21 +235,6 @@ class PosteriorPredictiveChecks:
         if side == "obs":
             return _join(self.obs_abbrv, self.obs_data)
         return _join(self.rep_abbrv, self.rep_data)
-
-    def _get_probe_params(self, probe_name):
-        """Return the full parameter list for a probe: cosmo params + probe-specific nuisances."""
-        params = self.cosmo_params.copy()
-        if probe_name in ("lensing", "combined", "cross"):
-            params += self.conf["analysis"]["params"]["ia"]["nla"]
-            if self.conf["analysis"]["modelling"]["lensing"]["extended_nla"]:
-                params += self.conf["analysis"]["params"]["ia"]["tatt"]
-        if probe_name in ("clustering", "combined", "cross"):
-            params += self.conf["analysis"]["params"]["bg"]["linear"]
-            if self.conf["analysis"]["modelling"]["clustering"]["quadratic_biasing"]:
-                params += self.conf["analysis"]["params"]["bg"]["quadratic"]
-
-        LOGGER.info(f"Probe '{probe_name}' parameters: {params}")
-        return params
 
     def setup_flow(self, rep_probe, obs_probe, independent_cross=False, retrain=False, flow_label="", fit_kwargs={}):
         """

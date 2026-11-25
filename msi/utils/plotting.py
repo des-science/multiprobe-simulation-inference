@@ -80,11 +80,9 @@ def group_parameters(params, conf):
     Returns:
         tuple: The reordered parameters and the sizes of the non-empty blocks.
     """
-    ia = conf["analysis"]["params"]["ia"]["nla"] + (conf["analysis"]["params"]["ia"].get("tatt") or [])
-    bg = (
-        conf["analysis"]["params"]["bg"]["linear"]
-        + (conf["analysis"]["params"]["bg"].get("quadratic") or [])
-        + (conf["analysis"]["params"].get("stochasticity") or [])
+    ia = parameters.resolve_parameters(["ia"], conf)
+    bg = parameters.resolve_parameters(
+        [group for group in ("bg", "stochasticity") if group in conf["analysis"]["params"]], conf
     )
 
     ia_block = [param for param in params if param in ia]
