@@ -217,12 +217,8 @@ def get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, n_examples=16):
     return obs_dict
 
 
-def survey_name(msfm_conf):
-    """The real-data observation label, msfm's survey.name; DESy3 for configs that predate the key."""
-    return (msfm_conf or {}).get("survey", {}).get("name", "DESy3")
-
-
-def get_des_observations(obs_pred_dict, survey="DESy3"):
+def get_des_observations(obs_pred_dict, survey):
+    """The real-data observations, labelled by msfm's survey.name, and their variants (<survey>_*)."""
     obs_dict = {}
     for label in sorted(k for k in obs_pred_dict if k == survey or k.startswith(f"{survey}_")):
         obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": None}
@@ -301,7 +297,7 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
     if args.include_grid:
         obs_dict.update(get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, args.n_grid_examples))
     if args.include_des:
-        obs_dict.update(get_des_observations(obs_pred_dict, survey_name(msfm_conf)))
+        obs_dict.update(get_des_observations(obs_pred_dict, msfm_conf["survey"]["name"]))
     if args.include_mocks:
         obs_dict.update(
             get_mock_observations(

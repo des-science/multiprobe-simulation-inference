@@ -25,7 +25,6 @@ from msfm.utils import logger
 from msfm.utils.input_output import read_yaml
 from deep_lss.utils import config_compose
 from msi.utils import tensions
-from msi.utils.observations import survey_name
 from msi.utils.ppc import PosteriorPredictiveChecks
 from msi.utils.runs import load_runs_config
 
@@ -265,7 +264,7 @@ def main():
                 _cls_k_top = cls_conf.get("k_top", None)
 
                 def cls_hook(ppc, obs_label, _cfg=cls_marginals_cfg, _sample_set=_cls_sample_set, _k_top=_cls_k_top):
-                    if obs_label != survey_name(ppc.conf):
+                    if obs_label != ppc.conf["survey"]["name"]:
                         return
                     base_dir, cls_n_bins, scales_name, dlss_conf = _cfg
                     ppc.check_cls_marginals(

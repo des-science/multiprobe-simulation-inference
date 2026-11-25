@@ -274,7 +274,7 @@ def main():
 
     dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
     params = dlss_conf["dset"]["training"]["params"]
-    survey = observations.survey_name(msfm_conf)
+    survey = msfm_conf["survey"]["name"]
     # resolved before training, so a survey missing from mcmc.variants fails fast
     des_variants = observations.select_variants(flow_conf.get("mcmc", {}).get("variants"), survey)
     if args.flow_member_obs is None:

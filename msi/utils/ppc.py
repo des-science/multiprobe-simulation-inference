@@ -6,7 +6,6 @@ from trianglechain import TriangleChain
 from msfm.utils import files, logger
 from msi.utils import input_output, plotting, runs, tensions
 from msi.utils import flow as flow_utils
-from msi.utils.observations import survey_name
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow, LikelihoodFlowEnsemble
 
 LOGGER = logger.get_logger(__file__)
@@ -1361,7 +1360,7 @@ class PosteriorPredictiveChecks:
                 "check_cls_marginals or provide cls_obs explicitly."
             )
 
-        survey = survey_name(self.conf)
+        survey = self.conf["survey"]["name"]
         if self.obs_label != survey:
             raise ValueError(
                 f"Auto-build of cls_obs is only implemented for the survey's own catalogs, obs_label='{survey}', "

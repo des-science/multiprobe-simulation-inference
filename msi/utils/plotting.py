@@ -314,7 +314,7 @@ def plot_chains(
 
     # DES key project chains
     if with_des_chain:
-        survey = conf.get("survey", {}).get("name", "DESy3")
+        survey = conf["survey"]["name"]
         if survey != "DESy3":
             raise ValueError(f"with_des_chain overlays the DES Y3 key project chains, not {survey}")
         # clustering params (2x2pt)
