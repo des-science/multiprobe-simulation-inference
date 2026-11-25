@@ -190,7 +190,7 @@ class LikelihoodBase(ABC):
                 prior_data["upper"][i_w0] = torch.as_tensor(hi, dtype=self.floatx, device=device)
 
         # Gaussian prior terms, evaluated in the full parameter space (like the hard prior)
-        gaussian_data = self._resolve_gaussian_priors(gaussian_priors)
+        gaussian_data = prior.get_gaussian_prior_data(self.params, self.conf, gaussian_priors)
 
         # initial walker positions: same recipe as mcmc.run_emcee, replicated for every observation.
         # Factored into a closure so the eager-fallback retry below can reproduce the exact same seeded
@@ -326,14 +326,7 @@ class LikelihoodBase(ABC):
 
         with torch.no_grad():
             log_like = loglike_fn(theta, x_obs, weights=weights, obs_index=obs_index)
-            if gaussian_data is not None:
-                for kind, idx, mu, sigma in gaussian_data:
-                    if kind == "Obh2":
-                        i_Ob, i_H0 = idx
-                        value = theta[..., i_Ob] * (theta[..., i_H0] / 100.0) ** 2
-                    else:
-                        value = theta[..., idx]
-                    log_like = log_like - 0.5 * ((value - mu) / sigma) ** 2
+            log_like = log_like + prior.gaussian_log_prior(theta, gaussian_data)
             in_prior = prior.in_grid_prior_torch(theta, prior_data)
             log_post = torch.where(in_prior, log_like, torch.full_like(log_like, float("-inf")))
         return log_post
@@ -344,41 +337,6 @@ class LikelihoodBase(ABC):
         observations, returning (..., n_obs, n_walkers)."""
         out = log_like.new_zeros((*log_like.shape[:-2], n_obs, log_like.shape[-1]))
         return out.index_add_(log_like.ndim - 2, obs_index, log_like)
-
-    def _resolve_gaussian_priors(self, gaussian_priors):
-        """Resolve a ``{name: (mu, sigma)}`` Gaussian-prior spec into (kind, index, mu, sigma) tuples in
-        self.params ordering, shared by the torch-batched and emcee samplers. The analysis prior's own
-        Gaussians (msfm's analysis.grid.gaussian_priors, truncated by the prior box) always apply, and a
-        call-site entry of the same name replaces one. The special name "Obh2" yields a derived-quantity
-        term on Ob * (H0/100)^2; unknown names are warned about and skipped. Returns None when nothing
-        resolves, so callers can branch cheaply."""
-        gaussian_priors = {**parameters.get_gaussian_priors(self.params, self.conf), **(gaussian_priors or {})}
-        gaussian_data = []
-        for name, (mu, sigma) in gaussian_priors.items():
-            if name == "Obh2":
-                if "Ob" not in self.params or "H0" not in self.params:
-                    LOGGER.warning("gaussian_priors: 'Obh2' needs Ob and H0 in self.params; ignored")
-                    continue
-                gaussian_data.append(("Obh2", (self.params.index("Ob"), self.params.index("H0")), mu, sigma))
-            elif name in self.params:
-                gaussian_data.append(("param", self.params.index(name), mu, sigma))
-            else:
-                LOGGER.warning(f"gaussian_priors: {name!r} not in self.params; ignored")
-        return gaussian_data or None
-
-    @staticmethod
-    def _gaussian_log_prior_np(theta, gaussian_data):
-        """Numpy counterpart of the Gaussian terms in _batched_log_posterior_torch, for the emcee paths.
-        theta is (n_walkers, n_params) in the FULL parameter space; returns (n_walkers,)."""
-        log_prior = np.zeros(theta.shape[0])
-        for kind, idx, mu, sigma in gaussian_data:
-            if kind == "Obh2":
-                i_Ob, i_H0 = idx
-                value = theta[:, i_Ob] * (theta[:, i_H0] / 100.0) ** 2
-            else:
-                value = theta[:, idx]
-            log_prior -= 0.5 * ((value - mu) / sigma) ** 2
-        return log_prior
 
     def _set_eval_device(self, device):
         """Move the model(s) to ``device`` and switch to eval mode. Default works for an nn.Module-based

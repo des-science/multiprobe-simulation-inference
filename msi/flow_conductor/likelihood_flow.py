@@ -749,14 +749,13 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             i_w0 = self.params.index("w0")
             w0_lo, w0_hi = w0_prior
 
-        gaussian_data = self._resolve_gaussian_priors(gaussian_priors)
+        gaussian_data = prior.get_gaussian_prior_data(self.params, self.conf, gaussian_priors)
 
         def log_prob_fn(theta_walkers):
             for i, val in dropped:
                 theta_walkers = np.insert(theta_walkers, i, val, axis=1)
             log_prob = self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
-            if gaussian_data is not None:
-                log_prob = log_prob + self._gaussian_log_prior_np(theta_walkers, gaussian_data)
+            log_prob = log_prob + prior.gaussian_log_prior(theta_walkers, gaussian_data)
             if restrict_w0:
                 out = np.zeros(theta_walkers.shape[0], dtype=bool)
                 if w0_lo is not None:
@@ -1715,7 +1714,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             i_w0 = self.params.index("w0")
             w0_lo, w0_hi = w0_prior
 
-        gaussian_data = self._resolve_gaussian_priors(gaussian_priors)
+        gaussian_data = prior.get_gaussian_prior_data(self.params, self.conf, gaussian_priors)
 
         # Compute weights for ensemble method
         if method == "ensemble":
@@ -1733,8 +1732,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 for i, val in dropped:
                     theta_walkers = np.insert(theta_walkers, i, val, axis=1)
                 log_prob = self._mcmc_log_posterior(theta_walkers, x_obs, device=device, weights=weights)
-                if gaussian_data is not None:
-                    log_prob = log_prob + self._gaussian_log_prior_np(theta_walkers, gaussian_data)
+                log_prob = log_prob + prior.gaussian_log_prior(theta_walkers, gaussian_data)
                 if restrict_w0:
                     out = np.zeros(theta_walkers.shape[0], dtype=bool)
                     if w0_lo is not None:
