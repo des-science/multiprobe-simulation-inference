@@ -18,6 +18,7 @@ class CoverageIntegrationTests(unittest.TestCase):
     def test_paired_likelihood_and_posterior_selection(self):
         import torch
         from torch.utils.data import TensorDataset, Subset
+        import msfm
         from msi.utils.coverage import sample_coverage_posteriors, run_likelihood_coverage
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -30,6 +31,8 @@ class CoverageIntegrationTests(unittest.TestCase):
             class FakeFlow:
                 params = ["Om", "s8"]
                 model_dir = tmp
+                # the msfm config, whose Gaussian prior terms the coverage log-probs include
+                conf = str(Path(msfm.__file__).resolve().parents[1] / "configs/desy3/v18/v18.yaml")
 
                 def _prepare_data(self, x, theta, group_ids, **kwargs):
                     data = TensorDataset(torch.tensor(x), torch.tensor(theta))

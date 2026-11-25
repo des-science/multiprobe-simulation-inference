@@ -26,7 +26,7 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 
-from msfm.utils import logger, cosmogrid
+from msfm.utils import logger, cosmogrid, prior
 from msfm.utils import files as msfm_files
 from msi.utils import diagnostics
 from msi.utils.plotting import PLOT_DPI
@@ -230,11 +230,13 @@ def sample_coverage_posteriors(
         seed=flow_conf.get("diagnostics", {}).get("sampling_seed", 12),
     )  # (n_sims, n_steps * n_walkers, n_params)
 
-    # raw flow log-likelihood of the true cosmology for each observation (batched). use_validation_weights
-    # keeps the saved log-probs consistent with the (weighted) ensemble posterior; no-op for a single flow.
+    # log-posterior up to a constant, which the HPD test ranks by: the flow log-likelihood plus the Gaussian prior
+    # terms, since the box is flat on every true and sampled point. use_validation_weights keeps the saved
+    # log-probs consistent with the (weighted) ensemble posterior; no-op for a single flow.
+    gaussian_data = prior.get_gaussian_prior_data(flow.params, flow.conf)
     log_prob_true = flow.log_likelihood(
         x_true, theta_true, return_numpy=True, use_validation_weights=use_validation_weights
-    )
+    ) + prior.gaussian_log_prior(np.asarray(theta_true.cpu()), gaussian_data)
 
     x_true_np = np.asarray(x_true.cpu())
     n_params = chain.shape[-1]
@@ -250,7 +252,7 @@ def sample_coverage_posteriors(
         x_rep = np.repeat(x_true_np[i][None, :], n_samples_out, axis=0)
         log_prob_sample[:, i] = flow.log_likelihood(
             x_rep, samples, return_numpy=True, use_validation_weights=use_validation_weights
-        )
+        ) + prior.gaussian_log_prior(samples, gaussian_data)
     del chain  # free the (potentially tens of GB) full-chain host buffer
 
     samples = {
